@@ -51,7 +51,7 @@ app:
 
   otp:
     ttlSeconds: ${OTP_TTL_SECONDS:300}
-    # In dev we return OTP in the API response to enable deterministic E2E tests.
+    # Return OTP in the API response for demo/prod until SMS provider is wired.
     returnOtpInResponse: ${OTP_RETURN_IN_RESPONSE:true}
 
   matching:
