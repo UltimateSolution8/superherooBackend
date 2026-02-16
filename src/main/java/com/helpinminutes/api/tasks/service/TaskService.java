@@ -65,22 +65,33 @@ public class TaskService {
 
     tasks.save(task);
 
-    List<UUID> offeredTo;
+    List<UUID> offeredTo = List.of();
     try {
-      offeredTo = matching.dispatchOffers(task);
-    } catch (Exception e) {
-      // Matching is best-effort; task creation should not fail if matching errors.
-      offeredTo = List.of();
+      java.util.concurrent.CompletableFuture.runAsync(() -> {
+        try {
+          matching.dispatchOffers(task);
+        } catch (Exception ignored) {
+        }
+      });
+    } catch (Exception ignored) {
     }
 
-    realtime.publish(
-        "TASK_CREATED",
-        java.util.Map.of(
-            "taskId", task.getId().toString(),
-            "buyerId", buyerId.toString(),
-            "title", task.getTitle(),
-            "urgency", task.getUrgency().name(),
-            "status", task.getStatus().name()));
+    try {
+      java.util.concurrent.CompletableFuture.runAsync(() -> {
+        try {
+          realtime.publish(
+              "TASK_CREATED",
+              java.util.Map.of(
+                  "taskId", task.getId().toString(),
+                  "buyerId", buyerId.toString(),
+                  "title", task.getTitle(),
+                  "urgency", task.getUrgency().name(),
+                  "status", task.getStatus().name()));
+        } catch (Exception ignored) {
+        }
+      });
+    } catch (Exception ignored) {
+    }
 
     return new CreateResult(task.getId(), offeredTo);
   }
