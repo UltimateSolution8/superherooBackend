@@ -12,6 +12,9 @@ spring:
     hikari:
       # In Docker, Postgres can take a few seconds to accept connections. Don't crash-loop.
       initialization-fail-timeout: -1
+      data-source-properties:
+        sslmode: ${DATABASE_SSLMODE:require}
+        ssl: ${DATABASE_SSL:true}
 
   jpa:
     open-in-view: false
