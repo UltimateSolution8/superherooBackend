@@ -59,7 +59,13 @@ public class TaskService {
 
     tasks.save(task);
 
-    List<UUID> offeredTo = matching.dispatchOffers(task);
+    List<UUID> offeredTo;
+    try {
+      offeredTo = matching.dispatchOffers(task);
+    } catch (Exception e) {
+      // Matching is best-effort; task creation should not fail if matching errors.
+      offeredTo = List.of();
+    }
 
     realtime.publish(
         "TASK_CREATED",
