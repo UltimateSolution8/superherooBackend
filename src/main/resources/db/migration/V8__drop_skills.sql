@@ -1,0 +1,6 @@
+ALTER TABLE tasks
+  DROP COLUMN IF EXISTS skill_id;
+
+DROP TABLE IF EXISTS helper_skills;
+DROP TABLE IF EXISTS skills;
+
