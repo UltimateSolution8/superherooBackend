@@ -47,7 +47,7 @@ public class MatchingService {
     long taskCell = h3.latLngToCell(task.getLat(), task.getLng(), props.matching().h3Resolution());
 
     Map<UUID, Double> bestDistanceByHelper = new HashMap<>();
-    int maxKRing = Math.max(props.matching().maxKRing(), 24);
+    int maxKRing = Math.max(props.matching().maxKRing(), 0);
 
     for (int k = 0; k <= maxKRing; k++) {
       List<Long> ringCells = h3.gridDisk(taskCell, k);

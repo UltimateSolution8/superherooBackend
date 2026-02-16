@@ -1,14 +1,17 @@
 package com.helpinminutes.api.tasks.service;
 
+import com.helpinminutes.api.common.GeoUtils;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ConflictException;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
+import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
+import com.helpinminutes.api.tasks.model.TaskOfferEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.model.TaskStatus;
@@ -29,18 +32,21 @@ public class TaskService {
   private final MatchingService matching;
   private final RealtimePublisher realtime;
   private final SupabaseStorageService storage;
+  private final HelperPresenceService presence;
 
   public TaskService(
       TaskRepository tasks,
       TaskOfferRepository offers,
       MatchingService matching,
       RealtimePublisher realtime,
-      SupabaseStorageService storage) {
+      SupabaseStorageService storage,
+      HelperPresenceService presence) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
     this.realtime = realtime;
     this.storage = storage;
+    this.presence = presence;
   }
 
   @Transactional
@@ -84,24 +90,55 @@ public class TaskService {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
-    var offer = offers.findByTaskIdAndHelperId(taskId, helperId)
-        .orElseThrow(() -> new ForbiddenException("No offer for this helper"));
+    Instant now = Instant.now();
+    var offerOpt = offers.findByTaskIdAndHelperId(taskId, helperId);
+    if (offerOpt.isPresent()) {
+      var offer = offerOpt.get();
+      if (offer.getExpiresAt().isBefore(now)) {
+        throw new ConflictException("Offer expired");
+      }
 
-    if (offer.getExpiresAt().isBefore(Instant.now())) {
-      throw new ConflictException("Offer expired");
+      int responded = offers.respond(taskId, helperId, TaskOfferStatus.OFFERED, TaskOfferStatus.ACCEPTED, now);
+      if (responded == 0) {
+        throw new ConflictException("Offer already responded");
+      }
+
+      int updated = tasks.assignIfUnassigned(taskId, helperId, TaskStatus.SEARCHING, TaskStatus.ASSIGNED);
+      if (updated == 0) {
+        throw new ConflictException("Task already assigned");
+      }
+
+      offers.expireOthers(taskId, TaskOfferStatus.OFFERED, TaskOfferStatus.EXPIRED, helperId);
+    } else {
+      var state = presence.getHelperState(helperId);
+      if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
+        throw new ForbiddenException("Helper location is not available");
+      }
+
+      long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
+      if (ageSeconds > 60) {
+        throw new ForbiddenException("Helper location is stale");
+      }
+
+      double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
+      if (distMeters > 3000d) {
+        throw new ForbiddenException("Helper is too far from this task");
+      }
+
+      int updated = tasks.assignIfUnassigned(taskId, helperId, TaskStatus.SEARCHING, TaskStatus.ASSIGNED);
+      if (updated == 0) {
+        throw new ConflictException("Task already assigned");
+      }
+
+      TaskOfferEntity offer = new TaskOfferEntity();
+      offer.setTaskId(taskId);
+      offer.setHelperId(helperId);
+      offer.setStatus(TaskOfferStatus.ACCEPTED);
+      offer.setOfferedAt(now);
+      offer.setExpiresAt(now);
+      offer.setRespondedAt(now);
+      offers.save(offer);
     }
-
-    int responded = offers.respond(taskId, helperId, TaskOfferStatus.OFFERED, TaskOfferStatus.ACCEPTED, Instant.now());
-    if (responded == 0) {
-      throw new ConflictException("Offer already responded");
-    }
-
-    int updated = tasks.assignIfUnassigned(taskId, helperId, TaskStatus.SEARCHING, TaskStatus.ASSIGNED);
-    if (updated == 0) {
-      throw new ConflictException("Task already assigned");
-    }
-
-    offers.expireOthers(taskId, TaskOfferStatus.OFFERED, TaskOfferStatus.EXPIRED, helperId);
 
     realtime.publish(
         "TASK_ASSIGNED",
