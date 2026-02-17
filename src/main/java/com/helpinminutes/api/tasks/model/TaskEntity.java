@@ -37,6 +37,25 @@ public class TaskEntity {
   @Column(name = "budget_paise", nullable = false)
   private Long budgetPaise;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "escrow_status", nullable = false)
+  private TaskEscrowStatus escrowStatus;
+
+  @Column(name = "escrow_amount_paise", nullable = false)
+  private Long escrowAmountPaise;
+
+  @Column(name = "escrow_held_at")
+  private Instant escrowHeldAt;
+
+  @Column(name = "escrow_release_at")
+  private Instant escrowReleaseAt;
+
+  @Column(name = "escrow_released_at")
+  private Instant escrowReleasedAt;
+
+  @Column(name = "escrow_released_to_helper_id")
+  private UUID escrowReleasedToHelperId;
+
   @Column(nullable = false)
   private double lat;
 
@@ -106,6 +125,12 @@ public class TaskEntity {
     if (budgetPaise == null || budgetPaise < 0) {
       budgetPaise = 0L;
     }
+    if (escrowStatus == null) {
+      escrowStatus = TaskEscrowStatus.HELD;
+    }
+    if (escrowAmountPaise == null || escrowAmountPaise < 0) {
+      escrowAmountPaise = 0L;
+    }
     Instant now = Instant.now();
     if (createdAt == null) {
       createdAt = now;
@@ -168,6 +193,54 @@ public class TaskEntity {
 
   public void setBudgetPaise(Long budgetPaise) {
     this.budgetPaise = budgetPaise;
+  }
+
+  public TaskEscrowStatus getEscrowStatus() {
+    return escrowStatus;
+  }
+
+  public void setEscrowStatus(TaskEscrowStatus escrowStatus) {
+    this.escrowStatus = escrowStatus;
+  }
+
+  public Long getEscrowAmountPaise() {
+    return escrowAmountPaise;
+  }
+
+  public void setEscrowAmountPaise(Long escrowAmountPaise) {
+    this.escrowAmountPaise = escrowAmountPaise;
+  }
+
+  public Instant getEscrowHeldAt() {
+    return escrowHeldAt;
+  }
+
+  public void setEscrowHeldAt(Instant escrowHeldAt) {
+    this.escrowHeldAt = escrowHeldAt;
+  }
+
+  public Instant getEscrowReleaseAt() {
+    return escrowReleaseAt;
+  }
+
+  public void setEscrowReleaseAt(Instant escrowReleaseAt) {
+    this.escrowReleaseAt = escrowReleaseAt;
+  }
+
+  public Instant getEscrowReleasedAt() {
+    return escrowReleasedAt;
+  }
+
+  public void setEscrowReleasedAt(Instant escrowReleasedAt) {
+    this.escrowReleasedAt = escrowReleasedAt;
+  }
+
+  public UUID getEscrowReleasedToHelperId() {
+    return escrowReleasedToHelperId;
+  }
+
+  public void setEscrowReleasedToHelperId(UUID escrowReleasedToHelperId) {
+    this.escrowReleasedToHelperId = escrowReleasedToHelperId;
   }
 
   public double getLat() {

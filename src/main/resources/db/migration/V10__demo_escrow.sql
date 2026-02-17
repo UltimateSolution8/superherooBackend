@@ -1,0 +1,12 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS demo_balance_paise BIGINT NOT NULL DEFAULT 1000000;
+
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS escrow_status VARCHAR(20) NOT NULL DEFAULT 'HELD',
+  ADD COLUMN IF NOT EXISTS escrow_amount_paise BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS escrow_held_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS escrow_release_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS escrow_released_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS escrow_released_to_helper_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_escrow_release_at ON tasks(escrow_release_at);

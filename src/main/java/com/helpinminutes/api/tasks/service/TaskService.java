@@ -10,6 +10,7 @@ import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
+import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
@@ -17,6 +18,8 @@ import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.users.model.UserEntity;
+import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -33,6 +36,7 @@ public class TaskService {
   private final RealtimePublisher realtime;
   private final SupabaseStorageService storage;
   private final HelperPresenceService presence;
+  private final UserRepository users;
 
   public TaskService(
       TaskRepository tasks,
@@ -40,17 +44,31 @@ public class TaskService {
       MatchingService matching,
       RealtimePublisher realtime,
       SupabaseStorageService storage,
-      HelperPresenceService presence) {
+      HelperPresenceService presence,
+      UserRepository users) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
     this.realtime = realtime;
     this.storage = storage;
     this.presence = presence;
+    this.users = users;
   }
 
   @Transactional
   public CreateResult createTask(UUID buyerId, CreateTaskRequest req) {
+    UserEntity buyer = users.findById(buyerId)
+        .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+
+    long cost = req.budgetPaise() == null ? 0L : Math.max(0L, req.budgetPaise());
+    Long balance = buyer.getDemoBalancePaise();
+    long current = balance == null ? 0L : balance;
+    if (cost > current) {
+      throw new BadRequestException("Insufficient demo balance for escrow");
+    }
+    buyer.setDemoBalancePaise(current - cost);
+    users.save(buyer);
+
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
     task.setTitle(req.title().trim());
@@ -62,6 +80,9 @@ public class TaskService {
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
     task.setStatus(TaskStatus.SEARCHING);
+    task.setEscrowStatus(TaskEscrowStatus.HELD);
+    task.setEscrowAmountPaise(cost);
+    task.setEscrowHeldAt(Instant.now());
 
     tasks.save(task);
 
@@ -184,6 +205,14 @@ public class TaskService {
     }
 
     task.setStatus(newStatus);
+
+    if (newStatus == TaskStatus.COMPLETED && task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
+      if (task.getEscrowStatus() == TaskEscrowStatus.HELD) {
+        task.setEscrowStatus(TaskEscrowStatus.RELEASE_SCHEDULED);
+        task.setEscrowReleaseAt(Instant.now().plusSeconds(300));
+        task.setEscrowReleasedToHelperId(helperId);
+      }
+    }
     tasks.save(task);
 
     realtime.publish(

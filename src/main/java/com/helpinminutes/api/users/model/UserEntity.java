@@ -37,6 +37,9 @@ public class UserEntity {
   @Column(name = "display_name")
   private String displayName;
 
+  @Column(name = "demo_balance_paise", nullable = false)
+  private Long demoBalancePaise;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -50,6 +53,9 @@ public class UserEntity {
     }
     if (status == null) {
       status = UserStatus.ACTIVE;
+    }
+    if (demoBalancePaise == null) {
+      demoBalancePaise = 1_000_000L;
     }
     Instant now = Instant.now();
     if (createdAt == null) {
@@ -117,6 +123,14 @@ public class UserEntity {
 
   public void setDisplayName(String displayName) {
     this.displayName = displayName;
+  }
+
+  public Long getDemoBalancePaise() {
+    return demoBalancePaise;
+  }
+
+  public void setDemoBalancePaise(Long demoBalancePaise) {
+    this.demoBalancePaise = demoBalancePaise;
   }
 
   public Instant getCreatedAt() {
