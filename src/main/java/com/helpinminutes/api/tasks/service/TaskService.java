@@ -141,6 +141,8 @@ public class TaskService {
       }
 
       offers.expireOthers(taskId, TaskOfferStatus.OFFERED, TaskOfferStatus.EXPIRED, helperId);
+      task.setAssignedHelperId(helperId);
+      task.setStatus(TaskStatus.ASSIGNED);
     } else {
       var state = presence.getHelperState(helperId);
       if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
@@ -170,6 +172,9 @@ public class TaskService {
       offer.setExpiresAt(now);
       offer.setRespondedAt(now);
       offers.save(offer);
+
+      task.setAssignedHelperId(helperId);
+      task.setStatus(TaskStatus.ASSIGNED);
     }
 
     realtime.publish(
@@ -180,7 +185,7 @@ public class TaskService {
             "helperId", helperId.toString(),
             "status", TaskStatus.ASSIGNED.name()));
 
-    return tasks.findById(taskId).orElseThrow();
+    return task;
   }
 
   @Transactional
