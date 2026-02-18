@@ -4,5 +4,6 @@ import com.helpinminutes.api.tasks.model.TaskStatus;
 import jakarta.validation.constraints.NotNull;
 
 public record UpdateTaskStatusRequest(
-    @NotNull TaskStatus status
+    @NotNull TaskStatus status,
+    String otp
 ) {}

@@ -35,6 +35,11 @@ spring:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
 
+  servlet:
+    multipart:
+      max-file-size: ${MULTIPART_MAX_FILE_SIZE:10MB}
+      max-request-size: ${MULTIPART_MAX_REQUEST_SIZE:12MB}
+
 management:
   endpoints:
     web:

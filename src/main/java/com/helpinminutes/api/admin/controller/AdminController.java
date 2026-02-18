@@ -152,6 +152,6 @@ public class AdminController {
   }
 
   private static TaskResponse toTaskResponse(com.helpinminutes.api.tasks.model.TaskEntity t) {
-    return TaskController.toResponse(t);
+    return TaskController.toResponse(t, true);
   }
 }

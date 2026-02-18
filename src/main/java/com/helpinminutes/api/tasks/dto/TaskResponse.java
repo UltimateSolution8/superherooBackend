@@ -18,6 +18,8 @@ public record TaskResponse(
     String addressText,
     TaskStatus status,
     UUID assignedHelperId,
+    String arrivalOtp,
+    String completionOtp,
     String arrivalSelfieUrl,
     Double arrivalSelfieLat,
     Double arrivalSelfieLng,

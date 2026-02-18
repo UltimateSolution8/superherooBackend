@@ -15,6 +15,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
   Optional<TaskEntity> findByIdAndBuyerId(UUID id, UUID buyerId);
   java.util.List<TaskEntity> findTop100ByOrderByCreatedAtDesc();
   java.util.List<TaskEntity> findTop100ByStatusOrderByCreatedAtDesc(TaskStatus status);
+  java.util.List<TaskEntity> findTop50ByBuyerIdOrderByCreatedAtDesc(UUID buyerId);
+  java.util.List<TaskEntity> findTop50ByAssignedHelperIdOrderByCreatedAtDesc(UUID helperId);
   java.util.List<TaskEntity> findTop50ByEscrowStatusAndEscrowReleaseAtBefore(TaskEscrowStatus status, Instant releaseAt);
 
   @Modifying

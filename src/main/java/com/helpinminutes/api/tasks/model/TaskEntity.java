@@ -95,6 +95,12 @@ public class TaskEntity {
   @Column(name = "completion_selfie_captured_at")
   private Instant completionSelfieCapturedAt;
 
+  @Column(name = "arrival_otp")
+  private String arrivalOtp;
+
+  @Column(name = "completion_otp")
+  private String completionOtp;
+
   @Enumerated(EnumType.STRING)
   @Column(nullable = false)
   private TaskStatus status;
@@ -345,6 +351,22 @@ public class TaskEntity {
 
   public void setCompletionSelfieCapturedAt(Instant completionSelfieCapturedAt) {
     this.completionSelfieCapturedAt = completionSelfieCapturedAt;
+  }
+
+  public String getArrivalOtp() {
+    return arrivalOtp;
+  }
+
+  public void setArrivalOtp(String arrivalOtp) {
+    this.arrivalOtp = arrivalOtp;
+  }
+
+  public String getCompletionOtp() {
+    return completionOtp;
+  }
+
+  public void setCompletionOtp(String completionOtp) {
+    this.completionOtp = completionOtp;
   }
 
   public TaskStatus getStatus() {

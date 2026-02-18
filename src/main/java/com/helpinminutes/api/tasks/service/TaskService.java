@@ -62,7 +62,11 @@ public class TaskService {
 
     long cost = req.budgetPaise() == null ? 0L : Math.max(0L, req.budgetPaise());
     Long balance = buyer.getDemoBalancePaise();
-    long current = balance == null ? 0L : balance;
+    long current = balance == null ? 1_000_000L : balance;
+    if (balance == null) {
+      buyer.setDemoBalancePaise(current);
+      users.save(buyer);
+    }
     if (cost > current) {
       throw new BadRequestException("Insufficient demo balance for escrow");
     }
@@ -83,6 +87,8 @@ public class TaskService {
     task.setEscrowStatus(TaskEscrowStatus.HELD);
     task.setEscrowAmountPaise(cost);
     task.setEscrowHeldAt(Instant.now());
+    task.setArrivalOtp(generateOtp());
+    task.setCompletionOtp(generateOtp());
 
     tasks.save(task);
 
@@ -189,7 +195,7 @@ public class TaskService {
   }
 
   @Transactional
-  public TaskEntity updateStatusAsHelper(UUID helperId, UUID taskId, TaskStatus newStatus) {
+  public TaskEntity updateStatusAsHelper(UUID helperId, UUID taskId, TaskStatus newStatus, String otp) {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
@@ -205,8 +211,24 @@ public class TaskService {
     if (newStatus == TaskStatus.ARRIVED && task.getArrivalSelfieUrl() == null) {
       throw new BadRequestException("Arrival selfie is required before marking ARRIVED");
     }
+    if (newStatus == TaskStatus.STARTED) {
+      String expected = task.getArrivalOtp();
+      if (expected != null && !expected.isBlank()) {
+        if (otp == null || otp.isBlank() || !expected.equals(otp.trim())) {
+          throw new BadRequestException("Arrival OTP is required to start work");
+        }
+      }
+    }
     if (newStatus == TaskStatus.COMPLETED && task.getCompletionSelfieUrl() == null) {
       throw new BadRequestException("Completion selfie is required before marking COMPLETED");
+    }
+    if (newStatus == TaskStatus.COMPLETED) {
+      String expected = task.getCompletionOtp();
+      if (expected != null && !expected.isBlank()) {
+        if (otp == null || otp.isBlank() || !expected.equals(otp.trim())) {
+          throw new BadRequestException("Completion OTP is required to finish work");
+        }
+      }
     }
 
     task.setStatus(newStatus);
@@ -219,6 +241,10 @@ public class TaskService {
       }
     }
     tasks.save(task);
+
+    if (newStatus == TaskStatus.COMPLETED && task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
+      scheduleEscrowRelease(task.getId(), helperId);
+    }
 
     realtime.publish(
         "TASK_STATUS_CHANGED",
@@ -301,6 +327,16 @@ public class TaskService {
         : tasks.findTop100ByStatusOrderByCreatedAtDesc(status);
   }
 
+  public List<TaskEntity> listTasksForUser(UUID userId, UserRole role) {
+    if (role == UserRole.BUYER) {
+      return tasks.findTop50ByBuyerIdOrderByCreatedAtDesc(userId);
+    }
+    if (role == UserRole.HELPER) {
+      return tasks.findTop50ByAssignedHelperIdOrderByCreatedAtDesc(userId);
+    }
+    return java.util.List.of();
+  }
+
   @Transactional
   public TaskEntity updateStatusAsAdmin(UUID taskId, TaskStatus newStatus) {
     TaskEntity task = tasks.findById(taskId)
@@ -326,6 +362,50 @@ public class TaskService {
       case STARTED -> to == TaskStatus.COMPLETED;
       default -> false;
     };
+  }
+
+  private static String generateOtp() {
+    int code = 100000 + (int) (Math.random() * 900000);
+    return String.valueOf(code);
+  }
+
+  private void scheduleEscrowRelease(UUID taskId, UUID helperId) {
+    java.util.concurrent.CompletableFuture.runAsync(() -> {
+      try {
+        Thread.sleep(300_000);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+      try {
+        TaskEntity task = tasks.findById(taskId).orElse(null);
+        if (task == null) return;
+        if (task.getEscrowStatus() != TaskEscrowStatus.RELEASE_SCHEDULED) return;
+        Long amount = task.getEscrowAmountPaise();
+        if (amount == null || amount <= 0) return;
+        UUID payHelperId = task.getAssignedHelperId() != null ? task.getAssignedHelperId() : helperId;
+        if (payHelperId == null) return;
+        UserEntity helper = users.findById(payHelperId).orElse(null);
+        if (helper == null) return;
+
+        long current = helper.getDemoBalancePaise() == null ? 0L : helper.getDemoBalancePaise();
+        helper.setDemoBalancePaise(current + amount);
+        task.setEscrowStatus(TaskEscrowStatus.RELEASED);
+        task.setEscrowReleasedAt(Instant.now());
+        task.setEscrowReleasedToHelperId(payHelperId);
+        tasks.save(task);
+        users.save(helper);
+
+        realtime.publish(
+            "ESCROW_RELEASED",
+            java.util.Map.of(
+                "taskId", taskId.toString(),
+                "helperId", payHelperId.toString(),
+                "amountPaise", amount));
+      } catch (Exception ignored) {
+        // best-effort for demo
+      }
+    });
   }
 
   public record CreateResult(UUID taskId, List<UUID> offeredTo) {}

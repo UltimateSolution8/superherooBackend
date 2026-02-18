@@ -51,7 +51,7 @@ public class TaskController {
       throw new ForbiddenException("Only helpers can accept tasks");
     }
     TaskEntity task = tasks.acceptTask(principal.userId(), taskId);
-    return toResponse(task);
+    return toResponse(task, false);
   }
 
   @PostMapping("/{taskId}/status")
@@ -62,8 +62,8 @@ public class TaskController {
     if (principal.role() != UserRole.HELPER) {
       throw new ForbiddenException("Only helpers can update task status");
     }
-    TaskEntity task = tasks.updateStatusAsHelper(principal.userId(), taskId, req.status());
-    return toResponse(task);
+    TaskEntity task = tasks.updateStatusAsHelper(principal.userId(), taskId, req.status(), req.otp());
+    return toResponse(task, false);
   }
 
   @PostMapping(value = "/{taskId}/selfie", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -90,7 +90,7 @@ public class TaskController {
         addressText,
         capturedAt);
 
-    return toResponse(task);
+    return toResponse(task, false);
   }
 
   @GetMapping("/{taskId}")
@@ -106,10 +106,21 @@ public class TaskController {
       throw new ForbiddenException("Not allowed");
     }
 
-    return toResponse(task);
+    boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
+    return toResponse(task, includeOtp);
   }
 
-  public static TaskResponse toResponse(TaskEntity t) {
+  @GetMapping("/mine")
+  public java.util.List<TaskResponse> mine(@AuthenticationPrincipal UserPrincipal principal) {
+    UserRole role = principal.role();
+    boolean includeOtp = role == UserRole.BUYER || role == UserRole.ADMIN;
+    return tasks.listTasksForUser(principal.userId(), role)
+        .stream()
+        .map(t -> toResponse(t, includeOtp))
+        .toList();
+  }
+
+  public static TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
     return new TaskResponse(
         t.getId(),
         t.getBuyerId(),
@@ -123,6 +134,8 @@ public class TaskController {
         t.getAddressText(),
         t.getStatus(),
         t.getAssignedHelperId(),
+        includeOtp ? t.getArrivalOtp() : null,
+        includeOtp ? t.getCompletionOtp() : null,
         t.getArrivalSelfieUrl(),
         t.getArrivalSelfieLat(),
         t.getArrivalSelfieLng(),
