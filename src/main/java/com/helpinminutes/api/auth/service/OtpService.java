@@ -40,7 +40,7 @@ public class OtpService {
   public boolean verifyOtp(String phone, String otp) {
     if (twilio.enabled()) {
       Twilio.init(twilio.accountSid(), twilio.authToken());
-      VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid(), otp).setTo(phone).create();
+      VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid()).setCode(otp).setTo(phone).create();
       return "approved".equalsIgnoreCase(check.getStatus());
     }
     String key = key(phone);
