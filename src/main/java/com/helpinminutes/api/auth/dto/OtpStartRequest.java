@@ -6,5 +6,6 @@ import jakarta.validation.constraints.NotNull;
 
 public record OtpStartRequest(
     @NotBlank String phone,
-    @NotNull UserRole role
+    @NotNull UserRole role,
+    String channel
 ) {}

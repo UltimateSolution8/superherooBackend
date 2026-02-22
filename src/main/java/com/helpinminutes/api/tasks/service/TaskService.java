@@ -10,6 +10,7 @@ import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
+import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
@@ -18,8 +19,11 @@ import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.users.model.UserEntity;
+import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -37,6 +41,7 @@ public class TaskService {
   private final SupabaseStorageService storage;
   private final HelperPresenceService presence;
   private final UserRepository users;
+  private final HelperProfileRepository helperProfiles;
 
   public TaskService(
       TaskRepository tasks,
@@ -45,7 +50,8 @@ public class TaskService {
       RealtimePublisher realtime,
       SupabaseStorageService storage,
       HelperPresenceService presence,
-      UserRepository users) {
+      UserRepository users,
+      HelperProfileRepository helperProfiles) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -53,6 +59,7 @@ public class TaskService {
     this.storage = storage;
     this.presence = presence;
     this.users = users;
+    this.helperProfiles = helperProfiles;
   }
 
   @Transactional
@@ -253,6 +260,55 @@ public class TaskService {
             "buyerId", task.getBuyerId().toString(),
             "helperId", helperId.toString(),
             "status", newStatus.name()));
+
+    return task;
+  }
+
+  @Transactional
+  public TaskEntity rateTask(UUID userId, UserRole role, UUID taskId, TaskRatingRequest req) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    BigDecimal rating = req.rating();
+    if (rating == null) {
+      throw new BadRequestException("Rating is required");
+    }
+
+    if (role == UserRole.BUYER) {
+      if (!userId.equals(task.getBuyerId())) {
+        throw new ForbiddenException("Only the buyer can rate the helper");
+      }
+      task.setBuyerRating(rating);
+      task.setBuyerRatingComment(req.comment());
+      task.setBuyerRatedAt(Instant.now());
+
+      if (task.getAssignedHelperId() != null) {
+        helperProfiles.findById(task.getAssignedHelperId()).ifPresent((profile) -> {
+          profile.setRating(rating);
+          helperProfiles.save(profile);
+        });
+      }
+    } else if (role == UserRole.HELPER) {
+      if (task.getAssignedHelperId() == null || !userId.equals(task.getAssignedHelperId())) {
+        throw new ForbiddenException("Only the assigned helper can rate the buyer");
+      }
+      task.setHelperRating(rating);
+      task.setHelperRatingComment(req.comment());
+      task.setHelperRatedAt(Instant.now());
+    } else {
+      throw new ForbiddenException("Only buyers or helpers can submit ratings");
+    }
+
+    tasks.save(task);
+
+    realtime.publish(
+        "TASK_RATED",
+        java.util.Map.of(
+            "taskId", taskId.toString(),
+            "buyerId", task.getBuyerId().toString(),
+            "helperId", task.getAssignedHelperId() == null ? "" : task.getAssignedHelperId().toString(),
+            "role", role.name(),
+            "rating", rating));
 
     return task;
   }

@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -100,6 +101,24 @@ public class TaskEntity {
 
   @Column(name = "completion_otp")
   private String completionOtp;
+
+  @Column(name = "buyer_rating")
+  private BigDecimal buyerRating;
+
+  @Column(name = "buyer_rating_comment")
+  private String buyerRatingComment;
+
+  @Column(name = "buyer_rated_at")
+  private Instant buyerRatedAt;
+
+  @Column(name = "helper_rating")
+  private BigDecimal helperRating;
+
+  @Column(name = "helper_rating_comment")
+  private String helperRatingComment;
+
+  @Column(name = "helper_rated_at")
+  private Instant helperRatedAt;
 
   @Enumerated(EnumType.STRING)
   @Column(nullable = false)
@@ -367,6 +386,54 @@ public class TaskEntity {
 
   public void setCompletionOtp(String completionOtp) {
     this.completionOtp = completionOtp;
+  }
+
+  public BigDecimal getBuyerRating() {
+    return buyerRating;
+  }
+
+  public void setBuyerRating(BigDecimal buyerRating) {
+    this.buyerRating = buyerRating;
+  }
+
+  public String getBuyerRatingComment() {
+    return buyerRatingComment;
+  }
+
+  public void setBuyerRatingComment(String buyerRatingComment) {
+    this.buyerRatingComment = buyerRatingComment;
+  }
+
+  public Instant getBuyerRatedAt() {
+    return buyerRatedAt;
+  }
+
+  public void setBuyerRatedAt(Instant buyerRatedAt) {
+    this.buyerRatedAt = buyerRatedAt;
+  }
+
+  public BigDecimal getHelperRating() {
+    return helperRating;
+  }
+
+  public void setHelperRating(BigDecimal helperRating) {
+    this.helperRating = helperRating;
+  }
+
+  public String getHelperRatingComment() {
+    return helperRatingComment;
+  }
+
+  public void setHelperRatingComment(String helperRatingComment) {
+    this.helperRatingComment = helperRatingComment;
+  }
+
+  public Instant getHelperRatedAt() {
+    return helperRatedAt;
+  }
+
+  public void setHelperRatedAt(Instant helperRatedAt) {
+    this.helperRatedAt = helperRatedAt;
   }
 
   public TaskStatus getStatus() {
