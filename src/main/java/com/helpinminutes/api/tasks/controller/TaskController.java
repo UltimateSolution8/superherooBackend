@@ -4,6 +4,7 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
+import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -120,6 +121,16 @@ public class TaskController {
         .toList();
   }
 
+  @PostMapping("/{taskId}/rating")
+  public TaskResponse rateTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody TaskRatingRequest req) {
+    TaskEntity task = tasks.rateTask(principal.userId(), principal.role(), taskId, req);
+    boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
+    return toResponse(task, includeOtp);
+  }
+
   public static TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
     return new TaskResponse(
         t.getId(),
@@ -146,6 +157,12 @@ public class TaskController {
         t.getCompletionSelfieLng(),
         t.getCompletionSelfieAddress(),
         t.getCompletionSelfieCapturedAt(),
+        t.getBuyerRating() != null ? t.getBuyerRating().doubleValue() : null,
+        t.getBuyerRatingComment(),
+        t.getBuyerRatedAt(),
+        t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
+        t.getHelperRatingComment(),
+        t.getHelperRatedAt(),
         t.getCreatedAt());
   }
 }

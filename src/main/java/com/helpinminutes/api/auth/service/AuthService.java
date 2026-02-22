@@ -54,8 +54,8 @@ public class AuthService {
     this.storage = storage;
   }
 
-  public String startOtp(String phone) {
-    return otp.startOtp(phone);
+  public String startOtp(String phone, String channel) {
+    return otp.startOtp(phone, channel);
   }
 
   @Transactional

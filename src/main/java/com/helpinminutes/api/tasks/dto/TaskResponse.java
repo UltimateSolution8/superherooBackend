@@ -30,5 +30,11 @@ public record TaskResponse(
     Double completionSelfieLng,
     String completionSelfieAddress,
     Instant completionSelfieCapturedAt,
+    Double buyerRating,
+    String buyerRatingComment,
+    Instant buyerRatedAt,
+    Double helperRating,
+    String helperRatingComment,
+    Instant helperRatedAt,
     Instant createdAt
 ) {}

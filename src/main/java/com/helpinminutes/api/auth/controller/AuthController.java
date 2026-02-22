@@ -32,7 +32,7 @@ public class AuthController {
 
   @PostMapping("/otp/start")
   public OtpStartResponse start(@Valid @RequestBody OtpStartRequest req) {
-    String otp = auth.startOtp(req.phone());
+    String otp = auth.startOtp(req.phone(), req.channel());
     return new OtpStartResponse(req.phone(), true, props.otp().returnOtpInResponse() ? otp : null);
   }
 
