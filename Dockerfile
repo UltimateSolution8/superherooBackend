@@ -4,7 +4,9 @@ WORKDIR /app
 COPY pom.xml ./
 COPY src ./src
 
-RUN --mount=type=cache,target=/root/.m2 mvn -q -DskipTests package
+# Limit Maven memory to prevent OOM during build on Render and use batch mode
+ENV MAVEN_OPTS="-Xmx512m"
+RUN --mount=type=cache,target=/root/.m2 mvn -B -Dmaven.test.skip=true package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app

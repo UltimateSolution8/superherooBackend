@@ -10,6 +10,8 @@ import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
+import java.util.ArrayList;
+
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -26,6 +28,7 @@ import com.helpinminutes.api.users.repo.UserRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -34,6 +37,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class TaskService {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TaskService.class);
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
   private final MatchingService matching;
@@ -99,15 +103,11 @@ public class TaskService {
 
     tasks.save(task);
 
-    List<UUID> offeredTo = List.of();
+    List<UUID> offeredTo = new ArrayList<>();
     try {
-      java.util.concurrent.CompletableFuture.runAsync(() -> {
-        try {
-          matching.dispatchOffers(task);
-        } catch (Exception ignored) {
-        }
-      });
-    } catch (Exception ignored) {
+      offeredTo = matching.dispatchOffers(task);
+    } catch (Exception e) {
+      log.error("Failed to dispatch offers for task {}", task.getId(), e);
     }
 
     try {
@@ -435,14 +435,19 @@ public class TaskService {
       }
       try {
         TaskEntity task = tasks.findById(taskId).orElse(null);
-        if (task == null) return;
-        if (task.getEscrowStatus() != TaskEscrowStatus.RELEASE_SCHEDULED) return;
+        if (task == null)
+          return;
+        if (task.getEscrowStatus() != TaskEscrowStatus.RELEASE_SCHEDULED)
+          return;
         Long amount = task.getEscrowAmountPaise();
-        if (amount == null || amount <= 0) return;
+        if (amount == null || amount <= 0)
+          return;
         UUID payHelperId = task.getAssignedHelperId() != null ? task.getAssignedHelperId() : helperId;
-        if (payHelperId == null) return;
+        if (payHelperId == null)
+          return;
         UserEntity helper = users.findById(payHelperId).orElse(null);
-        if (helper == null) return;
+        if (helper == null)
+          return;
 
         long current = helper.getDemoBalancePaise() == null ? 0L : helper.getDemoBalancePaise();
         helper.setDemoBalancePaise(current + amount);
@@ -464,5 +469,6 @@ public class TaskService {
     });
   }
 
-  public record CreateResult(UUID taskId, List<UUID> offeredTo) {}
+  public record CreateResult(UUID taskId, List<UUID> offeredTo) {
+  }
 }

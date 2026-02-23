@@ -21,7 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class MatchingService {
-  private static final List<Double> EXPANSION_RADII_METERS = List.of(100d, 300d, 600d, 1000d, 1500d, 2000d, 2500d, 3000d);
+  private static final List<Double> EXPANSION_RADII_METERS = List.of(100d, 300d, 600d, 1000d, 1500d, 2000d, 2500d,
+      3000d);
 
   private final AppProperties props;
   private final H3Core h3;
@@ -42,6 +43,8 @@ public class MatchingService {
     this.realtime = realtime;
   }
 
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchingService.class);
+
   @Transactional
   public List<UUID> dispatchOffers(TaskEntity task) {
     long taskCell = h3.latLngToCell(task.getLat(), task.getLng(), props.matching().h3Resolution());
@@ -49,21 +52,35 @@ public class MatchingService {
     Map<UUID, Double> bestDistanceByHelper = new HashMap<>();
     int maxKRing = Math.max(props.matching().maxKRing(), 0);
 
+    log.info("Matching task {} at {}, {} (cell {}) with maxKRing {}", task.getId(), task.getLat(), task.getLng(),
+        taskCell, maxKRing);
+
     for (int k = 0; k <= maxKRing; k++) {
       List<Long> ringCells = h3.gridDisk(taskCell, k);
-      for (UUID helperId : presence.getOnlineHelpersForCells(ringCells)) {
+      var onlineHelpers = presence.getOnlineHelpersForCells(ringCells);
+      log.info("Ring {} has {} cells and {} online helpers", k, ringCells.size(), onlineHelpers.size());
+      for (UUID helperId : onlineHelpers) {
         var state = presence.getHelperState(helperId);
+
+        log.info("Helper {} raw state: {}, online={}, lastSeen={}", helperId, state,
+            state != null ? state.online() : "null", state != null ? state.lastSeenEpochMs() : "null");
+
         if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
+          log.warn("Helper {} is not fully online. State: {}", helperId, state);
           continue;
         }
 
         long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
         if (ageSeconds > props.matching().helperStaleAfterSeconds()) {
+          log.warn("Helper {} is stale. Age seconds: {}", helperId, ageSeconds);
           continue;
         }
 
         double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
+        log.info("Helper {} is valid, distance to task: {} meters", helperId, distMeters);
+
         if (distMeters > 3000d) {
+          log.warn("Helper {} is too far ({} meters > 3000)", helperId, distMeters);
           continue;
         }
         bestDistanceByHelper.merge(helperId, distMeters, Math::min);
@@ -88,6 +105,9 @@ public class MatchingService {
     }
 
     List<Candidate> chosen = staged.stream().limit(props.matching().offerFanout()).toList();
+
+    log.info("Matching summary - Candidates: {}, Staged: {}, Fanout limit: {}, Chosen: {}",
+        candidates.size(), staged.size(), props.matching().offerFanout(), chosen.size());
 
     Instant now = Instant.now();
     Instant expires = now.plusSeconds(30);
@@ -122,5 +142,6 @@ public class MatchingService {
     return helperIds;
   }
 
-  private record Candidate(UUID helperId, double distanceMeters) {}
+  private record Candidate(UUID helperId, double distanceMeters) {
+  }
 }
