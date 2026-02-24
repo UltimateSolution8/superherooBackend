@@ -19,6 +19,8 @@ import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
 import java.util.Locale;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +28,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class AuthService {
+  private static final Logger log = LoggerFactory.getLogger(AuthService.class);
   private final AppProperties props;
   private final OtpService otp;
   private final UserRepository users;
@@ -231,7 +234,11 @@ public class AuthService {
     rt.setTokenHash(HashUtils.sha256Hex(refreshToken));
     rt.setIssuedAt(now);
     rt.setExpiresAt(now.plusSeconds(props.jwt().refreshTtlSeconds()));
-    refreshTokens.save(rt);
+    try {
+      refreshTokens.save(rt);
+    } catch (Exception ex) {
+      log.warn("Failed to persist refresh token for user {}: {}", user.getId(), ex.getMessage());
+    }
   }
 
   private HelperProfileEntity ensureHelperProfile(java.util.UUID helperId) {
