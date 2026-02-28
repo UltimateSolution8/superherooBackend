@@ -383,6 +383,11 @@ public class TaskService {
         : tasks.findTop100ByStatusOrderByCreatedAtDesc(status);
   }
 
+  public List<TaskEntity> listRecentTasks(int limit) {
+    int size = Math.max(1, Math.min(50, limit));
+    return tasks.findAllByOrderByCreatedAtDesc(org.springframework.data.domain.PageRequest.of(0, size));
+  }
+
   public List<TaskEntity> listTasksForUser(UUID userId, UserRole role) {
     if (role == UserRole.BUYER) {
       return tasks.findTop50ByBuyerIdOrderByCreatedAtDesc(userId);

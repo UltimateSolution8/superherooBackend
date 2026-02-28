@@ -2,6 +2,7 @@ package com.helpinminutes.api.admin.controller;
 
 import com.helpinminutes.api.admin.dto.AdminCreateUserRequest;
 import com.helpinminutes.api.admin.dto.AdminManagedUserResponse;
+import com.helpinminutes.api.admin.dto.AdminSummaryResponse;
 import com.helpinminutes.api.admin.dto.AdminUpdateUserRequest;
 import com.helpinminutes.api.admin.dto.PendingHelperResponse;
 import com.helpinminutes.api.admin.dto.RejectHelperRequest;
@@ -47,6 +48,12 @@ public class AdminController {
   public List<PendingHelperResponse> pendingHelpers(@AuthenticationPrincipal UserPrincipal principal) {
     requireAdmin(principal);
     return admin.listPendingHelpers();
+  }
+
+  @GetMapping("/summary")
+  public AdminSummaryResponse summary(@AuthenticationPrincipal UserPrincipal principal) {
+    requireAdmin(principal);
+    return admin.summary();
   }
 
   @PostMapping("/helpers/{helperId}/approve")
@@ -134,6 +141,14 @@ public class AdminController {
       @RequestParam(required = false) TaskStatus status) {
     requireAdmin(principal);
     return tasks.listTasksForAdmin(status).stream().map(AdminController::toTaskResponse).toList();
+  }
+
+  @GetMapping("/tasks/recent")
+  public List<TaskResponse> recentTasks(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestParam(defaultValue = "5") int limit) {
+    requireAdmin(principal);
+    return tasks.listRecentTasks(limit).stream().map(AdminController::toTaskResponse).toList();
   }
 
   @GetMapping("/tasks/{taskId}")

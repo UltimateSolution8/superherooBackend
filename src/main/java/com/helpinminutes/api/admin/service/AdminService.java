@@ -2,6 +2,7 @@ package com.helpinminutes.api.admin.service;
 
 import com.helpinminutes.api.admin.dto.AdminCreateUserRequest;
 import com.helpinminutes.api.admin.dto.AdminManagedUserResponse;
+import com.helpinminutes.api.admin.dto.AdminSummaryResponse;
 import com.helpinminutes.api.admin.dto.AdminUpdateUserRequest;
 import com.helpinminutes.api.admin.dto.PendingHelperResponse;
 import com.helpinminutes.api.errors.BadRequestException;
@@ -9,6 +10,8 @@ import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.tasks.model.TaskStatus;
+import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
@@ -25,14 +28,17 @@ public class AdminService {
   private final HelperProfileRepository helperProfiles;
   private final UserRepository users;
   private final PasswordEncoder passwordEncoder;
+  private final TaskRepository tasks;
 
   public AdminService(
       HelperProfileRepository helperProfiles,
       UserRepository users,
-      PasswordEncoder passwordEncoder) {
+      PasswordEncoder passwordEncoder,
+      TaskRepository tasks) {
     this.helperProfiles = helperProfiles;
     this.users = users;
     this.passwordEncoder = passwordEncoder;
+    this.tasks = tasks;
   }
 
   public List<PendingHelperResponse> listPendingHelpers() {
@@ -52,6 +58,24 @@ public class AdminService {
               hp.getCreatedAt());
         })
         .toList();
+  }
+
+  public AdminSummaryResponse summary() {
+    long pendingHelpers = helperProfiles.countByKycStatus(HelperKycStatus.PENDING);
+    long searching = tasks.countByStatus(TaskStatus.SEARCHING);
+    long assigned = tasks.countByStatus(TaskStatus.ASSIGNED);
+    long arrived = tasks.countByStatus(TaskStatus.ARRIVED);
+    long started = tasks.countByStatus(TaskStatus.STARTED);
+    long completed = tasks.countByStatus(TaskStatus.COMPLETED);
+    long revenue = tasks.sumBudgetPaiseByStatus(TaskStatus.COMPLETED);
+    return new AdminSummaryResponse(
+        pendingHelpers,
+        searching,
+        assigned,
+        arrived,
+        started,
+        completed,
+        revenue);
   }
 
   @Transactional
