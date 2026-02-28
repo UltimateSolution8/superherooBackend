@@ -8,4 +8,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface HelperProfileRepository extends JpaRepository<HelperProfileEntity, UUID> {
   List<HelperProfileEntity> findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus kycStatus);
+  long countByKycStatus(HelperKycStatus kycStatus);
 }

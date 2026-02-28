@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.domain.Pageable;
 
 public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
   Optional<TaskEntity> findByIdAndBuyerId(UUID id, UUID buyerId);
@@ -18,6 +19,11 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
   java.util.List<TaskEntity> findTop50ByBuyerIdOrderByCreatedAtDesc(UUID buyerId);
   java.util.List<TaskEntity> findTop50ByAssignedHelperIdOrderByCreatedAtDesc(UUID helperId);
   java.util.List<TaskEntity> findTop50ByEscrowStatusAndEscrowReleaseAtBefore(TaskEscrowStatus status, Instant releaseAt);
+  java.util.List<TaskEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
+  long countByStatus(TaskStatus status);
+
+  @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")
+  long sumBudgetPaiseByStatus(@Param("status") TaskStatus status);
 
   @Modifying
   @Query(
