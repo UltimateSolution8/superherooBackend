@@ -72,6 +72,7 @@ public class SupportService {
     t.setLastMessageAt(m.getCreatedAt());
     tickets.save(t);
 
+    maybeAutoReply(t);
     return getMyTicket(userId, t.getId());
   }
 
@@ -115,7 +116,36 @@ public class SupportService {
     }
     tickets.save(t);
 
+    maybeAutoReply(t);
     return toMessageResponse(m);
+  }
+
+  private void maybeAutoReply(SupportTicketEntity ticket) {
+    String enabled = System.getenv("SUPPORT_AI_AUTOREPLY");
+    if (enabled == null || !"true".equalsIgnoreCase(enabled)) {
+      return;
+    }
+    try {
+      List<SupportMessageEntity> msgs = messages.findTop200ByTicketIdOrderByCreatedAtAsc(ticket.getId());
+      if (!msgs.isEmpty() && msgs.get(msgs.size() - 1).getAuthorType() != SupportAuthorType.USER) {
+        return;
+      }
+      AiDraftResponse draft = ai.draftReply(ticket, msgs);
+      if (!draft.enabled() || draft.draft() == null || draft.draft().isBlank()) {
+        return;
+      }
+      SupportMessageEntity aiMsg = new SupportMessageEntity();
+      aiMsg.setTicketId(ticket.getId());
+      aiMsg.setAuthorType(SupportAuthorType.AI);
+      aiMsg.setAuthorUserId(null);
+      aiMsg.setMessage(draft.draft());
+      messages.save(aiMsg);
+
+      ticket.setLastMessageAt(aiMsg.getCreatedAt());
+      tickets.save(ticket);
+    } catch {
+      // best-effort AI reply; never block the user
+    }
   }
 
   public List<AdminTicketResponse> listAdminTickets(SupportTicketStatus status) {
@@ -266,4 +296,3 @@ public class SupportService {
     return t.isEmpty() ? null : t;
   }
 }
-
