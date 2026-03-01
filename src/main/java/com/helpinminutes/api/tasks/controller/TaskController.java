@@ -10,7 +10,9 @@ import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.service.TaskService;
+import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
+import com.helpinminutes.api.users.repo.UserRepository;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.MediaType;
@@ -28,9 +30,11 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/v1/tasks")
 public class TaskController {
   private final TaskService tasks;
+  private final UserRepository users;
 
-  public TaskController(TaskService tasks) {
+  public TaskController(TaskService tasks, UserRepository users) {
     this.tasks = tasks;
+    this.users = users;
   }
 
   @PostMapping
@@ -131,10 +135,32 @@ public class TaskController {
     return toResponse(task, includeOtp);
   }
 
-  public static TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
+  private String resolvePhone(UUID userId) {
+    if (userId == null) return null;
+    UserEntity user = users.findById(userId).orElse(null);
+    return user != null ? user.getPhone() : null;
+  }
+
+  private String resolveName(UUID userId) {
+    if (userId == null) return null;
+    UserEntity user = users.findById(userId).orElse(null);
+    if (user == null) return null;
+    if (user.getDisplayName() != null && !user.getDisplayName().isBlank()) {
+      return user.getDisplayName();
+    }
+    return user.getPhone();
+  }
+
+  public TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
+    String buyerPhone = resolvePhone(t.getBuyerId());
+    String helperPhone = resolvePhone(t.getAssignedHelperId());
+    String buyerName = resolveName(t.getBuyerId());
+    String helperName = resolveName(t.getAssignedHelperId());
     return new TaskResponse(
         t.getId(),
         t.getBuyerId(),
+        buyerPhone,
+        buyerName,
         t.getTitle(),
         t.getDescription(),
         t.getUrgency(),
@@ -145,6 +171,8 @@ public class TaskController {
         t.getAddressText(),
         t.getStatus(),
         t.getAssignedHelperId(),
+        helperPhone,
+        helperName,
         includeOtp ? t.getArrivalOtp() : null,
         includeOtp ? t.getCompletionOtp() : null,
         t.getArrivalSelfieUrl(),

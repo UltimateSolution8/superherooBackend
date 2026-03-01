@@ -10,6 +10,7 @@ import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -29,16 +30,19 @@ public class AdminService {
   private final UserRepository users;
   private final PasswordEncoder passwordEncoder;
   private final TaskRepository tasks;
+  private final PushNotificationService pushNotifications;
 
   public AdminService(
       HelperProfileRepository helperProfiles,
       UserRepository users,
       PasswordEncoder passwordEncoder,
-      TaskRepository tasks) {
+      TaskRepository tasks,
+      PushNotificationService pushNotifications) {
     this.helperProfiles = helperProfiles;
     this.users = users;
     this.passwordEncoder = passwordEncoder;
     this.tasks = tasks;
+    this.pushNotifications = pushNotifications;
   }
 
   public List<PendingHelperResponse> listPendingHelpers() {
@@ -85,6 +89,7 @@ public class AdminService {
     hp.setKycStatus(HelperKycStatus.APPROVED);
     hp.setKycRejectionReason(null);
     helperProfiles.save(hp);
+    pushNotifications.notifyHelperKycApproved(helperId);
   }
 
   @Transactional
@@ -93,6 +98,15 @@ public class AdminService {
         .orElseThrow(() -> new NotFoundException("Helper not found"));
     hp.setKycStatus(HelperKycStatus.REJECTED);
     hp.setKycRejectionReason(reason);
+    helperProfiles.save(hp);
+  }
+
+  @Transactional
+  public void reopenHelperKyc(UUID helperId) {
+    HelperProfileEntity hp = helperProfiles.findById(helperId)
+        .orElseThrow(() -> new NotFoundException("Helper not found"));
+    hp.setKycStatus(HelperKycStatus.PENDING);
+    hp.setKycRejectionReason(null);
     helperProfiles.save(hp);
   }
 

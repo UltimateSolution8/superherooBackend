@@ -8,6 +8,8 @@ import java.util.UUID;
 public record TaskResponse(
     UUID id,
     UUID buyerId,
+    String buyerPhone,
+    String buyerName,
     String title,
     String description,
     TaskUrgency urgency,
@@ -18,6 +20,8 @@ public record TaskResponse(
     String addressText,
     TaskStatus status,
     UUID assignedHelperId,
+    String helperPhone,
+    String helperName,
     String arrivalOtp,
     String completionOtp,
     String arrivalSelfieUrl,

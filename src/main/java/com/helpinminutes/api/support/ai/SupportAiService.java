@@ -29,6 +29,7 @@ public class SupportAiService {
     String provider = env("LLM_PROVIDER");
     String apiKey = env("LLM_API_KEY");
     String model = env("LLM_MODEL");
+    String baseUrl = env("LLM_BASE_URL");
     if (model == null || model.isBlank()) model = "gpt-4o-mini";
 
     if (provider == null || provider.isBlank()) {
@@ -38,8 +39,16 @@ public class SupportAiService {
       return AiDraftResponse.disabled("LLM_API_KEY not configured");
     }
 
-    if (!"openai".equalsIgnoreCase(provider)) {
-      return AiDraftResponse.disabled("Unsupported LLM_PROVIDER: " + provider);
+    if (baseUrl == null || baseUrl.isBlank()) {
+      if ("openai".equalsIgnoreCase(provider)) {
+        baseUrl = "https://api.openai.com/v1/chat/completions";
+      } else if ("openrouter".equalsIgnoreCase(provider)) {
+        baseUrl = "https://openrouter.ai/api/v1/chat/completions";
+      } else if ("deepseek".equalsIgnoreCase(provider)) {
+        baseUrl = "https://api.deepseek.com/chat/completions";
+      } else {
+        return AiDraftResponse.disabled("Unsupported LLM_PROVIDER: " + provider);
+      }
     }
 
     String prompt = buildPrompt(ticket, messages);
@@ -51,18 +60,30 @@ public class SupportAiService {
               .add(mapper.createObjectNode()
                   .put("role", "system")
                   .put("content",
-                      "You are a support agent for HelpInMinutes (a hyperlocal urgent micro-help marketplace). " +
-                          "Write a helpful, concise reply. Do not ask for sensitive data. " +
-                          "If safety-related, advise reporting and offer escalation."))
+                      "You are a support agent for Superheroo (a hyperlocal urgent micro-help marketplace). " +
+                          "Write a helpful, concise reply. Do not ask for sensitive data (OTP, bank, Aadhaar). " +
+                          "If safety-related, advise contacting local authorities and confirm escalation. " +
+                          "Follow platform policy: no illegal tasks, harassment, adult services, weapons, drugs."))
               .add(mapper.createObjectNode()
                   .put("role", "user")
                   .put("content", prompt)));
 
-      HttpRequest httpReq = HttpRequest.newBuilder()
-          .uri(URI.create("https://api.openai.com/v1/chat/completions"))
+      HttpRequest.Builder builder = HttpRequest.newBuilder()
+          .uri(URI.create(baseUrl))
           .timeout(Duration.ofSeconds(25))
           .header("Authorization", "Bearer " + apiKey)
-          .header("Content-Type", "application/json")
+          .header("Content-Type", "application/json");
+      if ("openrouter".equalsIgnoreCase(provider)) {
+        String appName = env("LLM_APP_NAME");
+        String appUrl = env("LLM_APP_URL");
+        if (appName != null && !appName.isBlank()) {
+          builder.header("X-Title", appName);
+        }
+        if (appUrl != null && !appUrl.isBlank()) {
+          builder.header("HTTP-Referer", appUrl);
+        }
+      }
+      HttpRequest httpReq = builder
           .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(req)))
           .build();
 
@@ -109,4 +130,3 @@ public class SupportAiService {
     }
   }
 }
-
