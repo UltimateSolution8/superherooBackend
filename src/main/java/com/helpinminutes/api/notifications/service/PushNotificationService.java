@@ -89,4 +89,32 @@ public class PushNotificationService {
       log.warn("Failed to send push notifications for task {}", task.getId(), e);
     }
   }
+
+  public void notifyHelperKycApproved(UUID helperId) {
+    if (messaging == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(helperId));
+    if (tokenEntities.isEmpty()) return;
+
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+
+    try {
+      MulticastMessage msg = MulticastMessage.builder()
+          .addAllTokens(tokenList)
+          .setNotification(Notification.builder()
+              .setTitle("KYC approved")
+              .setBody("You are approved and can now go online.")
+              .build())
+          .putData("type", "KYC_APPROVED")
+          .build();
+      messaging.sendEachForMulticast(msg);
+    } catch (Exception e) {
+      log.warn("Failed to send KYC approved push notification for helper {}", helperId, e);
+    }
+  }
 }

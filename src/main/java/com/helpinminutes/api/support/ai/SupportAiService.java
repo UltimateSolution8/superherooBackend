@@ -60,9 +60,10 @@ public class SupportAiService {
               .add(mapper.createObjectNode()
                   .put("role", "system")
                   .put("content",
-                      "You are a support agent for HelpInMinutes (a hyperlocal urgent micro-help marketplace). " +
-                          "Write a helpful, concise reply. Do not ask for sensitive data. " +
-                          "If safety-related, advise reporting and offer escalation."))
+                      "You are a support agent for Superheroo (a hyperlocal urgent micro-help marketplace). " +
+                          "Write a helpful, concise reply. Do not ask for sensitive data (OTP, bank, Aadhaar). " +
+                          "If safety-related, advise contacting local authorities and confirm escalation. " +
+                          "Follow platform policy: no illegal tasks, harassment, adult services, weapons, drugs."))
               .add(mapper.createObjectNode()
                   .put("role", "user")
                   .put("content", prompt)));

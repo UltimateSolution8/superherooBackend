@@ -81,6 +81,12 @@ public class AdminController {
     admin.rejectHelper(helperId, req.reason());
   }
 
+  @PostMapping("/helpers/{helperId}/reopen-kyc")
+  public void reopenKyc(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID helperId) {
+    requireAdmin(principal);
+    admin.reopenHelperKyc(helperId);
+  }
+
   @GetMapping("/helpers")
   public List<AdminManagedUserResponse> listHelpers(@AuthenticationPrincipal UserPrincipal principal) {
     requireAdmin(principal);

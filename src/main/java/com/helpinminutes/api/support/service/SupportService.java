@@ -16,10 +16,14 @@ import com.helpinminutes.api.support.dto.TicketMessageResponse;
 import com.helpinminutes.api.support.dto.TicketResponse;
 import com.helpinminutes.api.support.model.SupportAuthorType;
 import com.helpinminutes.api.support.model.SupportMessageEntity;
+import com.helpinminutes.api.support.model.SupportTicketCategory;
 import com.helpinminutes.api.support.model.SupportTicketEntity;
+import com.helpinminutes.api.support.model.SupportTicketPriority;
 import com.helpinminutes.api.support.model.SupportTicketStatus;
 import com.helpinminutes.api.support.repo.SupportMessageRepository;
 import com.helpinminutes.api.support.repo.SupportTicketRepository;
+import com.helpinminutes.api.tasks.model.TaskEntity;
+import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -39,16 +43,19 @@ public class SupportService {
   private final SupportMessageRepository messages;
   private final UserRepository users;
   private final SupportAiService ai;
+  private final TaskRepository tasks;
 
   public SupportService(
       SupportTicketRepository tickets,
       SupportMessageRepository messages,
       UserRepository users,
-      SupportAiService ai) {
+      SupportAiService ai,
+      TaskRepository tasks) {
     this.tickets = tickets;
     this.messages = messages;
     this.users = users;
     this.ai = ai;
+    this.tasks = tasks;
   }
 
   @Transactional
@@ -70,6 +77,7 @@ public class SupportService {
     m = messages.save(m);
 
     t.setLastMessageAt(m.getCreatedAt());
+    applyEscalationRules(t, req.message());
     tickets.save(t);
 
     maybeAutoReply(t);
@@ -114,10 +122,29 @@ public class SupportService {
     if (t.getStatus() == SupportTicketStatus.RESOLVED) {
       t.setStatus(SupportTicketStatus.OPEN);
     }
+    applyEscalationRules(t, req.message());
     tickets.save(t);
 
     maybeAutoReply(t);
     return toMessageResponse(m);
+  }
+
+  private void applyEscalationRules(SupportTicketEntity ticket, String message) {
+    String text = message == null ? "" : message.toLowerCase(Locale.ROOT);
+    boolean safety = ticket.getCategory() == SupportTicketCategory.SAFETY;
+    boolean risky = text.contains("sos") || text.contains("emergency") || text.contains("unsafe")
+        || text.contains("threat") || text.contains("harass");
+    if (safety || risky) {
+      ticket.setPriority(SupportTicketPriority.HIGH);
+      ticket.setStatus(SupportTicketStatus.IN_PROGRESS);
+      SupportMessageEntity systemMsg = new SupportMessageEntity();
+      systemMsg.setTicketId(ticket.getId());
+      systemMsg.setAuthorType(SupportAuthorType.SYSTEM);
+      systemMsg.setAuthorUserId(null);
+      systemMsg.setMessage("Auto-escalated to human support due to safety/emergency signal.");
+      messages.save(systemMsg);
+      ticket.setLastMessageAt(systemMsg.getCreatedAt());
+    }
   }
 
   private void maybeAutoReply(SupportTicketEntity ticket) {
@@ -126,7 +153,8 @@ public class SupportService {
       return;
     }
     try {
-      List<SupportMessageEntity> msgs = messages.findTop200ByTicketIdOrderByCreatedAtAsc(ticket.getId());
+      List<SupportMessageEntity> msgs = buildAiContextMessages(ticket,
+          messages.findTop200ByTicketIdOrderByCreatedAtAsc(ticket.getId()));
       if (!msgs.isEmpty() && msgs.get(msgs.size() - 1).getAuthorType() != SupportAuthorType.USER) {
         return;
       }
@@ -143,9 +171,34 @@ public class SupportService {
 
       ticket.setLastMessageAt(aiMsg.getCreatedAt());
       tickets.save(ticket);
-    } catch {
+    } catch (Exception e) {
       // best-effort AI reply; never block the user
     }
+  }
+
+  private List<SupportMessageEntity> buildAiContextMessages(
+      SupportTicketEntity ticket,
+      List<SupportMessageEntity> msgs) {
+    if (ticket.getRelatedTaskId() == null) return msgs;
+    TaskEntity task = tasks.findById(ticket.getRelatedTaskId()).orElse(null);
+    if (task == null) return msgs;
+    SupportMessageEntity ctx = new SupportMessageEntity();
+    ctx.setTicketId(ticket.getId());
+    ctx.setAuthorType(SupportAuthorType.SYSTEM);
+    String context = "Task context: title=" + safe(task.getTitle()) +
+        ", status=" + safe(task.getStatus()) +
+        ", urgency=" + safe(task.getUrgency()) +
+        ", budgetPaise=" + task.getBudgetPaise() +
+        ", buyerId=" + task.getBuyerId() +
+        ", helperId=" + task.getAssignedHelperId();
+    ctx.setMessage(context);
+    List<SupportMessageEntity> combined = new java.util.ArrayList<>(msgs);
+    combined.add(ctx);
+    return combined;
+  }
+
+  private static String safe(Object v) {
+    return v == null ? "-" : String.valueOf(v);
   }
 
   public List<AdminTicketResponse> listAdminTickets(SupportTicketStatus status) {
