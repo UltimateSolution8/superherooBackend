@@ -3,6 +3,7 @@ package com.helpinminutes.api.matching;
 import com.helpinminutes.api.common.GeoUtils;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
@@ -29,18 +30,21 @@ public class MatchingService {
   private final HelperPresenceService presence;
   private final TaskOfferRepository offers;
   private final RealtimePublisher realtime;
+  private final PushNotificationService pushNotifications;
 
   public MatchingService(
       AppProperties props,
       H3Core h3,
       HelperPresenceService presence,
       TaskOfferRepository offers,
-      RealtimePublisher realtime) {
+      RealtimePublisher realtime,
+      PushNotificationService pushNotifications) {
     this.props = props;
     this.h3 = h3;
     this.presence = presence;
     this.offers = offers;
     this.realtime = realtime;
+    this.pushNotifications = pushNotifications;
   }
 
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchingService.class);
@@ -137,6 +141,11 @@ public class MatchingService {
               "lat", task.getLat(),
               "lng", task.getLng(),
               "distanceMeters", c.distanceMeters()));
+    }
+
+    try {
+      pushNotifications.notifyTaskOffered(helperIds, task);
+    } catch (Exception ignored) {
     }
 
     return helperIds;
