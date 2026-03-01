@@ -69,7 +69,7 @@ public class SupabaseStorageService {
 
     String contentType = safeContentType(file.getContentType());
     String ext = detectExtension(contentType, file.getOriginalFilename());
-    String key = "helper-kyc/" + helperId + "/" + kind + "-" + UUID.randomUUID() + ext;
+    String key = buildKey("helper-kyc", helperId.toString(), kind, ext);
 
     if (isConfigured()) {
       return uploadFile(file, contentType, key, "document");
@@ -86,7 +86,7 @@ public class SupabaseStorageService {
     }
     String contentType = safeContentType(file.getContentType());
     String ext = detectExtension(contentType, file.getOriginalFilename());
-    String key = "task-selfies/" + taskId + "/" + helperId + "/" + stage + "-" + UUID.randomUUID() + ext;
+    String key = buildKey("task-selfies", taskId + "/" + helperId, stage, ext);
 
     if (isConfigured()) {
       return uploadFile(file, contentType, key, "selfie");
@@ -206,5 +206,13 @@ public class SupabaseStorageService {
       if (n.endsWith(".pdf")) return ".pdf";
     }
     return ".bin";
+  }
+
+  private static String buildKey(String base, String idPath, String kind, String ext) {
+    java.time.LocalDate now = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+    String datePath = now.getYear() + "/" + String.format("%02d", now.getMonthValue()) + "/" + String.format("%02d", now.getDayOfMonth());
+    String ts = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC)
+        .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"));
+    return base + "/" + datePath + "/" + idPath + "/" + kind + "-" + ts + "-" + UUID.randomUUID() + ext;
   }
 }
