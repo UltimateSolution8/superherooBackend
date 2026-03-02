@@ -232,6 +232,9 @@ public class AdminController {
         t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
         t.getHelperRatingComment(),
         t.getHelperRatedAt(),
+        t.getCancelReason(),
+        t.getCancelledByRole(),
+        t.getCancelledAt(),
         t.getCreatedAt());
   }
 }
