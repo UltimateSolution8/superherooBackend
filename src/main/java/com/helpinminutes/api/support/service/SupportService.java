@@ -66,7 +66,7 @@ public class SupportService {
     t.setRole(role);
     t.setCategory(req.category());
     t.setSubject(trimOrNull(req.subject()));
-    t.setRelatedTaskId(req.relatedTaskId());
+    t.setRelatedTaskId(parseRelatedTaskId(req.relatedTaskId()));
     t.setLastMessageAt(Instant.now());
     t = tickets.save(t);
 
@@ -200,6 +200,17 @@ public class SupportService {
 
   private static String safe(Object v) {
     return v == null ? "-" : String.valueOf(v);
+  }
+
+  private static UUID parseRelatedTaskId(String raw) {
+    if (raw == null) return null;
+    String trimmed = raw.trim();
+    if (trimmed.isEmpty()) return null;
+    try {
+      return UUID.fromString(trimmed);
+    } catch (IllegalArgumentException ex) {
+      return null;
+    }
   }
 
   public List<AdminTicketResponse> listAdminTickets(SupportTicketStatus status) {
