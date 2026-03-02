@@ -40,5 +40,8 @@ public record TaskResponse(
     Double helperRating,
     String helperRatingComment,
     Instant helperRatedAt,
+    String cancelReason,
+    String cancelledByRole,
+    Instant cancelledAt,
     Instant createdAt
 ) {}
