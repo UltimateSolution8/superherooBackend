@@ -314,6 +314,68 @@ public class TaskService {
   }
 
   @Transactional
+  public TaskEntity cancelTask(UUID userId, UserRole role, UUID taskId, String reason) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    TaskStatus status = task.getStatus();
+    if (status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED) {
+      throw new BadRequestException("Task can only be cancelled before arrival");
+    }
+
+    if (role == UserRole.BUYER) {
+      if (!userId.equals(task.getBuyerId())) {
+        throw new ForbiddenException("Only the buyer can cancel this task");
+      }
+    } else if (role == UserRole.HELPER) {
+      if (task.getAssignedHelperId() == null || !userId.equals(task.getAssignedHelperId())) {
+        throw new ForbiddenException("Only the assigned helper can cancel this task");
+      }
+    } else {
+      throw new ForbiddenException("Only buyers or helpers can cancel tasks");
+    }
+
+    String trimmed = reason == null ? "" : reason.trim();
+    if (trimmed.isBlank()) {
+      throw new BadRequestException("Cancellation reason is required");
+    }
+
+    task.setStatus(TaskStatus.CANCELLED);
+    task.setCancelReason(trimmed);
+    task.setCancelledByRole(role.name());
+    task.setCancelledByUserId(userId);
+    task.setCancelledAt(Instant.now());
+
+    if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
+      if (task.getEscrowStatus() == TaskEscrowStatus.HELD || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
+        UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
+        if (buyer != null) {
+          long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
+          buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
+          users.save(buyer);
+        }
+        task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
+        task.setEscrowReleaseAt(null);
+        task.setEscrowReleasedAt(Instant.now());
+        task.setEscrowReleasedToHelperId(null);
+      }
+    }
+
+    tasks.save(task);
+
+    realtime.publish(
+        "TASK_CANCELLED",
+        java.util.Map.of(
+            "taskId", taskId.toString(),
+            "buyerId", task.getBuyerId().toString(),
+            "helperId", task.getAssignedHelperId() == null ? "" : task.getAssignedHelperId().toString(),
+            "role", role.name(),
+            "reason", trimmed));
+
+    return task;
+  }
+
+  @Transactional
   public TaskEntity uploadTaskSelfie(
       UUID helperId,
       UUID taskId,

@@ -4,6 +4,7 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
+import com.helpinminutes.api.tasks.dto.CancelTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
@@ -135,6 +136,16 @@ public class TaskController {
     return toResponse(task, includeOtp);
   }
 
+  @PostMapping("/{taskId}/cancel")
+  public TaskResponse cancelTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody CancelTaskRequest req) {
+    TaskEntity task = tasks.cancelTask(principal.userId(), principal.role(), taskId, req.reason());
+    boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
+    return toResponse(task, includeOtp);
+  }
+
   private String resolvePhone(UUID userId) {
     if (userId == null) return null;
     UserEntity user = users.findById(userId).orElse(null);
@@ -191,6 +202,9 @@ public class TaskController {
         t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
         t.getHelperRatingComment(),
         t.getHelperRatedAt(),
+        t.getCancelReason(),
+        t.getCancelledByRole(),
+        t.getCancelledAt(),
         t.getCreatedAt());
   }
 }
