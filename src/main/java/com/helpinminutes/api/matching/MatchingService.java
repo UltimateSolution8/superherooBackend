@@ -114,7 +114,7 @@ public class MatchingService {
         candidates.size(), staged.size(), props.matching().offerFanout(), chosen.size());
 
     Instant now = Instant.now();
-    Instant expires = now.plusSeconds(30);
+    Instant expires = now.plusSeconds(props.matching().offerTtlSeconds());
 
     List<UUID> helperIds = new ArrayList<>();
     for (Candidate c : chosen) {
@@ -140,7 +140,8 @@ public class MatchingService {
               "budgetPaise", task.getBudgetPaise(),
               "lat", task.getLat(),
               "lng", task.getLng(),
-              "distanceMeters", c.distanceMeters()));
+              "distanceMeters", c.distanceMeters(),
+              "expiresAt", expires.toString()));
     }
 
     try {

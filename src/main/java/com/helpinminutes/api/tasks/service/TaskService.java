@@ -1,6 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
 import com.helpinminutes.api.common.GeoUtils;
+import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ConflictException;
 import com.helpinminutes.api.errors.ForbiddenException;
@@ -44,6 +45,7 @@ public class TaskService {
   private final RealtimePublisher realtime;
   private final SupabaseStorageService storage;
   private final HelperPresenceService presence;
+  private final AppProperties props;
   private final UserRepository users;
   private final HelperProfileRepository helperProfiles;
 
@@ -54,6 +56,7 @@ public class TaskService {
       RealtimePublisher realtime,
       SupabaseStorageService storage,
       HelperPresenceService presence,
+      AppProperties props,
       UserRepository users,
       HelperProfileRepository helperProfiles) {
     this.tasks = tasks;
@@ -62,6 +65,7 @@ public class TaskService {
     this.realtime = realtime;
     this.storage = storage;
     this.presence = presence;
+    this.props = props;
     this.users = users;
     this.helperProfiles = helperProfiles;
   }
@@ -163,7 +167,8 @@ public class TaskService {
       }
 
       long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
-      if (ageSeconds > 60) {
+      int staleAfter = Math.max(60, props.matching().helperStaleAfterSeconds());
+      if (ageSeconds > staleAfter) {
         throw new ForbiddenException("Helper location is stale");
       }
 

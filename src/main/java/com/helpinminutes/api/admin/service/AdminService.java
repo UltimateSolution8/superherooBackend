@@ -207,7 +207,12 @@ public class AdminService {
     if (u.getRole() != role) {
       throw new BadRequestException("User role mismatch");
     }
-    users.deleteById(userId);
+    // Soft-delete to avoid FK constraint failures on tasks/payments.
+    u.setStatus(UserStatus.BLOCKED);
+    u.setPhone(null);
+    u.setEmail(null);
+    u.setDisplayName("Deleted user");
+    users.save(u);
   }
 
   private AdminManagedUserResponse toManagedResponse(UserEntity u) {
