@@ -126,6 +126,11 @@ public class TaskController {
         .toList();
   }
 
+  @GetMapping("/my")
+  public java.util.List<TaskResponse> my(@AuthenticationPrincipal UserPrincipal principal) {
+    return mine(principal);
+  }
+
   @PostMapping("/{taskId}/rating")
   public TaskResponse rateTask(
       @AuthenticationPrincipal UserPrincipal principal,

@@ -1,6 +1,7 @@
 package com.helpinminutes.api.support.model;
 
 public enum SupportTicketCategory {
+  GENERAL,
   PAYMENT,
   SAFETY,
   QUALITY,
@@ -9,4 +10,3 @@ public enum SupportTicketCategory {
   TECH,
   OTHER
 }
-

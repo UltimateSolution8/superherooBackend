@@ -80,7 +80,8 @@ app:
     h3Resolution: ${MATCH_H3_RESOLUTION:9}
     maxKRing: ${MATCH_MAX_KRING:3}
     offerFanout: ${MATCH_OFFER_FANOUT:5}
-    helperStaleAfterSeconds: ${MATCH_HELPER_STALE_AFTER_SECONDS:20}
+    helperStaleAfterSeconds: ${MATCH_HELPER_STALE_AFTER_SECONDS:120}
+    offerTtlSeconds: ${MATCH_OFFER_TTL_SECONDS:120}
 
   realtime:
     redisPubSubChannel: ${REALTIME_REDIS_CHANNEL:him:rt:events}

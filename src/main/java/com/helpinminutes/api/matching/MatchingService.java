@@ -114,7 +114,7 @@ public class MatchingService {
         candidates.size(), staged.size(), props.matching().offerFanout(), chosen.size());
 
     Instant now = Instant.now();
-    Instant expires = now.plusSeconds(30);
+    Instant expires = now.plusSeconds(props.matching().offerTtlSeconds());
 
     List<UUID> helperIds = new ArrayList<>();
     for (Candidate c : chosen) {
@@ -130,17 +130,18 @@ public class MatchingService {
 
       realtime.publish(
           "TASK_OFFERED",
-          java.util.Map.of(
-              "helperId", c.helperId().toString(),
-              "taskId", task.getId().toString(),
-              "title", task.getTitle() == null ? "Task" : task.getTitle(),
-              "description", task.getDescription(),
-              "urgency", task.getUrgency().name(),
-              "timeMinutes", task.getTimeMinutes(),
-              "budgetPaise", task.getBudgetPaise(),
-              "lat", task.getLat(),
-              "lng", task.getLng(),
-              "distanceMeters", c.distanceMeters()));
+          java.util.Map.ofEntries(
+              java.util.Map.entry("helperId", c.helperId().toString()),
+              java.util.Map.entry("taskId", task.getId().toString()),
+              java.util.Map.entry("title", task.getTitle() == null ? "Task" : task.getTitle()),
+              java.util.Map.entry("description", task.getDescription()),
+              java.util.Map.entry("urgency", task.getUrgency().name()),
+              java.util.Map.entry("timeMinutes", task.getTimeMinutes()),
+              java.util.Map.entry("budgetPaise", task.getBudgetPaise()),
+              java.util.Map.entry("lat", task.getLat()),
+              java.util.Map.entry("lng", task.getLng()),
+              java.util.Map.entry("distanceMeters", c.distanceMeters()),
+              java.util.Map.entry("expiresAt", expires.toString())));
     }
 
     try {
