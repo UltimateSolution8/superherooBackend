@@ -220,10 +220,10 @@ public class TaskService {
       throw new BadRequestException("Invalid status transition: " + current + " -> " + newStatus);
     }
 
-    if (newStatus == TaskStatus.ARRIVED && task.getArrivalSelfieUrl() == null) {
-      throw new BadRequestException("Arrival selfie is required before marking ARRIVED");
-    }
     if (newStatus == TaskStatus.STARTED) {
+      if (task.getArrivalSelfieUrl() == null) {
+        throw new BadRequestException("Arrival selfie is required to start work");
+      }
       String expected = task.getArrivalOtp();
       if (expected != null && !expected.isBlank()) {
         if (otp == null || otp.isBlank() || !expected.equals(otp.trim())) {
