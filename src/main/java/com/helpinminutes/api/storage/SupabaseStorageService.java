@@ -108,8 +108,10 @@ public class SupabaseStorageService {
       s3.putObject(req, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
       return toPublicUrl(key);
     } catch (IOException e) {
+      log.warn("Upload failed: could not read {} file (key={}): {}", fileLabel, key, e.getMessage());
       throw new BadRequestException("Could not read uploaded file");
     } catch (Exception e) {
+      log.warn("Upload failed for {} (key={}): {}", fileLabel, key, e.getMessage());
       throw new BadRequestException("Could not upload " + fileLabel + " to storage");
     }
   }

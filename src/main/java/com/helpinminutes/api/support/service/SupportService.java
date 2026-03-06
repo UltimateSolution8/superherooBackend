@@ -30,6 +30,7 @@ import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -65,7 +66,7 @@ public class SupportService {
     t.setRole(role);
     t.setCategory(req.category());
     t.setSubject(trimOrNull(req.subject()));
-    t.setRelatedTaskId(req.relatedTaskId());
+    t.setRelatedTaskId(parseUuid(req.relatedTaskId()));
     t.setLastMessageAt(Instant.now());
     t = tickets.save(t);
 
@@ -199,6 +200,17 @@ public class SupportService {
 
   private static String safe(Object v) {
     return v == null ? "-" : String.valueOf(v);
+  }
+
+  private static UUID parseUuid(String value) {
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    try {
+      return UUID.fromString(value.trim());
+    } catch (IllegalArgumentException ex) {
+      return null;
+    }
   }
 
   public List<AdminTicketResponse> listAdminTickets(SupportTicketStatus status) {

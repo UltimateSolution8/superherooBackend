@@ -30,13 +30,20 @@ public class SupportAiService {
     String apiKey = env("LLM_API_KEY");
     String model = env("LLM_MODEL");
     String baseUrl = env("LLM_BASE_URL");
-    if (model == null || model.isBlank()) model = "gpt-4o-mini";
-
     if (provider == null || provider.isBlank()) {
-      return AiDraftResponse.disabled("LLM_PROVIDER not configured");
+      if (apiKey != null && !apiKey.isBlank()) {
+        provider = "openrouter";
+      }
     }
+    if (model == null || model.isBlank()) {
+      model = "meta-llama/llama-3.1-8b-instruct:free";
+    }
+
     if (apiKey == null || apiKey.isBlank()) {
       return AiDraftResponse.disabled("LLM_API_KEY not configured");
+    }
+    if (provider == null || provider.isBlank()) {
+      return AiDraftResponse.disabled("LLM_PROVIDER not configured");
     }
 
     if (baseUrl == null || baseUrl.isBlank()) {

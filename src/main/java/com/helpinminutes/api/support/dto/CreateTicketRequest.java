@@ -10,6 +10,5 @@ public record CreateTicketRequest(
     @NotNull SupportTicketCategory category,
     @Size(max = 140) String subject,
     @NotBlank @Size(max = 4000) String message,
-    UUID relatedTaskId
+    String relatedTaskId
 ) {}
-

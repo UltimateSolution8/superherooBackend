@@ -95,6 +95,14 @@ public class TaskEntity {
 
   @Column(name = "completion_selfie_captured_at")
   private Instant completionSelfieCapturedAt;
+  @Column(name = "cancel_reason")
+  private String cancelReason;
+  @Column(name = "cancelled_by_role")
+  private String cancelledByRole;
+  @Column(name = "cancelled_by_user_id")
+  private UUID cancelledByUserId;
+  @Column(name = "cancelled_at")
+  private Instant cancelledAt;
 
   @Column(name = "arrival_otp")
   private String arrivalOtp;
@@ -370,6 +378,38 @@ public class TaskEntity {
 
   public void setCompletionSelfieCapturedAt(Instant completionSelfieCapturedAt) {
     this.completionSelfieCapturedAt = completionSelfieCapturedAt;
+  }
+
+  public String getCancelReason() {
+    return cancelReason;
+  }
+
+  public void setCancelReason(String cancelReason) {
+    this.cancelReason = cancelReason;
+  }
+
+  public String getCancelledByRole() {
+    return cancelledByRole;
+  }
+
+  public void setCancelledByRole(String cancelledByRole) {
+    this.cancelledByRole = cancelledByRole;
+  }
+
+  public UUID getCancelledByUserId() {
+    return cancelledByUserId;
+  }
+
+  public void setCancelledByUserId(UUID cancelledByUserId) {
+    this.cancelledByUserId = cancelledByUserId;
+  }
+
+  public Instant getCancelledAt() {
+    return cancelledAt;
+  }
+
+  public void setCancelledAt(Instant cancelledAt) {
+    this.cancelledAt = cancelledAt;
   }
 
   public String getArrivalOtp() {

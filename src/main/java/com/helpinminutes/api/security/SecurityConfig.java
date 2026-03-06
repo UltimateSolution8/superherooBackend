@@ -30,6 +30,7 @@ public class SecurityConfig {
             .requestMatchers("/api/v1/skills").permitAll()
             .requestMatchers("/api/v1/tasks/unassigned").permitAll()
             .anyRequest().authenticated())
+        .addFilterBefore(new RateLimitFilter(), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
 
     return http.build();

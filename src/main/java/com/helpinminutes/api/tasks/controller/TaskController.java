@@ -4,6 +4,7 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
+import com.helpinminutes.api.tasks.dto.CancelTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
@@ -102,10 +103,9 @@ public class TaskController {
   public TaskResponse get(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID taskId) {
     TaskEntity task = tasks.getTask(taskId);
 
-    boolean canSee =
-        (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
-            || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
-            || principal.role() == UserRole.ADMIN;
+    boolean canSee = (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
+        || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
+        || principal.role() == UserRole.ADMIN;
 
     if (!canSee) {
       throw new ForbiddenException("Not allowed");
@@ -113,6 +113,17 @@ public class TaskController {
 
     boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
     return toResponse(task, includeOtp);
+  }
+
+  @GetMapping("/available")
+  public java.util.List<TaskResponse> available(@AuthenticationPrincipal UserPrincipal principal) {
+    if (principal.role() != UserRole.HELPER) {
+      throw new ForbiddenException("Only helpers can view available tasks");
+    }
+    return tasks.listAvailableTasks(principal.userId())
+        .stream()
+        .map(t -> toResponse(t, false))
+        .toList();
   }
 
   @GetMapping("/mine")
@@ -125,6 +136,11 @@ public class TaskController {
         .toList();
   }
 
+  @GetMapping("/my")
+  public java.util.List<TaskResponse> my(@AuthenticationPrincipal UserPrincipal principal) {
+    return mine(principal);
+  }
+
   @PostMapping("/{taskId}/rating")
   public TaskResponse rateTask(
       @AuthenticationPrincipal UserPrincipal principal,
@@ -135,16 +151,29 @@ public class TaskController {
     return toResponse(task, includeOtp);
   }
 
+  @PostMapping("/{taskId}/cancel")
+  public TaskResponse cancelTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody CancelTaskRequest req) {
+    TaskEntity task = tasks.cancelTask(principal.userId(), principal.role(), taskId, req.reason());
+    boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
+    return toResponse(task, includeOtp);
+  }
+
   private String resolvePhone(UUID userId) {
-    if (userId == null) return null;
+    if (userId == null)
+      return null;
     UserEntity user = users.findById(userId).orElse(null);
     return user != null ? user.getPhone() : null;
   }
 
   private String resolveName(UUID userId) {
-    if (userId == null) return null;
+    if (userId == null)
+      return null;
     UserEntity user = users.findById(userId).orElse(null);
-    if (user == null) return null;
+    if (user == null)
+      return null;
     if (user.getDisplayName() != null && !user.getDisplayName().isBlank()) {
       return user.getDisplayName();
     }
@@ -191,6 +220,9 @@ public class TaskController {
         t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
         t.getHelperRatingComment(),
         t.getHelperRatedAt(),
+        t.getCancelReason(),
+        t.getCancelledByRole(),
+        t.getCancelledAt(),
         t.getCreatedAt());
   }
 }
