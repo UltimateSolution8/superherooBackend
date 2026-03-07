@@ -32,6 +32,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -66,7 +67,7 @@ public class SupportService {
     t.setRole(role);
     t.setCategory(req.category());
     t.setSubject(trimOrNull(req.subject()));
-    t.setRelatedTaskId(parseUuid(req.relatedTaskId()));
+    t.setRelatedTaskId(parseRelatedTaskId(req.relatedTaskId()));
     t.setLastMessageAt(Instant.now());
     t = tickets.save(t);
 
@@ -202,12 +203,12 @@ public class SupportService {
     return v == null ? "-" : String.valueOf(v);
   }
 
-  private static UUID parseUuid(String value) {
-    if (value == null || value.isBlank()) {
-      return null;
-    }
+  private static UUID parseRelatedTaskId(String raw) {
+    if (raw == null) return null;
+    String trimmed = raw.trim();
+    if (trimmed.isEmpty()) return null;
     try {
-      return UUID.fromString(value.trim());
+      return UUID.fromString(trimmed);
     } catch (IllegalArgumentException ex) {
       return null;
     }

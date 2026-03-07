@@ -32,7 +32,8 @@ public record AppProperties(
       @Min(0) @Max(15) int h3Resolution,
       @Min(0) @Max(10) int maxKRing,
       @Min(1) @Max(50) int offerFanout,
-      @Min(5) @Max(300) int helperStaleAfterSeconds
+      @Min(5) @Max(300) int helperStaleAfterSeconds,
+      @Min(10) @Max(600) int offerTtlSeconds
   ) {}
 
   public record Realtime(
