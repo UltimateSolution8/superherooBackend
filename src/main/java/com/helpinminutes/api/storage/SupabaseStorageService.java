@@ -3,6 +3,7 @@ package com.helpinminutes.api.storage;
 import com.helpinminutes.api.errors.BadRequestException;
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -12,7 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
@@ -124,6 +127,8 @@ public class SupabaseStorageService {
           .forcePathStyle(true)
           .region(Region.US_EAST_1)
           .credentialsProvider(StaticCredentialsProvider.create(creds))
+          .httpClient(defaultHttpClient())
+          .overrideConfiguration(defaultOverrideConfig())
           .build()) {
 
         // Auto-create bucket if it doesn't exist
@@ -155,6 +160,22 @@ public class SupabaseStorageService {
         .forcePathStyle(true)
         .region(Region.of(region))
         .credentialsProvider(StaticCredentialsProvider.create(creds))
+        .httpClient(defaultHttpClient())
+        .overrideConfiguration(defaultOverrideConfig())
+        .build();
+  }
+
+  private static ApacheHttpClient defaultHttpClient() {
+    return ApacheHttpClient.builder()
+        .connectionTimeout(Duration.ofSeconds(5))
+        .socketTimeout(Duration.ofSeconds(20))
+        .build();
+  }
+
+  private static ClientOverrideConfiguration defaultOverrideConfig() {
+    return ClientOverrideConfiguration.builder()
+        .apiCallTimeout(Duration.ofSeconds(25))
+        .apiCallAttemptTimeout(Duration.ofSeconds(15))
         .build();
   }
 

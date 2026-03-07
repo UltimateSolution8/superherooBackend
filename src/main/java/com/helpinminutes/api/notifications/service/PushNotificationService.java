@@ -9,6 +9,8 @@ import com.google.firebase.messaging.Notification;
 import com.helpinminutes.api.notifications.model.PushTokenEntity;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,14 +30,18 @@ public class PushNotificationService {
   public PushNotificationService(
       PushTokenService tokens,
       @Value("${FIREBASE_SERVICE_ACCOUNT_JSON:}") String serviceAccountJson,
-      @Value("${FIREBASE_SERVICE_ACCOUNT_BASE64:}") String serviceAccountBase64) {
+      @Value("${FIREBASE_SERVICE_ACCOUNT_BASE64:}") String serviceAccountBase64,
+      @Value("${FIREBASE_SERVICE_ACCOUNT_PATH:}") String serviceAccountPath) {
     this.tokens = tokens;
-    this.messaging = initFirebase(serviceAccountJson, serviceAccountBase64);
+    this.messaging = initFirebase(serviceAccountJson, serviceAccountBase64, serviceAccountPath);
   }
 
-  private FirebaseMessaging initFirebase(String json, String base64) {
+  private FirebaseMessaging initFirebase(String json, String base64, String path) {
     try {
       String payload = json;
+      if ((payload == null || payload.isBlank()) && path != null && !path.isBlank()) {
+        payload = Files.readString(Path.of(path));
+      }
       if ((payload == null || payload.isBlank()) && base64 != null && !base64.isBlank()) {
         payload = new String(java.util.Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
       }
