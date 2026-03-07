@@ -96,6 +96,60 @@ public class PushNotificationService {
     }
   }
 
+  public void notifyBuyerTaskAccepted(UUID buyerId, TaskEntity task) {
+    if (messaging == null || buyerId == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      MulticastMessage msg = MulticastMessage.builder()
+          .addAllTokens(tokenList)
+          .setNotification(Notification.builder()
+              .setTitle("Task accepted")
+              .setBody("A Superheroo is on the way.")
+              .build())
+          .putData("type", "TASK_ACCEPTED")
+          .putData("taskId", task.getId().toString())
+          .build();
+      messaging.sendEachForMulticast(msg);
+    } catch (Exception e) {
+      log.warn("Failed to send task accepted notification for task {}", task.getId(), e);
+    }
+  }
+
+  public void notifyBuyerTaskCompleted(UUID buyerId, TaskEntity task) {
+    if (messaging == null || buyerId == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      MulticastMessage msg = MulticastMessage.builder()
+          .addAllTokens(tokenList)
+          .setNotification(Notification.builder()
+              .setTitle("Task completed")
+              .setBody("Please rate your Superheroo.")
+              .build())
+          .putData("type", "TASK_COMPLETED")
+          .putData("taskId", task.getId().toString())
+          .build();
+      messaging.sendEachForMulticast(msg);
+    } catch (Exception e) {
+      log.warn("Failed to send task completed notification for task {}", task.getId(), e);
+    }
+  }
+
   public void notifyHelperKycApproved(UUID helperId) {
     if (messaging == null) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(helperId));

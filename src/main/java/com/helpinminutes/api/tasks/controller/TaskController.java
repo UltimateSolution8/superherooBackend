@@ -185,6 +185,18 @@ public class TaskController {
     String helperPhone = resolvePhone(t.getAssignedHelperId());
     String buyerName = resolveName(t.getBuyerId());
     String helperName = resolveName(t.getAssignedHelperId());
+    Long helperCompletedCount = null;
+    Long buyerCompletedCount = null;
+    Double helperAvgRating = null;
+    Double buyerAvgRating = null;
+    if (t.getAssignedHelperId() != null) {
+      helperCompletedCount = tasks.countByHelperCompleted(t.getAssignedHelperId());
+      helperAvgRating = tasks.avgBuyerRatingForHelper(t.getAssignedHelperId());
+    }
+    if (t.getBuyerId() != null) {
+      buyerCompletedCount = tasks.countByBuyerCompleted(t.getBuyerId());
+      buyerAvgRating = tasks.avgHelperRatingForBuyer(t.getBuyerId());
+    }
     return new TaskResponse(
         t.getId(),
         t.getBuyerId(),
@@ -220,6 +232,10 @@ public class TaskController {
         t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
         t.getHelperRatingComment(),
         t.getHelperRatedAt(),
+        helperAvgRating,
+        helperCompletedCount,
+        buyerAvgRating,
+        buyerCompletedCount,
         t.getCancelReason(),
         t.getCancelledByRole(),
         t.getCancelledAt(),

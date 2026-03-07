@@ -8,11 +8,10 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
-import java.util.ArrayList;
-
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -29,7 +28,6 @@ import com.helpinminutes.api.users.repo.UserRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -48,6 +46,7 @@ public class TaskService {
   private final AppProperties props;
   private final UserRepository users;
   private final HelperProfileRepository helperProfiles;
+  private final PushNotificationService pushNotifications;
 
   public TaskService(
       TaskRepository tasks,
@@ -58,7 +57,8 @@ public class TaskService {
       HelperPresenceService presence,
       AppProperties props,
       UserRepository users,
-      HelperProfileRepository helperProfiles) {
+      HelperProfileRepository helperProfiles,
+      PushNotificationService pushNotifications) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -68,6 +68,7 @@ public class TaskService {
     this.props = props;
     this.users = users;
     this.helperProfiles = helperProfiles;
+    this.pushNotifications = pushNotifications;
   }
 
   @Transactional
@@ -203,6 +204,11 @@ public class TaskService {
             "helperId", helperId.toString(),
             "status", TaskStatus.ASSIGNED.name()));
 
+    try {
+      pushNotifications.notifyBuyerTaskAccepted(task.getBuyerId(), task);
+    } catch (Exception ignored) {
+    }
+
     return task;
   }
 
@@ -265,6 +271,13 @@ public class TaskService {
             "buyerId", task.getBuyerId().toString(),
             "helperId", helperId.toString(),
             "status", newStatus.name()));
+
+    if (newStatus == TaskStatus.COMPLETED) {
+      try {
+        pushNotifications.notifyBuyerTaskCompleted(task.getBuyerId(), task);
+      } catch (Exception ignored) {
+      }
+    }
 
     return task;
   }
@@ -352,7 +365,8 @@ public class TaskService {
     task.setCancelledAt(Instant.now());
 
     if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
-      if (task.getEscrowStatus() == TaskEscrowStatus.HELD || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
+      if (task.getEscrowStatus() == TaskEscrowStatus.HELD
+          || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
         UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
         if (buyer != null) {
           long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
@@ -406,7 +420,9 @@ public class TaskService {
       }
     }
 
+    log.info("Uploading selfie for task {} helper {}, stage: {}", taskId, helperId, stage);
     String selfieUrl = storage.uploadTaskSelfie(taskId, helperId, stage.name().toLowerCase(), selfie);
+    log.info("Selfie uploaded successfully, url: {}", selfieUrl);
 
     if (stage == TaskSelfieStage.ARRIVAL) {
       task.setArrivalSelfieUrl(selfieUrl);
@@ -463,6 +479,22 @@ public class TaskService {
       return tasks.findTop50ByAssignedHelperIdOrderByCreatedAtDesc(userId);
     }
     return java.util.List.of();
+  }
+
+  public Long countByHelperCompleted(UUID helperId) {
+    return tasks.countByAssignedHelperIdAndStatus(helperId, TaskStatus.COMPLETED);
+  }
+
+  public Long countByBuyerCompleted(UUID buyerId) {
+    return tasks.countByBuyerIdAndStatus(buyerId, TaskStatus.COMPLETED);
+  }
+
+  public Double avgBuyerRatingForHelper(UUID helperId) {
+    return tasks.avgBuyerRatingForHelper(helperId);
+  }
+
+  public Double avgHelperRatingForBuyer(UUID buyerId) {
+    return tasks.avgHelperRatingForBuyer(buyerId);
   }
 
   public List<TaskEntity> listAvailableTasks(UUID helperId) {
