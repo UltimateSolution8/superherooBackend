@@ -457,6 +457,58 @@ public class TaskService {
     return task;
   }
 
+  @Transactional
+  public TaskEntity attachTaskSelfieFromStorageKey(
+      UUID helperId,
+      UUID taskId,
+      TaskSelfieStage stage,
+      String storageKey,
+      double lat,
+      double lng,
+      String addressText,
+      Instant capturedAt) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    if (task.getAssignedHelperId() == null || !task.getAssignedHelperId().equals(helperId)) {
+      throw new ForbiddenException("Not assigned to this task");
+    }
+
+    Instant resolvedCapturedAt = capturedAt == null ? Instant.now() : capturedAt;
+    String selfieUrl = storage.buildPublicUrl(storageKey);
+
+    if (stage == TaskSelfieStage.ARRIVAL) {
+      task.setArrivalSelfieUrl(selfieUrl);
+      task.setArrivalSelfieLat(lat);
+      task.setArrivalSelfieLng(lng);
+      task.setArrivalSelfieAddress(addressText);
+      task.setArrivalSelfieCapturedAt(resolvedCapturedAt);
+    } else {
+      task.setCompletionSelfieUrl(selfieUrl);
+      task.setCompletionSelfieLat(lat);
+      task.setCompletionSelfieLng(lng);
+      task.setCompletionSelfieAddress(addressText);
+      task.setCompletionSelfieCapturedAt(resolvedCapturedAt);
+    }
+
+    tasks.save(task);
+
+    realtime.publish(
+        "TASK_SELFIE_UPLOADED",
+        java.util.Map.of(
+            "taskId", taskId.toString(),
+            "buyerId", task.getBuyerId().toString(),
+            "helperId", helperId.toString(),
+            "stage", stage.name(),
+            "selfieUrl", selfieUrl,
+            "lat", lat,
+            "lng", lng,
+            "addressText", addressText == null ? "" : addressText,
+            "capturedAt", resolvedCapturedAt.toString()));
+
+    return task;
+  }
+
   public TaskEntity getTask(UUID taskId) {
     return tasks.findById(taskId).orElseThrow(() -> new NotFoundException("Task not found"));
   }
