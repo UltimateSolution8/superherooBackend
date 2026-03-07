@@ -33,6 +33,16 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     long countByStatus(TaskStatus status);
 
+    long countByAssignedHelperIdAndStatus(UUID helperId, TaskStatus status);
+
+    long countByBuyerIdAndStatus(UUID buyerId, TaskStatus status);
+
+    @Query("select avg(t.buyerRating) from TaskEntity t where t.assignedHelperId = :helperId and t.buyerRating is not null")
+    Double avgBuyerRatingForHelper(@Param("helperId") UUID helperId);
+
+    @Query("select avg(t.helperRating) from TaskEntity t where t.buyerId = :buyerId and t.helperRating is not null")
+    Double avgHelperRatingForBuyer(@Param("buyerId") UUID buyerId);
+
     java.util.List<TaskEntity> findTop100ByStatusAndUpdatedAtBefore(TaskStatus status, Instant updatedAt);
 
     @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")

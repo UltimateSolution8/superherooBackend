@@ -168,15 +168,15 @@ public class SupabaseStorageService {
 
   private static SdkHttpClient defaultHttpClient() {
     return ApacheHttpClient.builder()
-        .connectionTimeout(Duration.ofSeconds(5))
-        .socketTimeout(Duration.ofSeconds(20))
+        .connectionTimeout(Duration.ofSeconds(2))
+        .socketTimeout(Duration.ofSeconds(5))
         .build();
   }
 
   private static ClientOverrideConfiguration defaultOverrideConfig() {
     return ClientOverrideConfiguration.builder()
-        .apiCallTimeout(Duration.ofSeconds(25))
-        .apiCallAttemptTimeout(Duration.ofSeconds(15))
+        .apiCallTimeout(Duration.ofSeconds(5))
+        .apiCallAttemptTimeout(Duration.ofSeconds(2))
         .build();
   }
 
@@ -206,7 +206,8 @@ public class SupabaseStorageService {
   }
 
   private static String trimSlash(String s) {
-    if (s == null || s.isBlank()) return "";
+    if (s == null || s.isBlank())
+      return "";
     return s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
   }
 
@@ -219,22 +220,29 @@ public class SupabaseStorageService {
 
   private static String detectExtension(String contentType, String originalName) {
     String lowerCt = contentType.toLowerCase(Locale.ROOT);
-    if (lowerCt.contains("jpeg")) return ".jpg";
-    if (lowerCt.contains("png")) return ".png";
-    if (lowerCt.contains("pdf")) return ".pdf";
+    if (lowerCt.contains("jpeg"))
+      return ".jpg";
+    if (lowerCt.contains("png"))
+      return ".png";
+    if (lowerCt.contains("pdf"))
+      return ".pdf";
 
     if (originalName != null) {
       String n = originalName.toLowerCase(Locale.ROOT);
-      if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return ".jpg";
-      if (n.endsWith(".png")) return ".png";
-      if (n.endsWith(".pdf")) return ".pdf";
+      if (n.endsWith(".jpg") || n.endsWith(".jpeg"))
+        return ".jpg";
+      if (n.endsWith(".png"))
+        return ".png";
+      if (n.endsWith(".pdf"))
+        return ".pdf";
     }
     return ".bin";
   }
 
   private static String buildKey(String base, String idPath, String kind, String ext) {
     java.time.LocalDate now = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
-    String datePath = now.getYear() + "/" + String.format("%02d", now.getMonthValue()) + "/" + String.format("%02d", now.getDayOfMonth());
+    String datePath = now.getYear() + "/" + String.format("%02d", now.getMonthValue()) + "/"
+        + String.format("%02d", now.getDayOfMonth());
     String ts = java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC)
         .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"));
     return base + "/" + datePath + "/" + idPath + "/" + kind + "-" + ts + "-" + UUID.randomUUID() + ext;
