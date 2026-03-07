@@ -15,6 +15,7 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -165,7 +166,7 @@ public class SupabaseStorageService {
         .build();
   }
 
-  private static ApacheHttpClient defaultHttpClient() {
+  private static SdkHttpClient defaultHttpClient() {
     return ApacheHttpClient.builder()
         .connectionTimeout(Duration.ofSeconds(5))
         .socketTimeout(Duration.ofSeconds(20))
