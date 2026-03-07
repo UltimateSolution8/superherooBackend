@@ -13,25 +13,37 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.data.domain.Pageable;
 
 public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
-  Optional<TaskEntity> findByIdAndBuyerId(UUID id, UUID buyerId);
-  java.util.List<TaskEntity> findTop100ByOrderByCreatedAtDesc();
-  java.util.List<TaskEntity> findTop100ByStatusOrderByCreatedAtDesc(TaskStatus status);
-  java.util.List<TaskEntity> findTop50ByBuyerIdOrderByCreatedAtDesc(UUID buyerId);
-  java.util.List<TaskEntity> findTop50ByAssignedHelperIdOrderByCreatedAtDesc(UUID helperId);
-  java.util.List<TaskEntity> findTop50ByEscrowStatusAndEscrowReleaseAtBefore(TaskEscrowStatus status, Instant releaseAt);
-  java.util.List<TaskEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
-  long countByStatus(TaskStatus status);
+    Optional<TaskEntity> findByIdAndBuyerId(UUID id, UUID buyerId);
 
-  @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")
-  long sumBudgetPaiseByStatus(@Param("status") TaskStatus status);
+    java.util.List<TaskEntity> findTop100ByOrderByCreatedAtDesc();
 
-  @Modifying
-  @Query(
-      "update TaskEntity t set t.assignedHelperId = :helperId, t.status = :newStatus "
-          + "where t.id = :taskId and t.assignedHelperId is null and t.status = :expectedStatus")
-  int assignIfUnassigned(
-      @Param("taskId") UUID taskId,
-      @Param("helperId") UUID helperId,
-      @Param("expectedStatus") TaskStatus expectedStatus,
-      @Param("newStatus") TaskStatus newStatus);
+    java.util.List<TaskEntity> findTop100ByStatusOrderByCreatedAtDesc(TaskStatus status);
+
+    java.util.List<TaskEntity> findTop50ByStatusAndCreatedAtAfterOrderByCreatedAtDesc(TaskStatus status,
+            Instant createdAt);
+
+    java.util.List<TaskEntity> findTop50ByBuyerIdOrderByCreatedAtDesc(UUID buyerId);
+
+    java.util.List<TaskEntity> findTop50ByAssignedHelperIdOrderByCreatedAtDesc(UUID helperId);
+
+    java.util.List<TaskEntity> findTop50ByEscrowStatusAndEscrowReleaseAtBefore(TaskEscrowStatus status,
+            Instant releaseAt);
+
+    java.util.List<TaskEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    long countByStatus(TaskStatus status);
+
+    java.util.List<TaskEntity> findTop100ByStatusAndUpdatedAtBefore(TaskStatus status, Instant updatedAt);
+
+    @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")
+    long sumBudgetPaiseByStatus(@Param("status") TaskStatus status);
+
+    @Modifying
+    @Query("update TaskEntity t set t.assignedHelperId = :helperId, t.status = :newStatus "
+            + "where t.id = :taskId and t.assignedHelperId is null and t.status = :expectedStatus")
+    int assignIfUnassigned(
+            @Param("taskId") UUID taskId,
+            @Param("helperId") UUID helperId,
+            @Param("expectedStatus") TaskStatus expectedStatus,
+            @Param("newStatus") TaskStatus newStatus);
 }

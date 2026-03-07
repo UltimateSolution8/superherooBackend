@@ -465,6 +465,23 @@ public class TaskService {
     return java.util.List.of();
   }
 
+  public List<TaskEntity> listAvailableTasks(UUID helperId) {
+    var state = presence.getHelperState(helperId);
+    if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
+      return java.util.List.of();
+    }
+    long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
+    if (ageSeconds > 60) {
+      return java.util.List.of();
+    }
+
+    return tasks.findTop50ByStatusAndCreatedAtAfterOrderByCreatedAtDesc(
+        TaskStatus.SEARCHING, Instant.now().minusSeconds(300))
+        .stream()
+        .filter(t -> GeoUtils.distanceMeters(t.getLat(), t.getLng(), state.lat(), state.lng()) <= 3000d)
+        .toList();
+  }
+
   @Transactional
   public TaskEntity updateStatusAsAdmin(UUID taskId, TaskStatus newStatus) {
     TaskEntity task = tasks.findById(taskId)

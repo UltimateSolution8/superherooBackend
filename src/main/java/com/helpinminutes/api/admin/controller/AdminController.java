@@ -177,15 +177,18 @@ public class AdminController {
   }
 
   private String resolvePhone(UUID userId) {
-    if (userId == null) return null;
+    if (userId == null)
+      return null;
     UserEntity user = users.findById(userId).orElse(null);
     return user != null ? user.getPhone() : null;
   }
 
   private String resolveName(UUID userId) {
-    if (userId == null) return null;
+    if (userId == null)
+      return null;
     UserEntity user = users.findById(userId).orElse(null);
-    if (user == null) return null;
+    if (user == null)
+      return null;
     if (user.getDisplayName() != null && !user.getDisplayName().isBlank()) {
       return user.getDisplayName();
     }
