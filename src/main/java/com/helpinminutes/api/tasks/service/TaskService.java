@@ -495,12 +495,14 @@ public class TaskService {
       return java.util.List.of();
     }
     long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
-    if (ageSeconds > 60) {
+    int staleAfter = Math.max(60, props.matching().helperStaleAfterSeconds());
+    if (ageSeconds > staleAfter) {
       return java.util.List.of();
     }
 
+    long taskWindowSeconds = Math.max(300, props.matching().offerTtlSeconds());
     return tasks.findTop50ByStatusAndCreatedAtAfterOrderByCreatedAtDesc(
-        TaskStatus.SEARCHING, Instant.now().minusSeconds(300))
+        TaskStatus.SEARCHING, Instant.now().minusSeconds(taskWindowSeconds))
         .stream()
         .filter(t -> GeoUtils.distanceMeters(t.getLat(), t.getLng(), state.lat(), state.lng()) <= 3000d)
         .toList();

@@ -19,9 +19,23 @@ import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.core.ResponseInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 
 @Service
 public class SupabaseStorageService {
@@ -101,6 +115,63 @@ public class SupabaseStorageService {
     throw new BadRequestException("Storage is not configured");
   }
 
+  public String generateKycPresignedPutUrl(String kind, UUID helperId, String ext) {
+    return generateKycPresignedPut(kind, helperId, ext).url();
+  }
+
+  public PresignedUpload generateKycPresignedPut(String kind, UUID helperId, String ext) {
+    String contentType = kind.contains("video") ? "video/mp4" : "image/jpeg";
+    String key = buildKey("helper-kyc", helperId.toString(), kind, ext);
+    String url;
+    if (isConfigured()) {
+      url = presignPutUrl(endpoint, bucket, keyId, keySecret, region, key, contentType);
+    } else if (isDevMode()) {
+      url = presignPutUrl(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key, contentType);
+    } else {
+      throw new BadRequestException("Storage is not configured");
+    }
+    return new PresignedUpload(url, key, 900);
+  }
+
+  public String generatePresignedGetUrl(String key, Duration ttl) {
+    if (key == null || key.isBlank()) {
+      return null;
+    }
+    if (isConfigured()) {
+      return presignGetUrl(endpoint, bucket, keyId, keySecret, region, key, ttl);
+    }
+    if (isDevMode()) {
+      return presignGetUrl(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key, ttl);
+    }
+    throw new BadRequestException("Storage is not configured");
+  }
+
+  public ObjectMeta headObject(String key) {
+    if (key == null || key.isBlank()) {
+      throw new BadRequestException("Missing object key");
+    }
+    if (isConfigured()) {
+      return headObject(endpoint, bucket, keyId, keySecret, region, key);
+    }
+    if (isDevMode()) {
+      return headObject(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key);
+    }
+    throw new BadRequestException("Storage is not configured");
+  }
+
+  public Path downloadToTempFile(String key) {
+    if (key == null || key.isBlank()) {
+      throw new BadRequestException("Missing object key");
+    }
+    if (isConfigured()) {
+      return downloadToTempFile(endpoint, bucket, keyId, keySecret, region, key);
+    }
+    if (isDevMode()) {
+      return downloadToTempFile(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key);
+    }
+    throw new BadRequestException("Storage is not configured");
+  }
+
   private String uploadFile(MultipartFile file, String contentType, String key, String fileLabel) {
     try (S3Client s3 = s3Client()) {
       PutObjectRequest req = PutObjectRequest.builder()
@@ -155,16 +226,127 @@ public class SupabaseStorageService {
   }
 
   private S3Client s3Client() {
-    AwsBasicCredentials creds = AwsBasicCredentials.create(keyId, keySecret);
+    return s3ClientFor(endpoint, bucket, keyId, keySecret, region);
+  }
+
+  private S3Client s3ClientFor(
+      String targetEndpoint,
+      String targetBucket,
+      String accessKey,
+      String secretKey,
+      String targetRegion) {
+    AwsBasicCredentials creds = AwsBasicCredentials.create(accessKey, secretKey);
     return S3Client.builder()
-        .endpointOverride(URI.create(endpoint))
+        .endpointOverride(URI.create(targetEndpoint))
         .forcePathStyle(true)
-        .region(Region.of(region))
+        .region(Region.of(targetRegion))
         .credentialsProvider(StaticCredentialsProvider.create(creds))
         .httpClient(defaultHttpClient())
         .overrideConfiguration(defaultOverrideConfig())
         .build();
   }
+
+  private S3Presigner s3PresignerFor(
+      String targetEndpoint,
+      String accessKey,
+      String secretKey,
+      String targetRegion) {
+    AwsBasicCredentials creds = AwsBasicCredentials.create(accessKey, secretKey);
+    S3Configuration s3Config = S3Configuration.builder().pathStyleAccessEnabled(true).build();
+    return S3Presigner.builder()
+        .endpointOverride(URI.create(targetEndpoint))
+        .region(Region.of(targetRegion))
+        .credentialsProvider(StaticCredentialsProvider.create(creds))
+        .serviceConfiguration(s3Config)
+        .build();
+  }
+
+  private String presignPutUrl(
+      String targetEndpoint,
+      String targetBucket,
+      String accessKey,
+      String secretKey,
+      String targetRegion,
+      String key,
+      String contentType) {
+    try (S3Presigner presigner = s3PresignerFor(targetEndpoint, accessKey, secretKey, targetRegion)) {
+
+      PutObjectRequest putReq = PutObjectRequest.builder()
+          .bucket(targetBucket)
+          .key(key)
+          .contentType(contentType)
+          .build();
+      PutObjectPresignRequest presignRequest = PutObjectPresignRequest.builder()
+          .signatureDuration(Duration.ofMinutes(15))
+          .putObjectRequest(putReq)
+          .build();
+      PresignedPutObjectRequest presigned = presigner.presignPutObject(presignRequest);
+      return presigned.url().toString();
+    }
+  }
+
+  private String presignGetUrl(
+      String targetEndpoint,
+      String targetBucket,
+      String accessKey,
+      String secretKey,
+      String targetRegion,
+      String key,
+      Duration ttl) {
+    try (S3Presigner presigner = s3PresignerFor(targetEndpoint, accessKey, secretKey, targetRegion)) {
+      GetObjectRequest getReq = GetObjectRequest.builder()
+          .bucket(targetBucket)
+          .key(key)
+          .build();
+      GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+          .signatureDuration(ttl == null ? Duration.ofMinutes(15) : ttl)
+          .getObjectRequest(getReq)
+          .build();
+      PresignedGetObjectRequest presigned = presigner.presignGetObject(presignRequest);
+      return presigned.url().toString();
+    }
+  }
+
+  private ObjectMeta headObject(
+      String targetEndpoint,
+      String targetBucket,
+      String accessKey,
+      String secretKey,
+      String targetRegion,
+      String key) {
+    try (S3Client s3 = s3ClientFor(targetEndpoint, targetBucket, accessKey, secretKey, targetRegion)) {
+      HeadObjectResponse head = s3.headObject(HeadObjectRequest.builder()
+          .bucket(targetBucket)
+          .key(key)
+          .build());
+      return new ObjectMeta(head.contentType(), head.contentLength());
+    } catch (Exception e) {
+      throw new BadRequestException("Could not read uploaded file metadata");
+    }
+  }
+
+  private Path downloadToTempFile(
+      String targetEndpoint,
+      String targetBucket,
+      String accessKey,
+      String secretKey,
+      String targetRegion,
+      String key) {
+    try (S3Client s3 = s3ClientFor(targetEndpoint, targetBucket, accessKey, secretKey, targetRegion)) {
+      ResponseInputStream<GetObjectResponse> stream = s3.getObject(GetObjectRequest.builder()
+          .bucket(targetBucket)
+          .key(key)
+          .build());
+      Path tmp = Files.createTempFile("kyc-", ".bin");
+      Files.copy(stream, tmp, StandardCopyOption.REPLACE_EXISTING);
+      return tmp;
+    } catch (Exception e) {
+      throw new BadRequestException("Could not download uploaded file");
+    }
+  }
+
+  public record ObjectMeta(String contentType, long contentLength) {}
+  public record PresignedUpload(String url, String key, int expiresInSeconds) {}
 
   private static SdkHttpClient defaultHttpClient() {
     return ApacheHttpClient.builder()

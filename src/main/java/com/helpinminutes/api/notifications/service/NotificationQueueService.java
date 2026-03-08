@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class NotificationQueueService {
@@ -22,24 +24,37 @@ public class NotificationQueueService {
     public void enqueueTaskOffered(List<UUID> helperIds, TaskEntity task) {
         if (helperIds == null || helperIds.isEmpty() || task == null) return;
         NotificationJob job = NotificationJob.now(NotificationType.TASK_OFFERED, task.getId(), task.getBuyerId(), helperIds);
-        rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+        publishAfterCommit(job);
     }
 
     public void enqueueTaskAccepted(UUID buyerId, TaskEntity task) {
         if (buyerId == null || task == null) return;
         NotificationJob job = NotificationJob.now(NotificationType.TASK_ACCEPTED, task.getId(), buyerId, null);
-        rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+        publishAfterCommit(job);
     }
 
     public void enqueueTaskCompleted(UUID buyerId, TaskEntity task) {
         if (buyerId == null || task == null) return;
         NotificationJob job = NotificationJob.now(NotificationType.TASK_COMPLETED, task.getId(), buyerId, null);
-        rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+        publishAfterCommit(job);
     }
 
     public void enqueueKycApproved(UUID helperId) {
         if (helperId == null) return;
         NotificationJob job = NotificationJob.now(NotificationType.KYC_APPROVED, null, null, List.of(helperId));
-        rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+        publishAfterCommit(job);
+    }
+
+    private void publishAfterCommit(NotificationJob job) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+                }
+            });
+        } else {
+            rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+        }
     }
 }
