@@ -8,11 +8,12 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.matching.MatchingService;
-import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
+import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
@@ -28,6 +29,7 @@ import com.helpinminutes.api.users.repo.UserRepository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -46,7 +48,8 @@ public class TaskService {
   private final AppProperties props;
   private final UserRepository users;
   private final HelperProfileRepository helperProfiles;
-  private final PushNotificationService pushNotifications;
+  private final NotificationQueueService notificationQueue;
+  private final TaskMapper taskMapper;
 
   public TaskService(
       TaskRepository tasks,
@@ -58,7 +61,8 @@ public class TaskService {
       AppProperties props,
       UserRepository users,
       HelperProfileRepository helperProfiles,
-      PushNotificationService pushNotifications) {
+      NotificationQueueService notificationQueue,
+      TaskMapper taskMapper) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -68,7 +72,8 @@ public class TaskService {
     this.props = props;
     this.users = users;
     this.helperProfiles = helperProfiles;
-    this.pushNotifications = pushNotifications;
+    this.notificationQueue = notificationQueue;
+    this.taskMapper = taskMapper;
   }
 
   @Transactional
@@ -136,7 +141,7 @@ public class TaskService {
   }
 
   @Transactional
-  public TaskEntity acceptTask(UUID helperId, UUID taskId) {
+  public TaskResponse acceptTask(UUID helperId, UUID taskId) {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
@@ -204,16 +209,13 @@ public class TaskService {
             "helperId", helperId.toString(),
             "status", TaskStatus.ASSIGNED.name()));
 
-    try {
-      pushNotifications.notifyBuyerTaskAccepted(task.getBuyerId(), task);
-    } catch (Exception ignored) {
-    }
+    notificationQueue.enqueueTaskAccepted(task.getBuyerId(), task);
 
-    return task;
+    return taskMapper.toResponse(task, false);
   }
 
   @Transactional
-  public TaskEntity updateStatusAsHelper(UUID helperId, UUID taskId, TaskStatus newStatus, String otp) {
+  public TaskResponse updateStatusAsHelper(UUID helperId, UUID taskId, TaskStatus newStatus, String otp) {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
@@ -273,17 +275,14 @@ public class TaskService {
             "status", newStatus.name()));
 
     if (newStatus == TaskStatus.COMPLETED) {
-      try {
-        pushNotifications.notifyBuyerTaskCompleted(task.getBuyerId(), task);
-      } catch (Exception ignored) {
-      }
+      notificationQueue.enqueueTaskCompleted(task.getBuyerId(), task);
     }
 
-    return task;
+    return taskMapper.toResponse(task, false);
   }
 
   @Transactional
-  public TaskEntity rateTask(UUID userId, UserRole role, UUID taskId, TaskRatingRequest req) {
+  public TaskResponse rateTask(UUID userId, UserRole role, UUID taskId, TaskRatingRequest req) {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
@@ -299,13 +298,6 @@ public class TaskService {
       task.setBuyerRating(rating);
       task.setBuyerRatingComment(req.comment());
       task.setBuyerRatedAt(Instant.now());
-
-      if (task.getAssignedHelperId() != null) {
-        helperProfiles.findById(task.getAssignedHelperId()).ifPresent((profile) -> {
-          profile.setRating(rating);
-          helperProfiles.save(profile);
-        });
-      }
     } else if (role == UserRole.HELPER) {
       if (task.getAssignedHelperId() == null || !userId.equals(task.getAssignedHelperId())) {
         throw new ForbiddenException("Only the assigned helper can rate the buyer");
@@ -317,22 +309,11 @@ public class TaskService {
       throw new ForbiddenException("Only buyers or helpers can submit ratings");
     }
 
-    tasks.save(task);
-
-    realtime.publish(
-        "TASK_RATED",
-        java.util.Map.of(
-            "taskId", taskId.toString(),
-            "buyerId", task.getBuyerId().toString(),
-            "helperId", task.getAssignedHelperId() == null ? "" : task.getAssignedHelperId().toString(),
-            "role", role.name(),
-            "rating", rating));
-
-    return task;
+    return taskMapper.toResponse(task, role == UserRole.BUYER);
   }
 
   @Transactional
-  public TaskEntity cancelTask(UUID userId, UserRole role, UUID taskId, String reason) {
+  public TaskResponse cancelTask(UUID userId, UserRole role, UUID taskId, String reason) {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
@@ -380,22 +361,11 @@ public class TaskService {
       }
     }
 
-    tasks.save(task);
-
-    realtime.publish(
-        "TASK_CANCELLED",
-        java.util.Map.of(
-            "taskId", taskId.toString(),
-            "buyerId", task.getBuyerId().toString(),
-            "helperId", task.getAssignedHelperId() == null ? "" : task.getAssignedHelperId().toString(),
-            "role", role.name(),
-            "reason", trimmed));
-
-    return task;
+    return taskMapper.toResponse(task, role == UserRole.BUYER);
   }
 
   @Transactional
-  public TaskEntity uploadTaskSelfie(
+  public TaskResponse uploadTaskSelfie(
       UUID helperId,
       UUID taskId,
       TaskSelfieStage stage,
@@ -438,22 +408,44 @@ public class TaskService {
       task.setCompletionSelfieCapturedAt(capturedAt);
     }
 
-    tasks.save(task);
+    return taskMapper.toResponse(task, false);
+  }
 
-    realtime.publish(
-        "TASK_SELFIE_UPLOADED",
-        java.util.Map.of(
-            "taskId", taskId.toString(),
-            "buyerId", task.getBuyerId().toString(),
-            "helperId", helperId.toString(),
-            "stage", stage.name(),
-            "selfieUrl", selfieUrl,
-            "lat", lat,
-            "lng", lng,
-            "addressText", addressText == null ? "" : addressText,
-            "capturedAt", capturedAt.toString()));
+  @Transactional
+  public TaskResponse attachTaskSelfieFromStorageKey(
+      UUID helperId,
+      UUID taskId,
+      TaskSelfieStage stage,
+      String storageKey,
+      double lat,
+      double lng,
+      String addressText,
+      Instant capturedAt) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
 
-    return task;
+    if (task.getAssignedHelperId() == null || !task.getAssignedHelperId().equals(helperId)) {
+      throw new ForbiddenException("Not assigned to this task");
+    }
+
+    Instant resolvedCapturedAt = capturedAt == null ? Instant.now() : capturedAt;
+    String selfieUrl = storage.buildPublicUrl(storageKey);
+
+    if (stage == TaskSelfieStage.ARRIVAL) {
+      task.setArrivalSelfieUrl(selfieUrl);
+      task.setArrivalSelfieLat(lat);
+      task.setArrivalSelfieLng(lng);
+      task.setArrivalSelfieAddress(addressText);
+      task.setArrivalSelfieCapturedAt(resolvedCapturedAt);
+    } else {
+      task.setCompletionSelfieUrl(selfieUrl);
+      task.setCompletionSelfieLat(lat);
+      task.setCompletionSelfieLng(lng);
+      task.setCompletionSelfieAddress(addressText);
+      task.setCompletionSelfieCapturedAt(resolvedCapturedAt);
+    }
+
+    return taskMapper.toResponse(task, false);
   }
 
   public TaskEntity getTask(UUID taskId) {

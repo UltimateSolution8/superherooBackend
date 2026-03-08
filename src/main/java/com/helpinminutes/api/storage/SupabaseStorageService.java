@@ -180,6 +180,10 @@ public class SupabaseStorageService {
         .build();
   }
 
+  public String buildPublicUrl(String key) {
+    return toPublicUrl(key);
+  }
+
   private String toPublicUrl(String key) {
     String explicit = trimSlash(publicBaseUrl);
     if (!explicit.isBlank()) {

@@ -10,7 +10,7 @@ import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
-import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -30,19 +30,19 @@ public class AdminService {
   private final UserRepository users;
   private final PasswordEncoder passwordEncoder;
   private final TaskRepository tasks;
-  private final PushNotificationService pushNotifications;
+  private final NotificationQueueService notificationQueue;
 
   public AdminService(
       HelperProfileRepository helperProfiles,
       UserRepository users,
       PasswordEncoder passwordEncoder,
       TaskRepository tasks,
-      PushNotificationService pushNotifications) {
+      NotificationQueueService notificationQueue) {
     this.helperProfiles = helperProfiles;
     this.users = users;
     this.passwordEncoder = passwordEncoder;
     this.tasks = tasks;
-    this.pushNotifications = pushNotifications;
+    this.notificationQueue = notificationQueue;
   }
 
   public List<PendingHelperResponse> listPendingHelpers() {
@@ -89,7 +89,7 @@ public class AdminService {
     hp.setKycStatus(HelperKycStatus.APPROVED);
     hp.setKycRejectionReason(null);
     helperProfiles.save(hp);
-    pushNotifications.notifyHelperKycApproved(helperId);
+    notificationQueue.enqueueKycApproved(helperId);
   }
 
   @Transactional

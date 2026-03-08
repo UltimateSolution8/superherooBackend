@@ -3,7 +3,7 @@ package com.helpinminutes.api.matching;
 import com.helpinminutes.api.common.GeoUtils;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
-import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
@@ -30,7 +30,7 @@ public class MatchingService {
   private final HelperPresenceService presence;
   private final TaskOfferRepository offers;
   private final RealtimePublisher realtime;
-  private final PushNotificationService pushNotifications;
+  private final NotificationQueueService notificationQueue;
 
   public MatchingService(
       AppProperties props,
@@ -38,13 +38,13 @@ public class MatchingService {
       HelperPresenceService presence,
       TaskOfferRepository offers,
       RealtimePublisher realtime,
-      PushNotificationService pushNotifications) {
+      NotificationQueueService notificationQueue) {
     this.props = props;
     this.h3 = h3;
     this.presence = presence;
     this.offers = offers;
     this.realtime = realtime;
-    this.pushNotifications = pushNotifications;
+    this.notificationQueue = notificationQueue;
   }
 
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchingService.class);
@@ -144,10 +144,7 @@ public class MatchingService {
               java.util.Map.entry("expiresAt", expires.toString())));
     }
 
-    try {
-      pushNotifications.notifyTaskOffered(helperIds, task);
-    } catch (Exception ignored) {
-    }
+    notificationQueue.enqueueTaskOffered(helperIds, task);
 
     return helperIds;
   }
