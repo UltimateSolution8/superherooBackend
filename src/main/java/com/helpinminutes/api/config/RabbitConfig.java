@@ -29,6 +29,12 @@ public class RabbitConfig {
     public static final String QUEUE_NOTIFICATION_DLQ = "notifications.dlq";
     public static final String ROUTING_KEY_NOTIFICATION_DLQ = "notifications.dlq";
 
+    public static final String EXCHANGE_KYC = "him.kyc";
+    public static final String QUEUE_KYC_PROCESSING = "kyc.processing.queue";
+    public static final String ROUTING_KEY_KYC_PROCESSING = "kyc.processing";
+    public static final String QUEUE_KYC_DLQ = "kyc.dlq";
+    public static final String ROUTING_KEY_KYC_DLQ = "kyc.dlq";
+
     @Bean
     public DirectExchange photosExchange() {
         return new DirectExchange(EXCHANGE_PHOTOS);
@@ -83,6 +89,34 @@ public class RabbitConfig {
     @Bean
     public Binding notificationDlqBinding(Queue notificationDlq, DirectExchange notificationsExchange) {
         return BindingBuilder.bind(notificationDlq).to(notificationsExchange).with(ROUTING_KEY_NOTIFICATION_DLQ);
+    }
+
+    @Bean
+    public DirectExchange kycExchange() {
+        return new DirectExchange(EXCHANGE_KYC);
+    }
+
+    @Bean
+    public Queue kycProcessingQueue() {
+        return QueueBuilder.durable(QUEUE_KYC_PROCESSING)
+                .withArgument("x-dead-letter-exchange", EXCHANGE_KYC)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_KYC_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Queue kycDlq() {
+        return QueueBuilder.durable(QUEUE_KYC_DLQ).build();
+    }
+
+    @Bean
+    public Binding kycProcessingBinding(Queue kycProcessingQueue, DirectExchange kycExchange) {
+        return BindingBuilder.bind(kycProcessingQueue).to(kycExchange).with(ROUTING_KEY_KYC_PROCESSING);
+    }
+
+    @Bean
+    public Binding kycDlqBinding(Queue kycDlq, DirectExchange kycExchange) {
+        return BindingBuilder.bind(kycDlq).to(kycExchange).with(ROUTING_KEY_KYC_DLQ);
     }
 
     @Bean
