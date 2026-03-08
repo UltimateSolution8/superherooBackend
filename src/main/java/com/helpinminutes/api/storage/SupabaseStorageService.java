@@ -48,12 +48,16 @@ public class SupabaseStorageService {
   private final String region;
   private final String publicBaseUrl;
   private final String appEnv;
+  private final String minioEndpoint;
+  private final String minioBucket;
+  private final String minioKeyId;
+  private final String minioKeySecret;
 
   // MinIO fallback config (matches Docker Compose defaults)
-  private static final String MINIO_ENDPOINT = "http://localhost:9000";
-  private static final String MINIO_BUCKET = "helpinminutes";
-  private static final String MINIO_KEY_ID = "minio";
-  private static final String MINIO_KEY_SECRET = "minio12345";
+  private static final String DEFAULT_MINIO_ENDPOINT = "http://minio:9000";
+  private static final String DEFAULT_MINIO_BUCKET = "helpinminutes";
+  private static final String DEFAULT_MINIO_KEY_ID = "minio";
+  private static final String DEFAULT_MINIO_KEY_SECRET = "minio12345";
 
   public SupabaseStorageService(
       @Value("${SUPABASE_S3_ENDPOINT:}") String endpoint,
@@ -62,6 +66,10 @@ public class SupabaseStorageService {
       @Value("${SUPABASE_S3_ACCESS_KEY_SECRET:}") String keySecret,
       @Value("${SUPABASE_S3_REGION:us-east-1}") String region,
       @Value("${SUPABASE_PUBLIC_BASE_URL:}") String publicBaseUrl,
+      @Value("${MINIO_ENDPOINT:}") String minioEndpoint,
+      @Value("${MINIO_BUCKET:}") String minioBucket,
+      @Value("${MINIO_KEY_ID:}") String minioKeyId,
+      @Value("${MINIO_KEY_SECRET:}") String minioKeySecret,
       @Value("${app.env:dev}") String appEnv) {
     this.endpoint = endpoint == null ? "" : endpoint.trim();
     this.bucket = bucket == null ? "" : bucket.trim();
@@ -69,6 +77,18 @@ public class SupabaseStorageService {
     this.keySecret = keySecret == null ? "" : keySecret.trim();
     this.region = region == null || region.isBlank() ? "us-east-1" : region.trim();
     this.publicBaseUrl = publicBaseUrl == null ? "" : publicBaseUrl.trim();
+    this.minioEndpoint = minioEndpoint == null || minioEndpoint.isBlank()
+        ? DEFAULT_MINIO_ENDPOINT
+        : minioEndpoint.trim();
+    this.minioBucket = minioBucket == null || minioBucket.isBlank()
+        ? DEFAULT_MINIO_BUCKET
+        : minioBucket.trim();
+    this.minioKeyId = minioKeyId == null || minioKeyId.isBlank()
+        ? DEFAULT_MINIO_KEY_ID
+        : minioKeyId.trim();
+    this.minioKeySecret = minioKeySecret == null || minioKeySecret.isBlank()
+        ? DEFAULT_MINIO_KEY_SECRET
+        : minioKeySecret.trim();
     this.appEnv = appEnv == null ? "dev" : appEnv.trim();
   }
 
@@ -126,7 +146,7 @@ public class SupabaseStorageService {
     if (isConfigured()) {
       url = presignPutUrl(endpoint, bucket, keyId, keySecret, region, key, contentType);
     } else if (isDevMode()) {
-      url = presignPutUrl(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key, contentType);
+      url = presignPutUrl(minioEndpoint, minioBucket, minioKeyId, minioKeySecret, "us-east-1", key, contentType);
     } else {
       throw new BadRequestException("Storage is not configured");
     }
@@ -141,7 +161,7 @@ public class SupabaseStorageService {
       return presignGetUrl(endpoint, bucket, keyId, keySecret, region, key, ttl);
     }
     if (isDevMode()) {
-      return presignGetUrl(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key, ttl);
+      return presignGetUrl(minioEndpoint, minioBucket, minioKeyId, minioKeySecret, "us-east-1", key, ttl);
     }
     throw new BadRequestException("Storage is not configured");
   }
@@ -154,7 +174,7 @@ public class SupabaseStorageService {
       return headObject(endpoint, bucket, keyId, keySecret, region, key);
     }
     if (isDevMode()) {
-      return headObject(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key);
+      return headObject(minioEndpoint, minioBucket, minioKeyId, minioKeySecret, "us-east-1", key);
     }
     throw new BadRequestException("Storage is not configured");
   }
@@ -167,7 +187,7 @@ public class SupabaseStorageService {
       return downloadToTempFile(endpoint, bucket, keyId, keySecret, region, key);
     }
     if (isDevMode()) {
-      return downloadToTempFile(MINIO_ENDPOINT, MINIO_BUCKET, MINIO_KEY_ID, MINIO_KEY_SECRET, "us-east-1", key);
+      return downloadToTempFile(minioEndpoint, minioBucket, minioKeyId, minioKeySecret, "us-east-1", key);
     }
     throw new BadRequestException("Storage is not configured");
   }
@@ -193,9 +213,9 @@ public class SupabaseStorageService {
 
   private String uploadToMinioFallback(MultipartFile file, String contentType, String key, String fileLabel) {
     try {
-      AwsBasicCredentials creds = AwsBasicCredentials.create(MINIO_KEY_ID, MINIO_KEY_SECRET);
+      AwsBasicCredentials creds = AwsBasicCredentials.create(minioKeyId, minioKeySecret);
       try (S3Client s3 = S3Client.builder()
-          .endpointOverride(URI.create(MINIO_ENDPOINT))
+          .endpointOverride(URI.create(minioEndpoint))
           .forcePathStyle(true)
           .region(Region.US_EAST_1)
           .credentialsProvider(StaticCredentialsProvider.create(creds))
@@ -205,23 +225,23 @@ public class SupabaseStorageService {
 
         // Auto-create bucket if it doesn't exist
         try {
-          s3.headBucket(HeadBucketRequest.builder().bucket(MINIO_BUCKET).build());
+          s3.headBucket(HeadBucketRequest.builder().bucket(minioBucket).build());
         } catch (Exception e) {
-          s3.createBucket(CreateBucketRequest.builder().bucket(MINIO_BUCKET).build());
-          log.info("Created MinIO bucket: {}", MINIO_BUCKET);
+          s3.createBucket(CreateBucketRequest.builder().bucket(minioBucket).build());
+          log.info("Created MinIO bucket: {}", minioBucket);
         }
 
         PutObjectRequest req = PutObjectRequest.builder()
-            .bucket(MINIO_BUCKET)
+            .bucket(minioBucket)
             .key(key)
             .contentType(contentType)
             .build();
         s3.putObject(req, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
-        return MINIO_ENDPOINT + "/" + MINIO_BUCKET + "/" + key;
+        return minioEndpoint + "/" + minioBucket + "/" + key;
       }
     } catch (Exception e) {
       log.warn("MinIO fallback upload failed for {}: {}. Returning dev placeholder URL.", fileLabel, e.getMessage());
-      return "dev://placeholder/" + MINIO_BUCKET + "/" + key;
+      return "dev://placeholder/" + minioBucket + "/" + key;
     }
   }
 
