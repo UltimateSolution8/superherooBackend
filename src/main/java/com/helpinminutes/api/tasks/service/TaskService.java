@@ -8,7 +8,7 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.matching.MatchingService;
-import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
@@ -48,7 +48,7 @@ public class TaskService {
   private final AppProperties props;
   private final UserRepository users;
   private final HelperProfileRepository helperProfiles;
-  private final PushNotificationService pushNotifications;
+  private final NotificationQueueService notificationQueue;
   private final TaskMapper taskMapper;
 
   public TaskService(
@@ -61,7 +61,7 @@ public class TaskService {
       AppProperties props,
       UserRepository users,
       HelperProfileRepository helperProfiles,
-      PushNotificationService pushNotifications,
+      NotificationQueueService notificationQueue,
       TaskMapper taskMapper) {
     this.tasks = tasks;
     this.offers = offers;
@@ -72,7 +72,7 @@ public class TaskService {
     this.props = props;
     this.users = users;
     this.helperProfiles = helperProfiles;
-    this.pushNotifications = pushNotifications;
+    this.notificationQueue = notificationQueue;
     this.taskMapper = taskMapper;
   }
 
@@ -209,6 +209,8 @@ public class TaskService {
             "helperId", helperId.toString(),
             "status", TaskStatus.ASSIGNED.name()));
 
+    notificationQueue.enqueueTaskAccepted(task.getBuyerId(), task);
+
     return taskMapper.toResponse(task, false);
   }
 
@@ -271,6 +273,10 @@ public class TaskService {
             "buyerId", task.getBuyerId().toString(),
             "helperId", helperId.toString(),
             "status", newStatus.name()));
+
+    if (newStatus == TaskStatus.COMPLETED) {
+      notificationQueue.enqueueTaskCompleted(task.getBuyerId(), task);
+    }
 
     return taskMapper.toResponse(task, false);
   }

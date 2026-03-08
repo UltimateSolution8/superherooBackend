@@ -10,10 +10,9 @@ import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
+import com.helpinminutes.api.tasks.service.TaskMapper;
 import com.helpinminutes.api.tasks.service.TaskService;
-import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
-import com.helpinminutes.api.users.repo.UserRepository;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.MediaType;
@@ -31,11 +30,11 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/v1/tasks")
 public class TaskController {
   private final TaskService tasks;
-  private final UserRepository users;
+  private final TaskMapper taskMapper;
 
-  public TaskController(TaskService tasks, UserRepository users) {
+  public TaskController(TaskService tasks, TaskMapper taskMapper) {
     this.tasks = tasks;
-    this.users = users;
+    this.taskMapper = taskMapper;
   }
 
   @PostMapping
@@ -56,8 +55,7 @@ public class TaskController {
     if (principal.role() != UserRole.HELPER) {
       throw new ForbiddenException("Only helpers can accept tasks");
     }
-    TaskEntity task = tasks.acceptTask(principal.userId(), taskId);
-    return toResponse(task, false);
+    return tasks.acceptTask(principal.userId(), taskId);
   }
 
   @PostMapping("/{taskId}/status")
@@ -68,8 +66,7 @@ public class TaskController {
     if (principal.role() != UserRole.HELPER) {
       throw new ForbiddenException("Only helpers can update task status");
     }
-    TaskEntity task = tasks.updateStatusAsHelper(principal.userId(), taskId, req.status(), req.otp());
-    return toResponse(task, false);
+    return tasks.updateStatusAsHelper(principal.userId(), taskId, req.status(), req.otp());
   }
 
   @PostMapping(value = "/{taskId}/selfie", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -86,7 +83,7 @@ public class TaskController {
       throw new ForbiddenException("Only helpers can upload task selfies");
     }
 
-    TaskEntity task = tasks.uploadTaskSelfie(
+    return tasks.uploadTaskSelfie(
         principal.userId(),
         taskId,
         stage,
@@ -95,8 +92,6 @@ public class TaskController {
         lng,
         addressText,
         capturedAt);
-
-    return toResponse(task, false);
   }
 
   @GetMapping("/{taskId}")
@@ -112,7 +107,7 @@ public class TaskController {
     }
 
     boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
-    return toResponse(task, includeOtp);
+    return taskMapper.toResponse(task, includeOtp);
   }
 
   @GetMapping("/available")
@@ -120,20 +115,14 @@ public class TaskController {
     if (principal.role() != UserRole.HELPER) {
       throw new ForbiddenException("Only helpers can view available tasks");
     }
-    return tasks.listAvailableTasks(principal.userId())
-        .stream()
-        .map(t -> toResponse(t, false))
-        .toList();
+    return taskMapper.toResponseList(tasks.listAvailableTasks(principal.userId()), false);
   }
 
   @GetMapping("/mine")
   public java.util.List<TaskResponse> mine(@AuthenticationPrincipal UserPrincipal principal) {
     UserRole role = principal.role();
     boolean includeOtp = role == UserRole.BUYER || role == UserRole.ADMIN;
-    return tasks.listTasksForUser(principal.userId(), role)
-        .stream()
-        .map(t -> toResponse(t, includeOtp))
-        .toList();
+    return taskMapper.toResponseList(tasks.listTasksForUser(principal.userId(), role), includeOtp);
   }
 
   @GetMapping("/my")
@@ -146,9 +135,7 @@ public class TaskController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID taskId,
       @Valid @RequestBody TaskRatingRequest req) {
-    TaskEntity task = tasks.rateTask(principal.userId(), principal.role(), taskId, req);
-    boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
-    return toResponse(task, includeOtp);
+    return tasks.rateTask(principal.userId(), principal.role(), taskId, req);
   }
 
   @PostMapping("/{taskId}/cancel")
@@ -156,89 +143,6 @@ public class TaskController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID taskId,
       @Valid @RequestBody CancelTaskRequest req) {
-    TaskEntity task = tasks.cancelTask(principal.userId(), principal.role(), taskId, req.reason());
-    boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
-    return toResponse(task, includeOtp);
-  }
-
-  private String resolvePhone(UUID userId) {
-    if (userId == null)
-      return null;
-    UserEntity user = users.findById(userId).orElse(null);
-    return user != null ? user.getPhone() : null;
-  }
-
-  private String resolveName(UUID userId) {
-    if (userId == null)
-      return null;
-    UserEntity user = users.findById(userId).orElse(null);
-    if (user == null)
-      return null;
-    if (user.getDisplayName() != null && !user.getDisplayName().isBlank()) {
-      return user.getDisplayName();
-    }
-    return user.getPhone();
-  }
-
-  public TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
-    String buyerPhone = resolvePhone(t.getBuyerId());
-    String helperPhone = resolvePhone(t.getAssignedHelperId());
-    String buyerName = resolveName(t.getBuyerId());
-    String helperName = resolveName(t.getAssignedHelperId());
-    Long helperCompletedCount = null;
-    Long buyerCompletedCount = null;
-    Double helperAvgRating = null;
-    Double buyerAvgRating = null;
-    if (t.getAssignedHelperId() != null) {
-      helperCompletedCount = tasks.countByHelperCompleted(t.getAssignedHelperId());
-      helperAvgRating = tasks.avgBuyerRatingForHelper(t.getAssignedHelperId());
-    }
-    if (t.getBuyerId() != null) {
-      buyerCompletedCount = tasks.countByBuyerCompleted(t.getBuyerId());
-      buyerAvgRating = tasks.avgHelperRatingForBuyer(t.getBuyerId());
-    }
-    return new TaskResponse(
-        t.getId(),
-        t.getBuyerId(),
-        buyerPhone,
-        buyerName,
-        t.getTitle(),
-        t.getDescription(),
-        t.getUrgency(),
-        t.getTimeMinutes(),
-        t.getBudgetPaise(),
-        t.getLat(),
-        t.getLng(),
-        t.getAddressText(),
-        t.getStatus(),
-        t.getAssignedHelperId(),
-        helperPhone,
-        helperName,
-        includeOtp ? t.getArrivalOtp() : null,
-        includeOtp ? t.getCompletionOtp() : null,
-        t.getArrivalSelfieUrl(),
-        t.getArrivalSelfieLat(),
-        t.getArrivalSelfieLng(),
-        t.getArrivalSelfieAddress(),
-        t.getArrivalSelfieCapturedAt(),
-        t.getCompletionSelfieUrl(),
-        t.getCompletionSelfieLat(),
-        t.getCompletionSelfieLng(),
-        t.getCompletionSelfieAddress(),
-        t.getCompletionSelfieCapturedAt(),
-        t.getBuyerRating() != null ? t.getBuyerRating().doubleValue() : null,
-        t.getBuyerRatingComment(),
-        t.getBuyerRatedAt(),
-        t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
-        t.getHelperRatingComment(),
-        t.getHelperRatedAt(),
-        helperAvgRating,
-        helperCompletedCount,
-        buyerAvgRating,
-        buyerCompletedCount,
-        t.getCancelReason(),
-        t.getCancelledByRole(),
-        t.getCancelledAt(),
-        t.getCreatedAt());
+    return tasks.cancelTask(principal.userId(), principal.role(), taskId, req.reason());
   }
 }

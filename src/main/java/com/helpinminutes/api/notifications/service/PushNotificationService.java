@@ -93,6 +93,7 @@ public class PushNotificationService {
       messaging.sendEachForMulticast(msg);
     } catch (Exception e) {
       log.warn("Failed to send push notifications for task {}", task.getId(), e);
+      throw new RuntimeException("Failed to send task offered notification", e);
     }
   }
 
@@ -120,6 +121,7 @@ public class PushNotificationService {
       messaging.sendEachForMulticast(msg);
     } catch (Exception e) {
       log.warn("Failed to send task accepted notification for task {}", task.getId(), e);
+      throw new RuntimeException("Failed to send task accepted notification", e);
     }
   }
 
@@ -147,6 +149,7 @@ public class PushNotificationService {
       messaging.sendEachForMulticast(msg);
     } catch (Exception e) {
       log.warn("Failed to send task completed notification for task {}", task.getId(), e);
+      throw new RuntimeException("Failed to send task completed notification", e);
     }
   }
 
@@ -175,6 +178,7 @@ public class PushNotificationService {
       messaging.sendEachForMulticast(msg);
     } catch (Exception e) {
       log.warn("Failed to send KYC approved push notification for helper {}", helperId, e);
+      throw new RuntimeException("Failed to send KYC approved notification", e);
     }
   }
 }

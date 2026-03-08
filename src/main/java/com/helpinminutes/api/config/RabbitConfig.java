@@ -23,6 +23,12 @@ public class RabbitConfig {
     public static final String QUEUE_PHOTO_DLQ = "photo.dlq";
     public static final String ROUTING_KEY_PHOTO_DLQ = "photo.dlq";
 
+    public static final String EXCHANGE_NOTIFICATIONS = "notifications.exchange";
+    public static final String QUEUE_NOTIFICATION_SEND = "notifications.send.queue";
+    public static final String ROUTING_KEY_NOTIFICATION_SEND = "notifications.send";
+    public static final String QUEUE_NOTIFICATION_DLQ = "notifications.dlq";
+    public static final String ROUTING_KEY_NOTIFICATION_DLQ = "notifications.dlq";
+
     @Bean
     public DirectExchange photosExchange() {
         return new DirectExchange(EXCHANGE_PHOTOS);
@@ -52,9 +58,38 @@ public class RabbitConfig {
     }
 
     @Bean
+    public DirectExchange notificationsExchange() {
+        return new DirectExchange(EXCHANGE_NOTIFICATIONS);
+    }
+
+    @Bean
+    public Queue notificationSendQueue() {
+        return QueueBuilder.durable(QUEUE_NOTIFICATION_SEND)
+                .withArgument("x-dead-letter-exchange", EXCHANGE_NOTIFICATIONS)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_NOTIFICATION_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Queue notificationDlq() {
+        return QueueBuilder.durable(QUEUE_NOTIFICATION_DLQ).build();
+    }
+
+    @Bean
+    public Binding notificationSendBinding(Queue notificationSendQueue, DirectExchange notificationsExchange) {
+        return BindingBuilder.bind(notificationSendQueue).to(notificationsExchange).with(ROUTING_KEY_NOTIFICATION_SEND);
+    }
+
+    @Bean
+    public Binding notificationDlqBinding(Queue notificationDlq, DirectExchange notificationsExchange) {
+        return BindingBuilder.bind(notificationDlq).to(notificationsExchange).with(ROUTING_KEY_NOTIFICATION_DLQ);
+    }
+
+    @Bean
     public MessageConverter jsonMessageConverter() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
         return new Jackson2JsonMessageConverter(mapper);
     }
+
 }
