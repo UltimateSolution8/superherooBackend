@@ -48,6 +48,10 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")
     long sumBudgetPaiseByStatus(@Param("status") TaskStatus status);
 
+    java.util.List<TaskEntity> findTop50ByStatusAndScheduledAtBeforeAndAssignedHelperIdIsNullOrderByScheduledAtAsc(
+            TaskStatus status,
+            Instant scheduledAt);
+
     @Modifying
     @Query("update TaskEntity t set t.assignedHelperId = :helperId, t.status = :newStatus "
             + "where t.id = :taskId and t.assignedHelperId is null and t.status = :expectedStatus")

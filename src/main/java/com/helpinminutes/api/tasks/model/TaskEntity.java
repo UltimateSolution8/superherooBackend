@@ -66,6 +66,9 @@ public class TaskEntity {
   @Column(name = "address_text")
   private String addressText;
 
+  @Column(name = "scheduled_at")
+  private Instant scheduledAt;
+
   @Column(name = "arrival_selfie_url")
   private String arrivalSelfieUrl;
 
@@ -298,6 +301,14 @@ public class TaskEntity {
 
   public void setAddressText(String addressText) {
     this.addressText = addressText;
+  }
+
+  public Instant getScheduledAt() {
+    return scheduledAt;
+  }
+
+  public void setScheduledAt(Instant scheduledAt) {
+    this.scheduledAt = scheduledAt;
   }
 
   public String getArrivalSelfieUrl() {

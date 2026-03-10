@@ -13,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,37 +66,61 @@ public class PushNotificationService {
   }
 
   public void notifyTaskOffered(List<UUID> helperIds, TaskEntity task) {
+    notifyTaskOffered(helperIds, task, null);
+  }
+
+  public void notifyTaskOffered(List<UUID> helperIds, TaskEntity task, Map<UUID, Double> distanceByHelper) {
     if (messaging == null) return;
+    if (helperIds == null || helperIds.isEmpty()) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(helperIds);
     if (tokenEntities.isEmpty()) return;
 
-    List<String> tokenList = new ArrayList<>();
+    Map<UUID, List<String>> tokensByUser = new HashMap<>();
     for (PushTokenEntity t : tokenEntities) {
-      if (t.getToken() != null && !t.getToken().isBlank()) {
-        tokenList.add(t.getToken());
+      if (t.getToken() == null || t.getToken().isBlank()) continue;
+      tokensByUser.computeIfAbsent(t.getUserId(), k -> new ArrayList<>()).add(t.getToken());
+    }
+
+    for (UUID helperId : helperIds) {
+      List<String> tokenList = tokensByUser.get(helperId);
+      if (tokenList == null || tokenList.isEmpty()) continue;
+
+      Double distMeters = distanceByHelper == null ? null : distanceByHelper.get(helperId);
+      String distanceText = formatDistanceMeters(distMeters);
+      String title = distanceText == null ? "New task nearby" : "New task " + distanceText + " away";
+
+      try {
+        MulticastMessage.Builder builder = MulticastMessage.builder()
+            .addAllTokens(tokenList)
+            .setNotification(Notification.builder()
+                .setTitle(title)
+                .setBody(task.getTitle() == null ? "Tap to view details" : task.getTitle())
+                .build())
+            .putData("type", "TASK_OFFERED")
+            .putData("taskId", task.getId().toString())
+            .putData("title", task.getTitle() == null ? "Task" : task.getTitle())
+            .putData("urgency", task.getUrgency().name())
+            .putData("lat", String.valueOf(task.getLat()))
+            .putData("lng", String.valueOf(task.getLng()));
+
+        if (distMeters != null) {
+          builder.putData("distanceMeters", String.valueOf(Math.round(distMeters)));
+        }
+
+        messaging.sendEachForMulticast(builder.build());
+      } catch (Exception e) {
+        log.warn("Failed to send push notifications for task {} to helper {}", task.getId(), helperId, e);
+        throw new RuntimeException("Failed to send task offered notification", e);
       }
     }
-    if (tokenList.isEmpty()) return;
+  }
 
-    try {
-      MulticastMessage msg = MulticastMessage.builder()
-          .addAllTokens(tokenList)
-          .setNotification(Notification.builder()
-              .setTitle("New task nearby")
-              .setBody(task.getTitle() == null ? "Tap to view details" : task.getTitle())
-              .build())
-          .putData("type", "TASK_OFFERED")
-          .putData("taskId", task.getId().toString())
-          .putData("title", task.getTitle() == null ? "Task" : task.getTitle())
-          .putData("urgency", task.getUrgency().name())
-          .putData("lat", String.valueOf(task.getLat()))
-          .putData("lng", String.valueOf(task.getLng()))
-          .build();
-      messaging.sendEachForMulticast(msg);
-    } catch (Exception e) {
-      log.warn("Failed to send push notifications for task {}", task.getId(), e);
-      throw new RuntimeException("Failed to send task offered notification", e);
+  private String formatDistanceMeters(Double meters) {
+    if (meters == null || !Double.isFinite(meters) || meters <= 0) return null;
+    if (meters < 1000) {
+      return Math.round(meters) + " meters";
     }
+    return String.format("%.1f km", meters / 1000.0);
   }
 
   public void notifyBuyerTaskAccepted(UUID buyerId, TaskEntity task) {

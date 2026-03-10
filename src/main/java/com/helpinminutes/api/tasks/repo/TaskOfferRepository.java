@@ -16,6 +16,8 @@ public interface TaskOfferRepository extends JpaRepository<TaskOfferEntity, UUID
 
   List<TaskOfferEntity> findAllByTaskId(UUID taskId);
 
+  boolean existsByTaskId(UUID taskId);
+
   @Modifying
   @Query(
       "update TaskOfferEntity o set o.status = :newStatus, o.respondedAt = :respondedAt "

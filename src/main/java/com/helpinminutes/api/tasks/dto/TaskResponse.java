@@ -18,6 +18,7 @@ public record TaskResponse(
     double lat,
     double lng,
     String addressText,
+    Instant scheduledAt,
     TaskStatus status,
     UUID assignedHelperId,
     String helperPhone,
