@@ -5,6 +5,7 @@ import com.helpinminutes.api.kyc.dto.KycStartRequest;
 import com.helpinminutes.api.kyc.dto.KycStartResponse;
 import com.helpinminutes.api.kyc.dto.KycStatusResponse;
 import com.helpinminutes.api.kyc.dto.KycUploadedRequest;
+import com.helpinminutes.api.kyc.dto.LiveKycSessionResponse;
 import com.helpinminutes.api.kyc.service.KycService;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.users.model.UserRole;
@@ -57,5 +58,18 @@ public class HelperVideoKycController {
             throw new ForbiddenException("Not a helper");
         }
         return kycService.getStatus(id, principal.userId());
+    }
+
+    @GetMapping("/live")
+    public LiveKycSessionResponse getLiveSession(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        if (principal.role() != UserRole.HELPER) {
+            throw new ForbiddenException("Not a helper");
+        }
+        LiveKycSessionResponse session = kycService.getLiveSessionForHelper(principal.userId());
+        if (session == null) {
+            throw new com.helpinminutes.api.errors.NotFoundException("No live KYC session");
+        }
+        return session;
     }
 }

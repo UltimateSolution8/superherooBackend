@@ -43,9 +43,27 @@ public class KycRequestEntity {
     @Column(name = "doc_back_path")
     private String docBackPath;
 
+    @Column(name = "selfie_path")
+    private String selfiePath;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "ocr_extracted_data")
     private String ocrExtractedData; // JSON string
+
+    @Column(name = "live_room_id")
+    private String liveRoomId;
+
+    @Column(name = "live_record_task_id")
+    private String liveRecordTaskId;
+
+    @Column(name = "live_recording_url")
+    private String liveRecordingUrl;
+
+    @Column(name = "live_started_at")
+    private Instant liveStartedAt;
+
+    @Column(name = "live_ended_at")
+    private Instant liveEndedAt;
 
     @Column(name = "face_match_score")
     private Double faceMatchScore;
@@ -142,6 +160,54 @@ public class KycRequestEntity {
 
     public void setDocBackPath(String docBackPath) {
         this.docBackPath = docBackPath;
+    }
+
+    public String getSelfiePath() {
+        return selfiePath;
+    }
+
+    public void setSelfiePath(String selfiePath) {
+        this.selfiePath = selfiePath;
+    }
+
+    public String getLiveRoomId() {
+        return liveRoomId;
+    }
+
+    public void setLiveRoomId(String liveRoomId) {
+        this.liveRoomId = liveRoomId;
+    }
+
+    public String getLiveRecordTaskId() {
+        return liveRecordTaskId;
+    }
+
+    public void setLiveRecordTaskId(String liveRecordTaskId) {
+        this.liveRecordTaskId = liveRecordTaskId;
+    }
+
+    public String getLiveRecordingUrl() {
+        return liveRecordingUrl;
+    }
+
+    public void setLiveRecordingUrl(String liveRecordingUrl) {
+        this.liveRecordingUrl = liveRecordingUrl;
+    }
+
+    public Instant getLiveStartedAt() {
+        return liveStartedAt;
+    }
+
+    public void setLiveStartedAt(Instant liveStartedAt) {
+        this.liveStartedAt = liveStartedAt;
+    }
+
+    public Instant getLiveEndedAt() {
+        return liveEndedAt;
+    }
+
+    public void setLiveEndedAt(Instant liveEndedAt) {
+        this.liveEndedAt = liveEndedAt;
     }
 
     public String getOcrExtractedData() {

@@ -11,6 +11,9 @@ import com.helpinminutes.api.kyc.dto.KycStartResponse.UploadUrls;
 import com.helpinminutes.api.kyc.dto.KycStatusResponse;
 import com.helpinminutes.api.kyc.dto.AdminKycResponse;
 import com.helpinminutes.api.kyc.dto.KycUploadedRequest;
+import com.helpinminutes.api.kyc.dto.LiveKycSessionResponse;
+import com.helpinminutes.api.kyc.dto.LiveKycSnapshotRequest;
+import com.helpinminutes.api.kyc.dto.LiveKycSnapshotUrlResponse;
 import com.helpinminutes.api.kyc.model.KycAuditLogEntity;
 import com.helpinminutes.api.kyc.model.KycRequestEntity;
 import com.helpinminutes.api.kyc.model.KycRequestStatus;
@@ -23,6 +26,9 @@ import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService.ObjectMeta;
+import com.helpinminutes.api.config.ZegoProperties;
+import com.helpinminutes.api.kyc.zego.ZegoCloudRecordingService;
+import com.helpinminutes.api.kyc.zego.ZegoTokenService;
 import com.coremedia.iso.IsoFile;
 import com.coremedia.iso.boxes.MovieHeaderBox;
 import org.slf4j.Logger;
@@ -54,6 +60,9 @@ public class KycService {
     private final SupabaseStorageService storageService;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
+    private final ZegoTokenService zegoTokenService;
+    private final ZegoCloudRecordingService recordingService;
+    private final ZegoProperties zegoProps;
 
     private static final String EXCHANGE = "him.kyc";
     private static final String ROUTING_KEY = "kyc.processing";
@@ -65,7 +74,10 @@ public class KycService {
             NotificationQueueService notificationQueue,
             SupabaseStorageService storageService,
             RabbitTemplate rabbitTemplate,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ZegoTokenService zegoTokenService,
+            ZegoCloudRecordingService recordingService,
+            ZegoProperties zegoProps) {
         this.kycRequestRepository = kycRequestRepository;
         this.auditLogRepository = auditLogRepository;
         this.userRepository = userRepository;
@@ -74,6 +86,9 @@ public class KycService {
         this.storageService = storageService;
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
+        this.zegoTokenService = zegoTokenService;
+        this.recordingService = recordingService;
+        this.zegoProps = zegoProps;
     }
 
     @Transactional
@@ -187,6 +202,161 @@ public class KycService {
                 entity.getReviewerNotes());
     }
 
+    @Transactional
+    public LiveKycSessionResponse startLiveKyc(UUID helperId, UUID adminId) {
+        UserEntity helper = userRepository.findById(helperId)
+                .orElseThrow(() -> new NotFoundException("Helper not found"));
+        UserEntity admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new NotFoundException("Admin not found"));
+
+        KycRequestEntity entity = kycRequestRepository.findActiveLiveSessions(helperId,
+                java.util.List.of(KycRequestStatus.SUBMITTED, KycRequestStatus.REVIEW))
+                .stream()
+                .findFirst()
+                .orElse(null);
+        if (entity == null) {
+            entity = new KycRequestEntity();
+            entity.setUser(helper);
+            entity.setStatus(KycRequestStatus.SUBMITTED);
+            entity.setRetentionExpiresAt(Instant.now().plus(90, ChronoUnit.DAYS));
+        }
+
+        String roomId = entity.getLiveRoomId();
+        if (roomId == null || roomId.isBlank()) {
+            roomId = "kyc-" + helperId + "-" + System.currentTimeMillis();
+            entity.setLiveRoomId(roomId);
+        }
+        entity.setLiveStartedAt(Instant.now());
+        entity.setLiveEndedAt(null);
+
+        if (entity.getLiveRecordTaskId() == null || entity.getLiveRecordTaskId().isBlank()) {
+            var record = recordingService.startRecording(roomId);
+            entity.setLiveRecordTaskId(record.taskId());
+        }
+
+        kycRequestRepository.save(entity);
+        auditLog("LIVE_START", entity, admin, "Live KYC started");
+
+        long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
+        Instant expiresAt = Instant.now().plusSeconds(ttl);
+        String token = zegoTokenService.generateToken(adminId.toString(), roomId, resolveHelperName(admin), ttl);
+
+        return new LiveKycSessionResponse(
+                entity.getId(),
+                helperId,
+                resolveHelperName(helper),
+                roomId,
+                token,
+                entity.getStatus().name(),
+                expiresAt);
+    }
+
+    public LiveKycSessionResponse getLiveSessionForHelper(UUID helperId) {
+        UserEntity helper = userRepository.findById(helperId)
+                .orElseThrow(() -> new NotFoundException("Helper not found"));
+        var sessions = kycRequestRepository.findActiveLiveSessions(helperId,
+                java.util.List.of(KycRequestStatus.SUBMITTED, KycRequestStatus.REVIEW));
+        if (sessions.isEmpty()) {
+            return null;
+        }
+        KycRequestEntity entity = sessions.get(0);
+        if (entity.getLiveRoomId() == null || entity.getLiveRoomId().isBlank()) {
+            return null;
+        }
+        long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
+        Instant expiresAt = Instant.now().plusSeconds(ttl);
+        String token = zegoTokenService.generateToken(helperId.toString(), entity.getLiveRoomId(), resolveHelperName(helper), ttl);
+        return new LiveKycSessionResponse(
+                entity.getId(),
+                helperId,
+                resolveHelperName(helper),
+                entity.getLiveRoomId(),
+                token,
+                entity.getStatus().name(),
+                expiresAt);
+    }
+
+    public LiveKycSnapshotUrlResponse createLiveSnapshotUrl(UUID kycId, UUID adminId, String kind) {
+        KycRequestEntity entity = kycRequestRepository.findById(kycId)
+                .orElseThrow(() -> new NotFoundException("KYC request not found"));
+        userRepository.findById(adminId)
+                .orElseThrow(() -> new NotFoundException("Admin not found"));
+        String normalized = normalizeSnapshotKind(kind);
+        var upload = storageService.generateKycPresignedPut(normalized, entity.getUser().getId(), ".jpg");
+        return new LiveKycSnapshotUrlResponse(upload.url(), upload.key(), upload.expiresInSeconds());
+    }
+
+    @Transactional
+    public void confirmLiveSnapshot(UUID kycId, UUID adminId, LiveKycSnapshotRequest req) {
+        KycRequestEntity entity = kycRequestRepository.findById(kycId)
+                .orElseThrow(() -> new NotFoundException("KYC request not found"));
+        UserEntity admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new NotFoundException("Admin not found"));
+
+        String normalized = normalizeSnapshotKind(req.kind());
+        validateKycKey(entity.getUser().getId(), req.key(), normalized);
+        validateObjectMeta(req.key(), false);
+
+        if ("selfie".equals(normalized)) {
+            entity.setSelfiePath(req.key());
+        } else if ("doc-front".equals(normalized)) {
+            entity.setDocFrontPath(req.key());
+        } else if ("doc-back".equals(normalized)) {
+            entity.setDocBackPath(req.key());
+        }
+
+        helperProfiles.findById(entity.getUser().getId()).ifPresent(profile -> {
+            if ("selfie".equals(normalized)) {
+                profile.setKycSelfieUrl(storageService.buildPublicUrl(req.key()));
+            } else if ("doc-front".equals(normalized)) {
+                profile.setKycDocFrontUrl(storageService.buildPublicUrl(req.key()));
+            } else if ("doc-back".equals(normalized)) {
+                profile.setKycDocBackUrl(storageService.buildPublicUrl(req.key()));
+            }
+            if (profile.getKycSubmittedAt() == null) {
+                profile.setKycSubmittedAt(Instant.now());
+            }
+            if (profile.getKycStatus() == null) {
+                profile.setKycStatus(HelperKycStatus.PENDING);
+            }
+            helperProfiles.save(profile);
+        });
+
+        auditLog("LIVE_SNAPSHOT_" + normalized.toUpperCase(), entity, admin, "Snapshot stored");
+    }
+
+    @Transactional
+    public void endLiveSession(UUID kycId, UUID adminId) {
+        KycRequestEntity entity = kycRequestRepository.findById(kycId)
+                .orElseThrow(() -> new NotFoundException("KYC request not found"));
+        UserEntity admin = userRepository.findById(adminId)
+                .orElseThrow(() -> new NotFoundException("Admin not found"));
+        if (entity.getLiveRecordTaskId() != null && !entity.getLiveRecordTaskId().isBlank()) {
+            recordingService.stopRecording(entity.getLiveRecordTaskId());
+        }
+        entity.setLiveEndedAt(Instant.now());
+        auditLog("LIVE_END", entity, admin, "Live KYC ended");
+    }
+
+    @Transactional
+    public void attachLiveRecording(String roomId, String recordTaskId, String recordingUrl) {
+        KycRequestEntity entity = null;
+        if (recordTaskId != null && !recordTaskId.isBlank()) {
+            entity = kycRequestRepository.findTop1ByLiveRecordTaskId(recordTaskId).orElse(null);
+        }
+        if (entity == null && roomId != null && !roomId.isBlank()) {
+            entity = kycRequestRepository.findTop1ByLiveRoomId(roomId).orElse(null);
+        }
+        if (entity == null) {
+            log.warn("Live recording callback did not match any KYC request (roomId={}, taskId={})", roomId, recordTaskId);
+            return;
+        }
+        if (recordTaskId != null && !recordTaskId.isBlank()) {
+            entity.setLiveRecordTaskId(recordTaskId);
+        }
+        entity.setLiveRecordingUrl(recordingUrl);
+    }
+
     // --- Admin API ---
 
     public Page<KycStatusResponse> listRequests(KycRequestStatus status, Pageable pageable) {
@@ -219,9 +389,14 @@ public class KycService {
                 e.getUser() != null ? e.getUser().getDisplayName() : null,
                 e.getStatus().name(),
                 e.getCreatedAt(),
-                storageService.generatePresignedGetUrl(e.getVideoPath(), java.time.Duration.ofMinutes(15)),
+                resolveRecordingUrl(e.getVideoPath(), e.getLiveRecordingUrl()),
                 storageService.generatePresignedGetUrl(e.getDocFrontPath(), java.time.Duration.ofMinutes(15)),
                 storageService.generatePresignedGetUrl(e.getDocBackPath(), java.time.Duration.ofMinutes(15)),
+                storageService.generatePresignedGetUrl(e.getSelfiePath(), java.time.Duration.ofMinutes(15)),
+                e.getLiveRoomId(),
+                e.getLiveRecordingUrl(),
+                e.getLiveStartedAt(),
+                e.getLiveEndedAt(),
                 e.getRecommendedAction(),
                 e.getFaceMatchScore(),
                 e.getLivenessScore(),
@@ -242,6 +417,18 @@ public class KycService {
             helperProfiles.findById(entity.getUser().getId()).ifPresent(profile -> {
                 profile.setKycStatus(HelperKycStatus.APPROVED);
                 profile.setKycRejectionReason(null);
+                if (entity.getDocFrontPath() != null) {
+                    profile.setKycDocFrontUrl(storageService.buildPublicUrl(entity.getDocFrontPath()));
+                }
+                if (entity.getDocBackPath() != null) {
+                    profile.setKycDocBackUrl(storageService.buildPublicUrl(entity.getDocBackPath()));
+                }
+                if (entity.getSelfiePath() != null) {
+                    profile.setKycSelfieUrl(storageService.buildPublicUrl(entity.getSelfiePath()));
+                }
+                if (profile.getKycSubmittedAt() == null) {
+                    profile.setKycSubmittedAt(Instant.now());
+                }
                 helperProfiles.save(profile);
             });
             notificationQueue.enqueueKycApproved(entity.getUser().getId());
@@ -270,6 +457,32 @@ public class KycService {
         logItem.setAction(action);
         logItem.setPayload("{\"notes\":\"" + notes + "\"}");
         auditLogRepository.save(logItem);
+    }
+
+    private String resolveHelperName(UserEntity user) {
+        if (user == null) return null;
+        if (user.getDisplayName() != null && !user.getDisplayName().isBlank()) {
+            return user.getDisplayName();
+        }
+        return user.getPhone();
+    }
+
+    private String normalizeSnapshotKind(String kind) {
+        if (kind == null) {
+            throw new BadRequestException("Missing snapshot kind");
+        }
+        String normalized = kind.trim().toLowerCase();
+        if ("selfie".equals(normalized) || "doc-front".equals(normalized) || "doc-back".equals(normalized)) {
+            return normalized;
+        }
+        throw new BadRequestException("Invalid snapshot kind");
+    }
+
+    private String resolveRecordingUrl(String videoKey, String liveRecordingUrl) {
+        if (liveRecordingUrl != null && !liveRecordingUrl.isBlank()) {
+            return liveRecordingUrl;
+        }
+        return storageService.generatePresignedGetUrl(videoKey, java.time.Duration.ofMinutes(15));
     }
 
     private void validateKycKey(UUID helperId, String key, String kind) {
