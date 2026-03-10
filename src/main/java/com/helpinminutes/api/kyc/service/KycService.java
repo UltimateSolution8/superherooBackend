@@ -229,10 +229,7 @@ public class KycService {
         entity.setLiveStartedAt(Instant.now());
         entity.setLiveEndedAt(null);
 
-        if (entity.getLiveRecordTaskId() == null || entity.getLiveRecordTaskId().isBlank()) {
-            var record = recordingService.startRecording(roomId);
-            entity.setLiveRecordTaskId(record.taskId());
-        }
+        // Recording is optional; skip to avoid blocking live KYC start.
 
         kycRequestRepository.save(entity);
         auditLog("LIVE_START", entity, admin, "Live KYC started");
