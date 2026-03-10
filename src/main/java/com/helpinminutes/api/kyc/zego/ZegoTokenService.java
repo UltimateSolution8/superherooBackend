@@ -77,10 +77,6 @@ public class ZegoTokenService {
     return generateToken(userId, effectiveSeconds, "");
   }
 
-  public String generateToken(String userId) {
-    return generateToken(userId, props.tokenTtlSeconds(), "");
-  }
-
   public String generateToken(String userId, String roomId, String userName, long effectiveSeconds) {
     try {
       String payload = mapper.writeValueAsString(Map.of(
@@ -89,6 +85,27 @@ public class ZegoTokenService {
       return generateToken(userId, effectiveSeconds, payload);
     } catch (Exception e) {
       return generateToken(userId, effectiveSeconds, "");
+    }
+  }
+
+  /**
+   * Generates a Kit Token as expected by Zego UIKit Prebuilt for Web.
+   * This is a Base64-encoded JSON containing appId, roomId, userId and the room token.
+   */
+  public String generateKitToken(String userId, String roomId, String userName, long ttlSeconds) {
+    try {
+      String roomToken = generateToken(userId, roomId, userName, ttlSeconds);
+      Map<String, Object> kitData = Map.of(
+          "appID", props.appId(),
+          "roomID", roomId,
+          "userID", userId,
+          "userName", userName == null ? userId : userName,
+          "token", roomToken
+      );
+      String json = mapper.writeValueAsString(kitData);
+      return Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+    } catch (Exception e) {
+      throw new IllegalStateException("Failed to generate Zego Kit Token", e);
     }
   }
 

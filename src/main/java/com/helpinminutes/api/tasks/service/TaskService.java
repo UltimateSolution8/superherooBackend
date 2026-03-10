@@ -133,7 +133,7 @@ public class TaskService {
       java.util.concurrent.CompletableFuture.runAsync(() -> {
         try {
           realtime.publish(
-              "TASK_CREATED",
+              "task_created",
               java.util.Map.of(
                   "taskId", task.getId().toString(),
                   "buyerId", buyerId.toString(),
@@ -211,7 +211,7 @@ public class TaskService {
     }
 
     realtime.publish(
-        "TASK_ASSIGNED",
+        "task_assigned",
         java.util.Map.of(
             "taskId", taskId.toString(),
             "buyerId", task.getBuyerId().toString(),
@@ -276,7 +276,7 @@ public class TaskService {
     }
 
     realtime.publish(
-        "TASK_STATUS_CHANGED",
+        "task_status_changed",
         java.util.Map.of(
             "taskId", taskId.toString(),
             "buyerId", task.getBuyerId().toString(),
@@ -532,7 +532,7 @@ public class TaskService {
     if (task.getAssignedHelperId() != null) {
       payload.put("helperId", task.getAssignedHelperId().toString());
     }
-    realtime.publish("TASK_STATUS_CHANGED", payload);
+    realtime.publish("task_status_changed", payload);
     return task;
   }
 
@@ -583,7 +583,7 @@ public class TaskService {
         users.save(helper);
 
         realtime.publish(
-            "ESCROW_RELEASED",
+            "escrow_released",
             java.util.Map.of(
                 "taskId", taskId.toString(),
                 "helperId", payHelperId.toString(),

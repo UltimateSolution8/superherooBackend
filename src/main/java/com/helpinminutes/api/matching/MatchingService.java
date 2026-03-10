@@ -64,6 +64,9 @@ public class MatchingService {
       var onlineHelpers = presence.getOnlineHelpersForCells(ringCells);
       log.info("Ring {} has {} cells and {} online helpers", k, ringCells.size(), onlineHelpers.size());
       for (UUID helperId : onlineHelpers) {
+        if (helperId.equals(task.getBuyerId())) {
+          continue; // Don't offer a task to the buyer who created it
+        }
         var state = presence.getHelperState(helperId);
 
         log.info("Helper {} raw state: {}, online={}, lastSeen={}", helperId, state,
@@ -129,7 +132,7 @@ public class MatchingService {
       helperIds.add(c.helperId());
 
       realtime.publish(
-          "TASK_OFFERED",
+          "task.offered",
           java.util.Map.ofEntries(
               java.util.Map.entry("helperId", c.helperId().toString()),
               java.util.Map.entry("taskId", task.getId().toString()),
