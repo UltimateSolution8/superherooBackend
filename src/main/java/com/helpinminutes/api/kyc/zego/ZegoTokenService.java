@@ -85,7 +85,7 @@ public class ZegoTokenService {
     try {
       String payload = mapper.writeValueAsString(Map.of(
           "room_id", roomId == null ? "" : roomId,
-          "user_name", userName == null ? "" : userName));
+          "privilege", Map.of("1", 1, "2", 1)));
       return generateToken(userId, effectiveSeconds, payload);
     } catch (Exception e) {
       return generateToken(userId, effectiveSeconds, "");
