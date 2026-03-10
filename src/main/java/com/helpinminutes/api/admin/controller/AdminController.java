@@ -213,6 +213,7 @@ public class AdminController {
         t.getLat(),
         t.getLng(),
         t.getAddressText(),
+        t.getScheduledAt(),
         t.getStatus(),
         t.getAssignedHelperId(),
         helperPhone,
