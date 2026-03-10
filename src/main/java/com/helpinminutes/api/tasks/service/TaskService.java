@@ -104,6 +104,9 @@ public class TaskService {
     task.setLat(req.lat());
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
+    if (req.scheduledAt() != null) {
+      task.setScheduledAt(req.scheduledAt());
+    }
     task.setStatus(TaskStatus.SEARCHING);
     task.setEscrowStatus(TaskEscrowStatus.HELD);
     task.setEscrowAmountPaise(cost);
@@ -114,10 +117,16 @@ public class TaskService {
     tasks.save(task);
 
     List<UUID> offeredTo = new ArrayList<>();
-    try {
-      offeredTo = matching.dispatchOffers(task);
-    } catch (Exception e) {
-      log.error("Failed to dispatch offers for task {}", task.getId(), e);
+    Instant now = Instant.now();
+    Instant scheduledAt = task.getScheduledAt();
+    if (scheduledAt == null || !scheduledAt.isAfter(now)) {
+      try {
+        offeredTo = matching.dispatchOffers(task);
+      } catch (Exception e) {
+        log.error("Failed to dispatch offers for task {}", task.getId(), e);
+      }
+    } else {
+      log.info("Task {} scheduled for {}. Skipping immediate dispatch.", task.getId(), scheduledAt);
     }
 
     try {
@@ -500,11 +509,12 @@ public class TaskService {
       return java.util.List.of();
     }
 
-    long taskWindowSeconds = Math.max(300, props.matching().offerTtlSeconds());
-    return tasks.findTop50ByStatusAndCreatedAtAfterOrderByCreatedAtDesc(
-        TaskStatus.SEARCHING, Instant.now().minusSeconds(taskWindowSeconds))
+    Instant now = Instant.now();
+    return tasks.findTop100ByStatusOrderByCreatedAtDesc(TaskStatus.SEARCHING)
         .stream()
+        .filter(t -> t.getScheduledAt() == null || !t.getScheduledAt().isAfter(now))
         .filter(t -> GeoUtils.distanceMeters(t.getLat(), t.getLng(), state.lat(), state.lng()) <= 3000d)
+        .limit(50)
         .toList();
   }
 

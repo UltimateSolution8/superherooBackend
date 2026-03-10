@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.time.Instant;
 
 public record CreateTaskRequest(
     @NotBlank String title,
@@ -14,5 +15,6 @@ public record CreateTaskRequest(
     @NotNull @Min(0) Long budgetPaise,
     @Min(-90) @Max(90) double lat,
     @Min(-180) @Max(180) double lng,
-    String addressText
+    String addressText,
+    Instant scheduledAt
 ) {}

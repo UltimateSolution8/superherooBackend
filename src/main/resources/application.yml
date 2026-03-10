@@ -119,6 +119,13 @@ twilio:
   authToken: ${TWILIO_AUTH_TOKEN:}
   verifyServiceSid: ${TWILIO_VERIFY_SERVICE_SID:}
 
+zego:
+  appId: ${ZEGO_APP_ID:0}
+  serverSecret: ${ZEGO_SERVER_SECRET:}
+  callbackSecret: ${ZEGO_CALLBACK_SECRET:}
+  tokenTtlSeconds: ${ZEGO_TOKEN_TTL_SECONDS:3600}
+  recordApiBaseUrl: ${ZEGO_RECORD_API_BASE_URL:https://cloudrecord-api.zego.im}
+
 logging:
   level:
     org.springframework.security: INFO
