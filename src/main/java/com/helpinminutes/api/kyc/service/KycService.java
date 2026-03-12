@@ -356,6 +356,7 @@ public class KycService {
 
     // --- Admin API ---
 
+    @Transactional(readOnly = true)
     public Page<KycStatusResponse> listRequests(KycRequestStatus status, Pageable pageable) {
         Page<KycRequestEntity> page;
         if (status != null) {
@@ -373,6 +374,7 @@ public class KycService {
                 e.getReviewerNotes()));
     }
 
+    @Transactional(readOnly = true)
     public Page<AdminKycResponse> listRequestsForAdmin(KycRequestStatus status, Pageable pageable) {
         Page<KycRequestEntity> page;
         if (status != null) {

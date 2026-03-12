@@ -73,6 +73,13 @@ public class NotificationWorker {
                     pushNotifications.notifyBuyerTaskCompleted(buyerId, task);
                 }
             }
+            case TASK_CREATED -> {
+                if (task != null) {
+                    List<UUID> helperIds = job.helperIds();
+                    // just in case, reuse the offered notification logic which already filters tokens
+                    pushNotifications.notifyTaskCreated(helperIds, task);
+                }
+            }
             case KYC_APPROVED -> {
                 if (job.helperIds() != null && !job.helperIds().isEmpty()) {
                     pushNotifications.notifyHelperKycApproved(job.helperIds().get(0));

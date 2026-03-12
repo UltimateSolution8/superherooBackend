@@ -24,7 +24,11 @@ public class RealtimePublisher {
           "type", type,
           "payload", payload
       ));
-      redis.convertAndSend(props.realtime().redisPubSubChannel(), msg);
+      String channel = props.realtime().redisPubSubChannel();
+      if (channel == null || channel.isBlank()) {
+        channel = "him:rt:events";
+      }
+      redis.convertAndSend(channel, msg);
     } catch (Exception e) {
       // Best-effort realtime; API should not fail hard because socket gateway is down.
     }

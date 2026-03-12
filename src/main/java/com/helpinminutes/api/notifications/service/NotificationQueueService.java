@@ -39,6 +39,15 @@ public class NotificationQueueService {
         publishAfterCommit(job);
     }
 
+    /**
+     * Notify a set of helpers that a brand‑new task has been created and they should refresh.
+     */
+    public void enqueueTaskCreated(List<UUID> helperIds, TaskEntity task) {
+        if (helperIds == null || helperIds.isEmpty() || task == null) return;
+        NotificationJob job = NotificationJob.now(NotificationType.TASK_CREATED, task.getId(), null, helperIds);
+        publishAfterCommit(job);
+    }
+
     public void enqueueKycApproved(UUID helperId) {
         if (helperId == null) return;
         NotificationJob job = NotificationJob.now(NotificationType.KYC_APPROVED, null, null, List.of(helperId));

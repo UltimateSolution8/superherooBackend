@@ -37,6 +37,17 @@ public record AppProperties(
   ) {}
 
   public record Realtime(
-      @NotBlank String redisPubSubChannel
-  ) {}
+      // the channel used for redis pub/sub.  if the property is absent we fall back
+      // to the same default used by the Node realtime gateway so the app can still
+      // start (otherwise Spring validation would reject the configuration and the
+      // service would refuse to boot, which manifests as a 502 from the load
+      // balancer).
+      String redisPubSubChannel
+  ) {
+      public Realtime {
+          if (redisPubSubChannel == null || redisPubSubChannel.isBlank()) {
+              redisPubSubChannel = "him:rt:events";
+          }
+      }
+  }
 }

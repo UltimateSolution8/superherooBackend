@@ -115,6 +115,19 @@ public class PushNotificationService {
     }
   }
 
+  /**
+   * When a task is created we also want to nudge helpers such that they refresh
+   * even if we haven't explicitly offered to them yet.  This method simply
+   * re‑uses the task offered logic because it already handles token filtering and
+   * formatting.
+   */
+  public void notifyTaskCreated(List<UUID> helperIds, TaskEntity task) {
+    // reuse the same implementation as offered, helpers will see a notification
+    // that looks identical to an offer (title/body) and the app treats it the
+    // same way (refresh available tasks).
+    notifyTaskOffered(helperIds, task);
+  }
+
   private String formatDistanceMeters(Double meters) {
     if (meters == null || !Double.isFinite(meters) || meters <= 0) return null;
     if (meters < 1000) {

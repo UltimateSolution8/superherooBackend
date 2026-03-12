@@ -28,6 +28,18 @@ public class HelperController {
 
   @PutMapping("/online")
   public void setOnline(@AuthenticationPrincipal UserPrincipal principal, @Valid @RequestBody SetOnlineRequest req) {
+    setOnlineInternal(principal, req);
+  }
+
+  // Backward compatibility: older mobile builds still call POST /online.
+  @PostMapping("/online")
+  public void setOnlineLegacy(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody SetOnlineRequest req) {
+    setOnlineInternal(principal, req);
+  }
+
+  private void setOnlineInternal(UserPrincipal principal, SetOnlineRequest req) {
     if (principal.role() != UserRole.HELPER) {
       throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
     }
