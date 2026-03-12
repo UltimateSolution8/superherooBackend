@@ -77,12 +77,6 @@ public class MatchingService {
           continue;
         }
 
-        long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
-        if (ageSeconds > props.matching().helperStaleAfterSeconds()) {
-          log.warn("Helper {} is stale. Age seconds: {}", helperId, ageSeconds);
-          continue;
-        }
-
         double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
         log.info("Helper {} is valid, distance to task: {} meters", helperId, distMeters);
 

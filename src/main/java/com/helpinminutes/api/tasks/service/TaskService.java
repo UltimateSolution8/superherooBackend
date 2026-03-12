@@ -181,12 +181,6 @@ public class TaskService {
         throw new ForbiddenException("Helper location is not available");
       }
 
-      long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
-      int staleAfter = Math.max(60, props.matching().helperStaleAfterSeconds());
-      if (ageSeconds > staleAfter) {
-        throw new ForbiddenException("Helper location is stale");
-      }
-
       double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
       if (distMeters > 3000d) {
         throw new ForbiddenException("Helper is too far from this task");
@@ -417,6 +411,9 @@ public class TaskService {
       task.setCompletionSelfieCapturedAt(capturedAt);
     }
 
+    // persist changes so subsequent API reads reflect the selfie immediately
+    tasks.save(task);
+
     return taskMapper.toResponse(task, false);
   }
 
@@ -501,11 +498,6 @@ public class TaskService {
   public List<TaskEntity> listAvailableTasks(UUID helperId) {
     var state = presence.getHelperState(helperId);
     if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
-      return java.util.List.of();
-    }
-    long ageSeconds = (Instant.now().toEpochMilli() - state.lastSeenEpochMs()) / 1000;
-    int staleAfter = Math.max(60, props.matching().helperStaleAfterSeconds());
-    if (ageSeconds > staleAfter) {
       return java.util.List.of();
     }
 
