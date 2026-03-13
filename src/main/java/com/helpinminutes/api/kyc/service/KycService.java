@@ -236,13 +236,17 @@ public class KycService {
 
         long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
         Instant expiresAt = Instant.now().plusSeconds(ttl);
-        String token = zegoTokenService.generateKitToken(adminId.toString(), roomId, resolveHelperName(admin), ttl);
+        String userName = resolveHelperName(admin);
+        String token = zegoTokenService.generateToken(adminId.toString(), roomId, userName, ttl);
 
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
                 resolveHelperName(helper),
+                zegoProps.appId(),
                 roomId,
+                adminId.toString(),
+                userName,
                 token,
                 entity.getStatus().name(),
                 expiresAt);
@@ -262,12 +266,16 @@ public class KycService {
         }
         long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
         Instant expiresAt = Instant.now().plusSeconds(ttl);
-        String token = zegoTokenService.generateKitToken(helperId.toString(), entity.getLiveRoomId(), resolveHelperName(helper), ttl);
+        String userName = resolveHelperName(helper);
+        String token = zegoTokenService.generateToken(helperId.toString(), entity.getLiveRoomId(), userName, ttl);
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
                 resolveHelperName(helper),
+                zegoProps.appId(),
                 entity.getLiveRoomId(),
+                helperId.toString(),
+                userName,
                 token,
                 entity.getStatus().name(),
                 expiresAt);
