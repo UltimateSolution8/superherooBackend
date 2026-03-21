@@ -72,6 +72,11 @@
       <artifactId>spring-boot-starter-amqp</artifactId>
     </dependency>
     <dependency>
+      <groupId>io.sentry</groupId>
+      <artifactId>sentry-spring-boot-starter-jakarta</artifactId>
+      <version>8.22.0</version>
+    </dependency>
+    <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-registry-prometheus</artifactId>
     </dependency>

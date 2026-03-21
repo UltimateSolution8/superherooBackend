@@ -126,6 +126,16 @@ zego:
   tokenTtlSeconds: ${ZEGO_TOKEN_TTL_SECONDS:3600}
   recordApiBaseUrl: ${ZEGO_RECORD_API_BASE_URL:https://cloudrecord-api.zego.im}
 
+sentry:
+  dsn: ${SENTRY_DSN:}
+  environment: ${APP_ENV:dev}
+  send-default-pii: ${SENTRY_SEND_DEFAULT_PII:true}
+  logs:
+    enabled: ${SENTRY_LOGS_ENABLED:true}
+  traces-sample-rate: ${SENTRY_TRACES_SAMPLE_RATE:1.0}
+  profile-session-sample-rate: ${SENTRY_PROFILE_SESSION_SAMPLE_RATE:1.0}
+  profile-lifecycle: ${SENTRY_PROFILE_LIFECYCLE:TRACE}
+
 logging:
   level:
     org.springframework.security: INFO
