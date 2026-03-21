@@ -88,18 +88,24 @@ public class PushNotificationService {
       Double distMeters = distanceByHelper == null ? null : distanceByHelper.get(helperId);
       String distanceText = formatDistanceMeters(distMeters);
       String title = distanceText == null ? "New task nearby" : "New task " + distanceText + " away";
+      long budgetPaise = task.getBudgetPaise() == null ? 0L : Math.max(0L, task.getBudgetPaise());
+      String amountText = formatAmountInr(budgetPaise);
+      String bodyTitle = task.getTitle() == null || task.getTitle().isBlank() ? "Task" : task.getTitle();
+      String body = amountText == null ? bodyTitle : bodyTitle + " • " + amountText;
 
       try {
         MulticastMessage.Builder builder = MulticastMessage.builder()
             .addAllTokens(tokenList)
             .setNotification(Notification.builder()
                 .setTitle(title)
-                .setBody(task.getTitle() == null ? "Tap to view details" : task.getTitle())
+                .setBody(body)
                 .build())
             .putData("type", "TASK_OFFERED")
             .putData("taskId", task.getId().toString())
             .putData("title", task.getTitle() == null ? "Task" : task.getTitle())
             .putData("urgency", task.getUrgency().name())
+            .putData("budgetPaise", String.valueOf(budgetPaise))
+            .putData("amountText", amountText == null ? "" : amountText)
             .putData("lat", String.valueOf(task.getLat()))
             .putData("lng", String.valueOf(task.getLng()));
 
@@ -122,10 +128,14 @@ public class PushNotificationService {
    * formatting.
    */
   public void notifyTaskCreated(List<UUID> helperIds, TaskEntity task) {
+    notifyTaskCreated(helperIds, task, null);
+  }
+
+  public void notifyTaskCreated(List<UUID> helperIds, TaskEntity task, Map<UUID, Double> distanceByHelper) {
     // reuse the same implementation as offered, helpers will see a notification
     // that looks identical to an offer (title/body) and the app treats it the
     // same way (refresh available tasks).
-    notifyTaskOffered(helperIds, task);
+    notifyTaskOffered(helperIds, task, distanceByHelper);
   }
 
   private String formatDistanceMeters(Double meters) {
@@ -134,6 +144,12 @@ public class PushNotificationService {
       return Math.round(meters) + " meters";
     }
     return String.format("%.1f km", meters / 1000.0);
+  }
+
+  private String formatAmountInr(long paise) {
+    if (paise <= 0) return null;
+    long rupees = Math.round(paise / 100.0);
+    return "₹" + rupees;
   }
 
   public void notifyBuyerTaskAccepted(UUID buyerId, TaskEntity task) {

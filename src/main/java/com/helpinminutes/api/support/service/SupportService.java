@@ -11,6 +11,7 @@ import com.helpinminutes.api.support.dto.AdminTicketResponse;
 import com.helpinminutes.api.support.dto.AdminUpdateTicketStatusRequest;
 import com.helpinminutes.api.support.dto.AiDraftResponse;
 import com.helpinminutes.api.support.dto.CreateTicketRequest;
+import com.helpinminutes.api.support.dto.SupportHandoffRequest;
 import com.helpinminutes.api.support.dto.TicketDetailResponse;
 import com.helpinminutes.api.support.dto.TicketMessageResponse;
 import com.helpinminutes.api.support.dto.TicketResponse;
@@ -30,7 +31,6 @@ import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
@@ -131,6 +131,39 @@ public class SupportService {
     return toMessageResponse(m);
   }
 
+  @Transactional
+  public TicketDetailResponse handoffToAdmin(UUID userId, UUID ticketId, SupportHandoffRequest req) {
+    SupportTicketEntity t = tickets.findById(ticketId).orElseThrow(() -> new NotFoundException("Ticket not found"));
+    if (!t.getCreatedByUserId().equals(userId)) {
+      throw new ForbiddenException("Not your ticket");
+    }
+    if (t.getStatus() == SupportTicketStatus.CLOSED) {
+      throw new BadRequestException("Ticket is closed");
+    }
+
+    String reason = trimOrNull(req == null ? null : req.reason());
+    String msg = reason == null
+        ? "Conversation transferred to admin support."
+        : "Conversation transferred to admin support: " + reason;
+
+    SupportMessageEntity systemMsg = new SupportMessageEntity();
+    systemMsg.setTicketId(ticketId);
+    systemMsg.setAuthorType(SupportAuthorType.SYSTEM);
+    systemMsg.setAuthorUserId(null);
+    systemMsg.setMessage(msg);
+    systemMsg = messages.save(systemMsg);
+
+    t.setStatus(SupportTicketStatus.IN_PROGRESS);
+    if (t.getPriority() == SupportTicketPriority.LOW) {
+      t.setPriority(SupportTicketPriority.NORMAL);
+    }
+    t.setAssigneeUserId(null);
+    t.setLastMessageAt(systemMsg.getCreatedAt());
+    tickets.save(t);
+
+    return getMyTicket(userId, ticketId);
+  }
+
   private void applyEscalationRules(SupportTicketEntity ticket, String message) {
     String text = message == null ? "" : message.toLowerCase(Locale.ROOT);
     boolean safety = ticket.getCategory() == SupportTicketCategory.SAFETY;
@@ -150,6 +183,9 @@ public class SupportService {
   }
 
   private void maybeAutoReply(SupportTicketEntity ticket) {
+    if (ticket.getStatus() != SupportTicketStatus.OPEN) {
+      return;
+    }
     String enabled = System.getenv("SUPPORT_AI_AUTOREPLY");
     if (enabled == null || !"true".equalsIgnoreCase(enabled)) {
       return;

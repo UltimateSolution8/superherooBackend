@@ -76,8 +76,17 @@ public class NotificationWorker {
             case TASK_CREATED -> {
                 if (task != null) {
                     List<UUID> helperIds = job.helperIds();
+                    Map<UUID, Double> distanceByHelper = new HashMap<>();
+                    if (helperIds != null) {
+                        for (UUID helperId : helperIds) {
+                            var state = presence.getHelperState(helperId);
+                            if (state == null) continue;
+                            double dist = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
+                            distanceByHelper.put(helperId, dist);
+                        }
+                    }
                     // just in case, reuse the offered notification logic which already filters tokens
-                    pushNotifications.notifyTaskCreated(helperIds, task);
+                    pushNotifications.notifyTaskCreated(helperIds, task, distanceByHelper);
                 }
             }
             case KYC_APPROVED -> {

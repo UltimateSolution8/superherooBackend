@@ -3,6 +3,7 @@ package com.helpinminutes.api.support.controller;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.support.dto.AddMessageRequest;
 import com.helpinminutes.api.support.dto.CreateTicketRequest;
+import com.helpinminutes.api.support.dto.SupportHandoffRequest;
 import com.helpinminutes.api.support.dto.TicketDetailResponse;
 import com.helpinminutes.api.support.dto.TicketMessageResponse;
 import com.helpinminutes.api.support.dto.TicketResponse;
@@ -53,5 +54,12 @@ public class SupportController {
       @Valid @RequestBody AddMessageRequest req) {
     return support.addMyMessage(principal.userId(), ticketId, req);
   }
-}
 
+  @PostMapping("/tickets/{ticketId}/handoff")
+  public TicketDetailResponse handoff(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID ticketId,
+      @RequestBody(required = false) SupportHandoffRequest req) {
+    return support.handoffToAdmin(principal.userId(), ticketId, req);
+  }
+}

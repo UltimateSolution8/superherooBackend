@@ -11,6 +11,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -63,12 +64,15 @@ public class SupportAiService {
       JsonNode req = mapper.createObjectNode()
           .put("model", model)
           .put("temperature", 0.2)
+          .put("max_tokens", 140)
           .set("messages", mapper.createArrayNode()
               .add(mapper.createObjectNode()
                   .put("role", "system")
                   .put("content",
                       "You are a support agent for Superheroo (a hyperlocal urgent micro-help marketplace). " +
-                          "Write a helpful, concise reply. Do not ask for sensitive data (OTP, bank, Aadhaar). " +
+                          "Write a very short, clear reply in at most 2 short sentences and under 45 words. " +
+                          "Do not use greetings/sign-offs like 'Best regards'/'Thanks'. " +
+                          "Do not ask for sensitive data (OTP, bank, Aadhaar). " +
                           "If safety-related, advise contacting local authorities and confirm escalation. " +
                           "Follow platform policy: no illegal tasks, harassment, adult services, weapons, drugs."))
               .add(mapper.createObjectNode()
@@ -104,7 +108,7 @@ public class SupportAiService {
       if (content == null || content.isBlank()) {
         return AiDraftResponse.disabled("LLM returned empty response");
       }
-      return AiDraftResponse.enabled(content.trim());
+      return AiDraftResponse.enabled(normalizeDraft(content));
     } catch (Exception e) {
       return AiDraftResponse.disabled("LLM call failed");
     }
@@ -125,8 +129,48 @@ public class SupportAiService {
       sb.append(m.getAuthorType()).append(": ").append(m.getMessage()).append("\n");
     }
 
-    sb.append("\nWrite the best next reply as SUPPORT (admin).");
+    sb.append("\nWrite the next SUPPORT reply in max 2 short sentences.");
     return sb.toString();
+  }
+
+  private static String normalizeDraft(String raw) {
+    String text = raw == null ? "" : raw.trim();
+    if (text.isEmpty()) return text;
+    text = text.replaceAll("(?i)\\b(best regards|regards|warm regards|thanks|thank you)\\b[\\s\\S]*$", "").trim();
+    text = text.replaceAll("\\s+", " ");
+    if (text.isEmpty()) return "Thanks for reaching out. A support agent will assist you shortly.";
+
+    String[] sentences = text.split("(?<=[.!?])\\s+");
+    StringBuilder out = new StringBuilder();
+    int sentenceCount = 0;
+    int wordCount = 0;
+    for (String sentence : sentences) {
+      String s = sentence == null ? "" : sentence.trim();
+      if (s.isEmpty()) continue;
+      String[] words = s.split("\\s+");
+      if (wordCount + words.length > 45) break;
+      if (out.length() > 0) out.append(' ');
+      out.append(s);
+      wordCount += words.length;
+      sentenceCount++;
+      if (sentenceCount >= 2) break;
+    }
+    String compact = out.toString().trim();
+    if (compact.isEmpty()) {
+      String[] words = text.split("\\s+");
+      if (words.length <= 45) return text;
+      StringBuilder fallback = new StringBuilder();
+      for (int i = 0; i < Math.min(words.length, 45); i++) {
+        if (i > 0) fallback.append(' ');
+        fallback.append(words[i]);
+      }
+      return fallback.toString();
+    }
+    String lower = compact.toLowerCase(Locale.ROOT);
+    if (lower.endsWith("best regards") || lower.endsWith("regards") || lower.endsWith("thanks")) {
+      compact = compact.replaceAll("(?i)\\s*(best regards|regards|thanks)\\.?$", "").trim();
+    }
+    return compact;
   }
 
   private static String env(String key) {
