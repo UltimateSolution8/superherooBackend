@@ -17,8 +17,11 @@ import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -46,9 +49,16 @@ public class AdminService {
   }
 
   public List<PendingHelperResponse> listPendingHelpers() {
-    return helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING).stream()
+    List<HelperProfileEntity> pending = helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING);
+    if (pending.isEmpty()) {
+      return List.of();
+    }
+    List<UUID> userIds = pending.stream().map(HelperProfileEntity::getUserId).toList();
+    Map<UUID, String> phoneByUserId = new HashMap<>();
+    users.findAllById(userIds).forEach(u -> phoneByUserId.put(u.getId(), u.getPhone()));
+    return pending.stream()
         .map(hp -> {
-          String phone = users.findById(hp.getUserId()).map(u -> u.getPhone()).orElse(null);
+          String phone = phoneByUserId.get(hp.getUserId());
           return new PendingHelperResponse(
               hp.getUserId(),
               phone,
@@ -116,8 +126,20 @@ public class AdminService {
   }
 
   public List<AdminManagedUserResponse> listUsersByRole(UserRole role) {
-    return users.findTop200ByRoleOrderByCreatedAtDesc(role).stream()
-        .map(this::toManagedResponse)
+    List<UserEntity> usersByRole = users.findTop200ByRoleOrderByCreatedAtDesc(role);
+    if (usersByRole.isEmpty()) {
+      return List.of();
+    }
+    Map<UUID, HelperProfileEntity> helperProfileByUserId = Collections.emptyMap();
+    if (role == UserRole.HELPER) {
+      List<UUID> helperIds = usersByRole.stream().map(UserEntity::getId).toList();
+      Map<UUID, HelperProfileEntity> map = new HashMap<>();
+      helperProfiles.findAllById(helperIds).forEach(hp -> map.put(hp.getUserId(), hp));
+      helperProfileByUserId = map;
+    }
+    Map<UUID, HelperProfileEntity> finalHelperProfileByUserId = helperProfileByUserId;
+    return usersByRole.stream()
+        .map(u -> toManagedResponse(u, finalHelperProfileByUserId.get(u.getId())))
         .toList();
   }
 
@@ -157,7 +179,7 @@ public class AdminService {
         return helperProfiles.save(hp);
       });
     }
-    return toManagedResponse(u);
+    return toManagedResponse(u, role == UserRole.HELPER ? helperProfiles.findById(u.getId()).orElse(null) : null);
   }
 
   @Transactional
@@ -198,7 +220,7 @@ public class AdminService {
       u.setStatus(parseStatusOrDefault(req.status(), u.getStatus()));
     }
     users.save(u);
-    return toManagedResponse(u);
+    return toManagedResponse(u, role == UserRole.HELPER ? helperProfiles.findById(u.getId()).orElse(null) : null);
   }
 
   @Transactional
@@ -215,8 +237,7 @@ public class AdminService {
     users.save(u);
   }
 
-  private AdminManagedUserResponse toManagedResponse(UserEntity u) {
-    HelperProfileEntity hp = u.getRole() == UserRole.HELPER ? helperProfiles.findById(u.getId()).orElse(null) : null;
+  private AdminManagedUserResponse toManagedResponse(UserEntity u, HelperProfileEntity hp) {
     return new AdminManagedUserResponse(
         u.getId(),
         u.getRole(),
