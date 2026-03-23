@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class HelperPresenceService {
+  private static final String ONLINE_HELPERS_KEY = "him:online:helpers";
   private final StringRedisTemplate redis;
   private final H3Core h3;
   private final AppProperties props;
@@ -40,6 +41,7 @@ public class HelperPresenceService {
     redis.opsForHash().put(stateKey, "lastSeenEpochMs", Long.toString(Instant.now().toEpochMilli()));
 
     redis.opsForSet().add(keyOnlineH3(newCell), helperId.toString());
+    redis.opsForSet().add(ONLINE_HELPERS_KEY, helperId.toString());
   }
 
   public void setOffline(UUID helperId) {
@@ -51,6 +53,7 @@ public class HelperPresenceService {
 
     redis.opsForHash().put(stateKey, "online", "0");
     redis.opsForHash().put(stateKey, "lastSeenEpochMs", Long.toString(Instant.now().toEpochMilli()));
+    redis.opsForSet().remove(ONLINE_HELPERS_KEY, helperId.toString());
   }
 
 
@@ -84,6 +87,23 @@ public class HelperPresenceService {
         .collect(Collectors.toSet());
 
     return helperIds.stream().map(UUID::fromString).collect(Collectors.toSet());
+  }
+
+  public Set<UUID> getOnlineHelpers() {
+    Set<String> helperIds = redis.opsForSet().members(ONLINE_HELPERS_KEY);
+    if (helperIds == null || helperIds.isEmpty()) {
+      return Set.of();
+    }
+    return helperIds.stream()
+        .map(raw -> {
+          try {
+            return UUID.fromString(raw);
+          } catch (Exception ignored) {
+            return null;
+          }
+        })
+        .filter(java.util.Objects::nonNull)
+        .collect(Collectors.toSet());
   }
 
   public record HelperState(
