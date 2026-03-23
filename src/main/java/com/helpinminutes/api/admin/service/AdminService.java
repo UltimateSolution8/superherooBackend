@@ -5,6 +5,7 @@ import com.helpinminutes.api.admin.dto.AdminManagedUserResponse;
 import com.helpinminutes.api.admin.dto.AdminSummaryResponse;
 import com.helpinminutes.api.admin.dto.AdminUpdateUserRequest;
 import com.helpinminutes.api.admin.dto.PendingHelperResponse;
+import com.helpinminutes.api.common.InputValidators;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
@@ -145,8 +146,8 @@ public class AdminService {
 
   @Transactional
   public AdminManagedUserResponse createUser(UserRole role, AdminCreateUserRequest req) {
-    String phone = trimOrNull(req.phone());
-    String email = normalizeEmailOrNull(req.email());
+    String phone = InputValidators.normalizeIndianPhoneOrNull(req.phone());
+    String email = InputValidators.normalizeEmailOrNull(req.email());
     String displayName = trimOrNull(req.displayName());
     String password = trimOrNull(req.password());
 
@@ -189,8 +190,8 @@ public class AdminService {
       throw new BadRequestException("User role mismatch");
     }
 
-    String phone = trimOrNull(req.phone());
-    String email = normalizeEmailOrNull(req.email());
+    String phone = InputValidators.normalizeIndianPhoneOrNull(req.phone());
+    String email = InputValidators.normalizeEmailOrNull(req.email());
 
     if (phone != null && !phone.equals(u.getPhone())) {
       users.findByPhone(phone).ifPresent(existing -> {
@@ -268,10 +269,5 @@ public class AdminService {
     if (s == null) return null;
     String t = s.trim();
     return t.isBlank() ? null : t;
-  }
-
-  private static String normalizeEmailOrNull(String s) {
-    if (s == null || s.isBlank()) return null;
-    return s.trim().toLowerCase(Locale.ROOT);
   }
 }

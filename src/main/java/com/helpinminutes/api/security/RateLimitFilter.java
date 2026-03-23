@@ -22,6 +22,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
   private final int otpVerifyPerMin = intEnv("RATE_LIMIT_OTP_VERIFY_PER_MIN", 10);
   private final int loginPerMin = intEnv("RATE_LIMIT_LOGIN_PER_MIN", 12);
   private final int signupPerMin = intEnv("RATE_LIMIT_SIGNUP_PER_MIN", 6);
+  private final int helperKycSignupPerMin = intEnv("RATE_LIMIT_HELPER_KYC_SIGNUP_PER_MIN", 4);
+  private final int refreshPerMin = intEnv("RATE_LIMIT_REFRESH_PER_MIN", 30);
 
   @Override
   protected void doFilterInternal(
@@ -51,8 +53,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
       limit = otpVerifyPerMin;
     } else if (path.endsWith("/api/v1/auth/password/login")) {
       limit = loginPerMin;
+    } else if (path.endsWith("/api/v1/auth/password/signup/helper-kyc")) {
+      limit = helperKycSignupPerMin;
     } else if (path.endsWith("/api/v1/auth/password/signup")) {
       limit = signupPerMin;
+    } else if (path.endsWith("/api/v1/auth/refresh")) {
+      limit = refreshPerMin;
     } else {
       return false;
     }

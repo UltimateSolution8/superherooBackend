@@ -5,6 +5,7 @@ import com.helpinminutes.api.auth.dto.HelperKycSignupRequest;
 import com.helpinminutes.api.auth.model.RefreshTokenEntity;
 import com.helpinminutes.api.auth.repo.RefreshTokenRepository;
 import com.helpinminutes.api.common.HashUtils;
+import com.helpinminutes.api.common.InputValidators;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
@@ -18,7 +19,6 @@ import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
-import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -132,12 +132,12 @@ public class AuthService {
     if (role == UserRole.ADMIN) {
       throw new BadRequestException("Admin signup is disabled");
     }
-    String em = normalizeEmail(email);
+    String em = InputValidators.requireEmail(email);
     if (users.findByEmail(em).isPresent()) {
       throw new BadRequestException("Email already in use");
     }
 
-    String normalizedPhone = normalizePhoneOrNull(phone);
+    String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(phone);
     if (normalizedPhone != null && users.findByPhone(normalizedPhone).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
@@ -167,12 +167,12 @@ public class AuthService {
       MultipartFile idFront,
       MultipartFile idBack,
       MultipartFile selfie) {
-    String em = normalizeEmail(req.email());
+    String em = InputValidators.requireEmail(req.email());
     if (users.findByEmail(em).isPresent()) {
       throw new BadRequestException("Email already in use");
     }
 
-    String normalizedPhone = normalizePhoneOrNull(req.phone());
+    String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(req.phone());
     if (normalizedPhone != null && users.findByPhone(normalizedPhone).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
@@ -209,7 +209,7 @@ public class AuthService {
 
   @Transactional
   public AuthResponse loginWithPassword(String email, String password) {
-    String em = normalizeEmail(email);
+    String em = InputValidators.requireEmail(email);
     UserEntity user = users.findByEmail(em).orElseThrow(() -> new BadRequestException("Invalid credentials"));
     if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
       throw new BadRequestException("Password login not enabled for this user");
@@ -248,19 +248,6 @@ public class AuthService {
       hp.setKycStatus(HelperKycStatus.PENDING);
       return helperProfiles.save(hp);
     });
-  }
-
-  private static String normalizeEmail(String email) {
-    if (email == null || email.isBlank()) {
-      throw new BadRequestException("email is required");
-    }
-    return email.trim().toLowerCase(Locale.ROOT);
-  }
-
-  private static String normalizePhoneOrNull(String phone) {
-    if (phone == null) return null;
-    String p = phone.trim();
-    return p.isBlank() ? null : p;
   }
 
   private static String trimOrNull(String s) {

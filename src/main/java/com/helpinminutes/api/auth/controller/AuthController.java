@@ -10,7 +10,10 @@ import com.helpinminutes.api.auth.dto.PasswordSignupRequest;
 import com.helpinminutes.api.auth.dto.RefreshRequest;
 import com.helpinminutes.api.auth.service.AuthService;
 import com.helpinminutes.api.config.AppProperties;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,8 +21,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.validation.annotation.Validated;
 
 @RestController
+@Validated
 @RequestMapping("/api/v1/auth")
 public class AuthController {
   private final AuthService auth;
@@ -58,12 +63,14 @@ public class AuthController {
 
   @PostMapping(value = "/password/signup/helper-kyc", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public AuthResponse helperKycSignup(
-      @RequestParam String email,
-      @RequestParam String password,
-      @RequestParam(required = false) String phone,
+      @RequestParam @NotBlank @Email String email,
+      @RequestParam @NotBlank String password,
+      @RequestParam(required = false) @Pattern(
+          regexp = "^(|[6-9]\\d{9}|91[6-9]\\d{9}|0[6-9]\\d{9})$",
+          message = "phone must be a valid Indian mobile number") String phone,
       @RequestParam(required = false) String displayName,
-      @RequestParam String fullName,
-      @RequestParam String idNumber,
+      @RequestParam @NotBlank String fullName,
+      @RequestParam @NotBlank String idNumber,
       @RequestParam("idFront") MultipartFile idFront,
       @RequestParam("idBack") MultipartFile idBack,
       @RequestParam("selfie") MultipartFile selfie) {
