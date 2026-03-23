@@ -7,7 +7,7 @@ import jakarta.validation.constraints.Pattern;
 public record HelperKycSignupRequest(
     @NotBlank @Email String email,
     @NotBlank String password,
-    @Pattern(regexp = "^\\d{10}$", message = "phone must be 10 digits") String phone,
+    @Pattern(regexp = "^[6-9]\\d{9}$", message = "phone must be a valid Indian mobile number") String phone,
     String displayName,
     @NotBlank String fullName,
     @NotBlank String idNumber

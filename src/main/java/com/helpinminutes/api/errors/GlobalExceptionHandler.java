@@ -1,14 +1,19 @@
 package com.helpinminutes.api.errors;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import java.util.HashMap;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 
 @ControllerAdvice
 public class GlobalExceptionHandler {
@@ -24,6 +29,27 @@ public class GlobalExceptionHandler {
     details.put("path", req.getRequestURI());
     return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .body(ApiError.of("VALIDATION_ERROR", "Invalid request", details));
+  }
+
+  @ExceptionHandler(ConstraintViolationException.class)
+  public ResponseEntity<ApiError> handleConstraintViolation(ConstraintViolationException ex, HttpServletRequest req) {
+    Map<String, String> fieldErrors = new HashMap<>();
+    for (ConstraintViolation<?> violation : ex.getConstraintViolations()) {
+      String path = violation.getPropertyPath() == null ? "request" : violation.getPropertyPath().toString();
+      String field = path.contains(".") ? path.substring(path.lastIndexOf('.') + 1) : path;
+      fieldErrors.put(field, violation.getMessage());
+    }
+    Map<String, Object> details = new HashMap<>();
+    details.put("fields", fieldErrors);
+    details.put("path", req.getRequestURI());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(ApiError.of("VALIDATION_ERROR", "Invalid request", details));
+  }
+
+  @ExceptionHandler({HttpMessageNotReadableException.class, MultipartException.class, MaxUploadSizeExceededException.class})
+  public ResponseEntity<ApiError> handleMalformedRequest(Exception ex, HttpServletRequest req) {
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+        .body(ApiError.of("BAD_REQUEST", "Invalid request payload", Map.of("path", req.getRequestURI())));
   }
 
   @ExceptionHandler(NotFoundException.class)
