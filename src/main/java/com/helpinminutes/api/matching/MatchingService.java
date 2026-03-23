@@ -72,7 +72,7 @@ public class MatchingService {
         log.info("Helper {} raw state: {}, online={}, lastSeen={}", helperId, state,
             state != null ? state.online() : "null", state != null ? state.lastSeenEpochMs() : "null");
 
-        if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
+        if (!isEligibleOnlineHelper(state)) {
           log.warn("Helper {} is not fully online. State: {}", helperId, state);
           continue;
         }
@@ -86,6 +86,22 @@ public class MatchingService {
         }
         bestDistanceByHelper.merge(helperId, distMeters, Math::min);
       }
+    }
+
+    // Fallback path: if cell-index matching returns zero helpers, use globally online
+    // helper set and compute distance directly. This keeps offers/realtime robust even if
+    // a helper misses cell bucket updates.
+    if (bestDistanceByHelper.isEmpty()) {
+      for (UUID helperId : presence.getOnlineHelpers()) {
+        if (helperId.equals(task.getBuyerId())) continue;
+        var state = presence.getHelperState(helperId);
+        if (!isEligibleOnlineHelper(state)) continue;
+        double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
+        if (distMeters <= 3000d) {
+          bestDistanceByHelper.merge(helperId, distMeters, Math::min);
+        }
+      }
+      log.info("Fallback matching found {} online helpers near task {}", bestDistanceByHelper.size(), task.getId());
     }
 
     List<Candidate> candidates = bestDistanceByHelper.entrySet().stream()
@@ -144,6 +160,15 @@ public class MatchingService {
     notificationQueue.enqueueTaskOffered(helperIds, task);
 
     return helperIds;
+  }
+
+  private boolean isEligibleOnlineHelper(HelperPresenceService.HelperState state) {
+    if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
+      return false;
+    }
+    long staleMs = Math.max(10, props.matching().helperStaleAfterSeconds()) * 1000L;
+    long ageMs = Math.max(0L, Instant.now().toEpochMilli() - state.lastSeenEpochMs());
+    return ageMs <= staleMs;
   }
 
   private record Candidate(UUID helperId, double distanceMeters) {
