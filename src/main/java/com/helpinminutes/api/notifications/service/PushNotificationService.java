@@ -8,6 +8,8 @@ import com.google.firebase.messaging.MulticastMessage;
 import com.google.firebase.messaging.Notification;
 import com.helpinminutes.api.notifications.model.PushTokenEntity;
 import com.helpinminutes.api.tasks.model.TaskEntity;
+import com.helpinminutes.api.users.model.UserRole;
+import com.helpinminutes.api.users.repo.UserRepository;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,14 +29,17 @@ public class PushNotificationService {
   private static final Logger log = LoggerFactory.getLogger(PushNotificationService.class);
 
   private final PushTokenService tokens;
+  private final UserRepository users;
   private final FirebaseMessaging messaging;
 
   public PushNotificationService(
       PushTokenService tokens,
+      UserRepository users,
       @Value("${FIREBASE_SERVICE_ACCOUNT_JSON:}") String serviceAccountJson,
       @Value("${FIREBASE_SERVICE_ACCOUNT_BASE64:}") String serviceAccountBase64,
       @Value("${FIREBASE_SERVICE_ACCOUNT_PATH:}") String serviceAccountPath) {
     this.tokens = tokens;
+    this.users = users;
     this.messaging = initFirebase(serviceAccountJson, serviceAccountBase64, serviceAccountPath);
   }
 
@@ -82,6 +87,10 @@ public class PushNotificationService {
     }
 
     for (UUID helperId : helperIds) {
+      // Hard guard: task-created/offered notifications are for helpers only.
+      if (users.findById(helperId).map(u -> u.getRole() != UserRole.HELPER).orElse(true)) {
+        continue;
+      }
       List<String> tokenList = tokensByUser.get(helperId);
       if (tokenList == null || tokenList.isEmpty()) continue;
 
