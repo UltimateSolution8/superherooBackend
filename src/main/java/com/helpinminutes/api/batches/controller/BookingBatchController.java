@@ -61,5 +61,26 @@ public class BookingBatchController {
       @PathVariable UUID batchId) {
     return service.getLive(principal.userId(), principal.role(), batchId);
   }
-}
 
+  @PostMapping("/{batchId}/items/{itemId}/retry")
+  public BatchDtos.BatchItemResponse retryItem(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @PathVariable UUID itemId) {
+    return service.retryItem(principal.userId(), principal.role(), batchId, itemId);
+  }
+
+  @PostMapping("/{batchId}/items/{itemId}/cancel")
+  public BatchDtos.BatchItemResponse cancelItem(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @PathVariable UUID itemId,
+      @Valid @RequestBody(required = false) BatchDtos.ItemActionRequest req) {
+    return service.cancelItem(
+        principal.userId(),
+        principal.role(),
+        batchId,
+        itemId,
+        req == null ? null : req.reason());
+  }
+}

@@ -101,7 +101,13 @@ public class BatchDtos {
       String taskTitle,
       String helperId,
       String helperName,
-      Double helperDistanceMeters
+      Double helperDistanceMeters,
+      boolean canRetry,
+      boolean canCancel
+  ) {}
+
+  public record ItemActionRequest(
+      @Size(max = 250) String reason
   ) {}
 
   public record BatchLiveResponse(

@@ -39,6 +39,9 @@ public class BookingBatchItemEntity {
   @Column(name = "error_message")
   private String errorMessage;
 
+  @Column(name = "payload_json")
+  private String payloadJson;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -120,8 +123,15 @@ public class BookingBatchItemEntity {
     this.errorMessage = errorMessage;
   }
 
+  public String getPayloadJson() {
+    return payloadJson;
+  }
+
+  public void setPayloadJson(String payloadJson) {
+    this.payloadJson = payloadJson;
+  }
+
   public Instant getCreatedAt() {
     return createdAt;
   }
 }
-

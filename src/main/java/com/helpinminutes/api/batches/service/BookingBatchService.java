@@ -1,5 +1,6 @@
 package com.helpinminutes.api.batches.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.batches.dto.BatchDtos;
 import com.helpinminutes.api.batches.model.BookingBatchEntity;
 import com.helpinminutes.api.batches.model.BookingBatchEventEntity;
@@ -14,6 +15,7 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
+import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
@@ -40,6 +42,7 @@ public class BookingBatchService {
   private final TaskService tasks;
   private final TaskRepository taskRepo;
   private final UserRepository users;
+  private final ObjectMapper objectMapper;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -47,13 +50,15 @@ public class BookingBatchService {
       BookingBatchEventRepository events,
       TaskService tasks,
       TaskRepository taskRepo,
-      UserRepository users) {
+      UserRepository users,
+      ObjectMapper objectMapper) {
     this.batches = batches;
     this.items = items;
     this.events = events;
     this.tasks = tasks;
     this.taskRepo = taskRepo;
     this.users = users;
+    this.objectMapper = objectMapper;
   }
 
   public BatchDtos.PreviewResponse preview(BatchDtos.PreviewRequest req) {
@@ -73,9 +78,7 @@ public class BookingBatchService {
   @Transactional
   public BatchDtos.CreateResponse create(UUID actorUserId, UserRole actorRole, BatchDtos.CreateRequest req) {
     UUID buyerId = resolveBuyer(actorUserId, actorRole, req.buyerId());
-    if (req.items().isEmpty()) {
-      throw new BadRequestException("At least one item is required");
-    }
+    if (req.items().isEmpty()) throw new BadRequestException("At least one item is required");
     if (req.scheduledWindowStart() != null && req.scheduledWindowEnd() != null
         && req.scheduledWindowEnd().isBefore(req.scheduledWindowStart())) {
       throw new BadRequestException("scheduledWindowEnd must be after scheduledWindowStart");
@@ -85,8 +88,7 @@ public class BookingBatchService {
       var existing = batches.findByCreatedByUserIdAndIdempotencyKey(buyerId, req.idempotencyKey().trim());
       if (existing.isPresent()) {
         BatchDtos.BatchSummaryResponse summary = getSummary(actorUserId, actorRole, existing.get().getId());
-        Map<String, Long> by = summary.byTaskStatus();
-        long totalCreated = by.values().stream().mapToLong(Long::longValue).sum();
+        long totalCreated = summary.byTaskStatus().values().stream().mapToLong(Long::longValue).sum();
         long failed = Math.max(0, req.items().size() - totalCreated);
         return new BatchDtos.CreateResponse(existing.get().getId(), req.items().size(), (int) totalCreated, (int) failed, existing.get().getStatus().name());
       }
@@ -118,10 +120,11 @@ public class BookingBatchService {
       item.setLineNo(i + 1);
       item.setExternalRef(blankToNull(line.externalRef()));
       item.setPriority(line.priority() == null ? 3 : line.priority());
+      item.setPayloadJson(toJson(line));
+
       List<String> errors = validateLine(new BatchDtos.PreviewItem(
           line.title(), line.description(), line.urgency(), line.timeMinutes(), line.budgetPaise(),
           line.lat(), line.lng(), line.addressText(), line.scheduledAt()));
-
       if (!errors.isEmpty()) {
         item.setLineStatus(BookingBatchLineStatus.FAILED);
         item.setErrorMessage(String.join("; ", errors));
@@ -155,8 +158,58 @@ public class BookingBatchService {
     batch.setStatus(failed > 0 ? BookingBatchStatus.PARTIAL : BookingBatchStatus.COMPLETED);
     batches.save(batch);
     writeEvent(batch.getId(), "BATCH_CREATED", "{\"created\":" + created + ",\"failed\":" + failed + "}");
-
     return new BatchDtos.CreateResponse(batch.getId(), req.items().size(), created, failed, batch.getStatus().name());
+  }
+
+  @Transactional
+  public BatchDtos.BatchItemResponse retryItem(UUID actorUserId, UserRole actorRole, UUID batchId, UUID itemId) {
+    BookingBatchEntity batch = batches.findById(batchId).orElseThrow(() -> new NotFoundException("Batch not found"));
+    ensureAccess(actorUserId, actorRole, batch);
+    BookingBatchItemEntity item = items.findByIdAndBatchId(itemId, batchId).orElseThrow(() -> new NotFoundException("Batch item not found"));
+    TaskEntity existingTask = item.getTaskId() == null ? null : taskRepo.findById(item.getTaskId()).orElse(null);
+    if (!canRetry(item, existingTask)) throw new BadRequestException("Item is not eligible for retry");
+    if (item.getPayloadJson() == null || item.getPayloadJson().isBlank()) throw new BadRequestException("Original line payload is missing");
+
+    try {
+      BatchDtos.CreateItem line = objectMapper.readValue(item.getPayloadJson(), BatchDtos.CreateItem.class);
+      var createResult = tasks.createTask(batch.getCreatedByUserId(), new CreateTaskRequest(
+          line.title().trim(),
+          line.description().trim(),
+          line.urgency(),
+          line.timeMinutes(),
+          line.budgetPaise(),
+          line.lat(),
+          line.lng(),
+          blankToNull(line.addressText()),
+          line.scheduledAt()));
+      item.setTaskId(createResult.taskId());
+      item.setLineStatus(BookingBatchLineStatus.CREATED);
+      item.setErrorMessage(null);
+      items.save(item);
+      writeEvent(batchId, "ITEM_RETRIED", "{\"itemId\":\"" + item.getId() + "\"}");
+    } catch (BadRequestException ex) {
+      throw ex;
+    } catch (Exception ex) {
+      throw new BadRequestException("Could not retry this item");
+    }
+
+    TaskEntity task = item.getTaskId() == null ? null : taskRepo.findById(item.getTaskId()).orElse(null);
+    return toItemResponse(item, task);
+  }
+
+  @Transactional
+  public BatchDtos.BatchItemResponse cancelItem(UUID actorUserId, UserRole actorRole, UUID batchId, UUID itemId, String reason) {
+    BookingBatchEntity batch = batches.findById(batchId).orElseThrow(() -> new NotFoundException("Batch not found"));
+    ensureAccess(actorUserId, actorRole, batch);
+    BookingBatchItemEntity item = items.findByIdAndBatchId(itemId, batchId).orElseThrow(() -> new NotFoundException("Batch item not found"));
+    if (item.getTaskId() == null) throw new BadRequestException("This line does not have a task to cancel");
+
+    TaskEntity task = taskRepo.findById(item.getTaskId()).orElseThrow(() -> new NotFoundException("Task not found"));
+    if (!canCancel(task)) throw new BadRequestException("Only active tasks can be cancelled");
+    tasks.cancelTask(actorUserId, actorRole, task.getId(), blankToNull(reason) == null ? "Cancelled from bulk console" : reason.trim());
+    TaskEntity refreshed = taskRepo.findById(task.getId()).orElse(task);
+    writeEvent(batchId, "ITEM_CANCELLED", "{\"itemId\":\"" + item.getId() + "\"}");
+    return toItemResponse(item, refreshed);
   }
 
   @Transactional(readOnly = true)
@@ -194,20 +247,13 @@ public class BookingBatchService {
     List<BookingBatchItemEntity> batchItems = items.findByBatchIdOrderByLineNoAsc(batchId);
     List<UUID> taskIds = batchItems.stream().map(BookingBatchItemEntity::getTaskId).filter(java.util.Objects::nonNull).toList();
     Map<UUID, TaskEntity> taskById = taskRepo.findAllById(taskIds).stream().collect(Collectors.toMap(TaskEntity::getId, t -> t));
-    return batchItems.stream()
-        .sorted(Comparator.comparingInt(BookingBatchItemEntity::getLineNo))
-        .map(item -> toItemResponse(item, taskById.get(item.getTaskId())))
-        .toList();
+    return batchItems.stream().sorted(Comparator.comparingInt(BookingBatchItemEntity::getLineNo)).map(item -> toItemResponse(item, taskById.get(item.getTaskId()))).toList();
   }
 
   @Transactional(readOnly = true)
   public BatchDtos.BatchLiveResponse getLive(UUID actorUserId, UserRole actorRole, UUID batchId) {
     Map<String, Long> counters = new HashMap<>(getSummary(actorUserId, actorRole, batchId).byTaskStatus());
-    return new BatchDtos.BatchLiveResponse(
-        batchId,
-        "batch:" + batchId,
-        counters,
-        getItems(actorUserId, actorRole, batchId));
+    return new BatchDtos.BatchLiveResponse(batchId, "batch:" + batchId, counters, getItems(actorUserId, actorRole, batchId));
   }
 
   private BatchDtos.BatchItemResponse toItemResponse(BookingBatchItemEntity item, TaskEntity task) {
@@ -223,7 +269,9 @@ public class BookingBatchService {
         task == null ? null : task.getTitle(),
         task == null || task.getAssignedHelperId() == null ? null : task.getAssignedHelperId().toString(),
         null,
-        null);
+        null,
+        canRetry(item, task),
+        canCancel(task));
   }
 
   private List<String> validateLine(BatchDtos.PreviewItem line) {
@@ -268,9 +316,7 @@ public class BookingBatchService {
   private UUID resolveBuyer(UUID actorUserId, UserRole actorRole, UUID buyerIdFromReq) {
     if (actorRole == UserRole.BUYER) return actorUserId;
     if (actorRole == UserRole.ADMIN) {
-      if (buyerIdFromReq == null) {
-        throw new BadRequestException("buyerId is required for admin batch creation");
-      }
+      if (buyerIdFromReq == null) throw new BadRequestException("buyerId is required for admin batch creation");
       return buyerIdFromReq;
     }
     throw new ForbiddenException("Only buyers/admin can create batches");
@@ -280,5 +326,27 @@ public class BookingBatchService {
     if (raw == null) return null;
     String trimmed = raw.trim();
     return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private boolean canRetry(BookingBatchItemEntity item, TaskEntity task) {
+    if (item.getLineStatus() == BookingBatchLineStatus.FAILED) return true;
+    if (task == null) return true;
+    return task.getStatus() == TaskStatus.CANCELLED;
+  }
+
+  private boolean canCancel(TaskEntity task) {
+    if (task == null) return false;
+    return task.getStatus() == TaskStatus.SEARCHING
+        || task.getStatus() == TaskStatus.ASSIGNED
+        || task.getStatus() == TaskStatus.ARRIVED
+        || task.getStatus() == TaskStatus.STARTED;
+  }
+
+  private String toJson(BatchDtos.CreateItem line) {
+    try {
+      return objectMapper.writeValueAsString(line);
+    } catch (Exception ignored) {
+      return null;
+    }
   }
 }
