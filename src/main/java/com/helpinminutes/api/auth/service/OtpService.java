@@ -31,14 +31,15 @@ public class OtpService {
   }
 
   public String startOtp(String phone, String channel) {
+    String recipient = toTwilioRecipient(phone);
     if (twilio.enabled()) {
       try {
         Twilio.init(twilio.accountSid(), twilio.authToken());
         String chosen = normalizeChannel(channel);
-        Verification.creator(twilio.verifyServiceSid(), phone, chosen).create();
+        Verification.creator(twilio.verifyServiceSid(), recipient, chosen).create();
         return null;
       } catch (Exception e) {
-        log.warn("Twilio OTP start failed, falling back to local OTP: {}", e.getMessage());
+        log.warn("Twilio OTP start failed for {} (channel {}), falling back to local OTP: {}", recipient, channel, e.getMessage());
         return createAndStoreLocalOtp(phone);
       }
     }
@@ -72,7 +73,7 @@ public class OtpService {
     if (twilio.enabled()) {
       try {
         Twilio.init(twilio.accountSid(), twilio.authToken());
-        VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid()).setCode(otp).setTo(phone).create();
+        VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid()).setCode(otp).setTo(toTwilioRecipient(phone)).create();
         return "approved".equalsIgnoreCase(check.getStatus());
       } catch (Exception e) {
         log.warn("Twilio OTP verify failed: {}", e.getMessage());
@@ -98,6 +99,15 @@ public class OtpService {
 
   private static String key(String phone) {
     return "him:otp:" + phone;
+  }
+
+  private static String toTwilioRecipient(String phone) {
+    if (phone == null) return null;
+    String normalized = phone.replaceAll("\\s+", "");
+    if (normalized.startsWith("+")) return normalized;
+    if (normalized.matches("^91[6-9]\\d{9}$")) return "+" + normalized;
+    if (normalized.matches("^[6-9]\\d{9}$")) return "+91" + normalized;
+    return normalized;
   }
 
   private String createAndStoreLocalOtp(String phone) {
