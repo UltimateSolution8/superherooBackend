@@ -32,27 +32,20 @@ public class OtpService {
 
   public String startOtp(String phone, String channel) {
     if (twilio.enabled()) {
-      Twilio.init(twilio.accountSid(), twilio.authToken());
-      String chosen = normalizeChannel(channel);
-      Verification.creator(twilio.verifyServiceSid(), phone, chosen).create();
-      return null;
+      try {
+        Twilio.init(twilio.accountSid(), twilio.authToken());
+        String chosen = normalizeChannel(channel);
+        Verification.creator(twilio.verifyServiceSid(), phone, chosen).create();
+        return null;
+      } catch (Exception e) {
+        log.warn("Twilio OTP start failed, falling back to local OTP: {}", e.getMessage());
+        return createAndStoreLocalOtp(phone);
+      }
     }
-    String otp = String.format("%06d", RNG.nextInt(1_000_000));
-    try {
-      redis.opsForValue().set(key(phone), otp, Duration.ofSeconds(props.otp().ttlSeconds()));
-    } catch (Exception e) {
-      log.warn("Redis OTP write failed, falling back to local cache: {}", e.getMessage());
-      localFallback.put(key(phone), new LocalOtp(otp, expiresAtMs()));
-    }
-    return otp;
+    return createAndStoreLocalOtp(phone);
   }
 
   public boolean verifyOtp(String phone, String otp) {
-    if (twilio.enabled()) {
-      Twilio.init(twilio.accountSid(), twilio.authToken());
-      VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid()).setCode(otp).setTo(phone).create();
-      return "approved".equalsIgnoreCase(check.getStatus());
-    }
     String key = key(phone);
     String expected = null;
     try {
@@ -62,22 +55,31 @@ public class OtpService {
     }
     if (expected == null) {
       LocalOtp local = localFallback.get(key);
-      if (local == null || local.isExpired()) {
+      if (local != null && !local.isExpired()) {
+        expected = local.code();
+      } else if (local != null) {
         localFallback.remove(key);
+      }
+    }
+    if (expected != null) {
+      boolean ok = expected.equals(otp);
+      if (ok) {
+        clearLocalOtp(key);
+      }
+      return ok;
+    }
+
+    if (twilio.enabled()) {
+      try {
+        Twilio.init(twilio.accountSid(), twilio.authToken());
+        VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid()).setCode(otp).setTo(phone).create();
+        return "approved".equalsIgnoreCase(check.getStatus());
+      } catch (Exception e) {
+        log.warn("Twilio OTP verify failed: {}", e.getMessage());
         return false;
       }
-      expected = local.code();
     }
-    boolean ok = expected.equals(otp);
-    if (ok) {
-      try {
-        redis.delete(key);
-      } catch (Exception e) {
-        log.warn("Redis OTP delete failed, clearing local cache: {}", e.getMessage());
-      }
-      localFallback.remove(key);
-    }
-    return ok;
+    return false;
   }
 
   private static String normalizeChannel(String channel) {
@@ -96,6 +98,27 @@ public class OtpService {
 
   private static String key(String phone) {
     return "him:otp:" + phone;
+  }
+
+  private String createAndStoreLocalOtp(String phone) {
+    String otp = String.format("%06d", RNG.nextInt(1_000_000));
+    String key = key(phone);
+    try {
+      redis.opsForValue().set(key, otp, Duration.ofSeconds(props.otp().ttlSeconds()));
+    } catch (Exception e) {
+      log.warn("Redis OTP write failed, falling back to local cache: {}", e.getMessage());
+      localFallback.put(key, new LocalOtp(otp, expiresAtMs()));
+    }
+    return otp;
+  }
+
+  private void clearLocalOtp(String key) {
+    try {
+      redis.delete(key);
+    } catch (Exception e) {
+      log.warn("Redis OTP delete failed, clearing local cache: {}", e.getMessage());
+    }
+    localFallback.remove(key);
   }
 
   private long expiresAtMs() {
