@@ -18,7 +18,10 @@ import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
 import jakarta.validation.Valid;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -150,7 +153,7 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @RequestParam(required = false) TaskStatus status) {
     requireAdmin(principal);
-    return tasks.listTasksForAdmin(status).stream().map(this::toTaskResponse).toList();
+    return toTaskResponses(tasks.listTasksForAdmin(status));
   }
 
   @GetMapping("/tasks/recent")
@@ -158,13 +161,13 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @RequestParam(defaultValue = "5") int limit) {
     requireAdmin(principal);
-    return tasks.listRecentTasks(limit).stream().map(this::toTaskResponse).toList();
+    return toTaskResponses(tasks.listRecentTasks(limit));
   }
 
   @GetMapping("/tasks/{taskId}")
   public TaskResponse task(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID taskId) {
     requireAdmin(principal);
-    return toTaskResponse(tasks.getTask(taskId));
+    return toTaskResponses(List.of(tasks.getTask(taskId))).get(0);
   }
 
   @PostMapping("/tasks/{taskId}/status")
@@ -173,76 +176,70 @@ public class AdminController {
       @PathVariable UUID taskId,
       @Valid @RequestBody UpdateTaskStatusRequest req) {
     requireAdmin(principal);
-    return toTaskResponse(tasks.updateStatusAsAdmin(taskId, req.status()));
+    return toTaskResponses(List.of(tasks.updateStatusAsAdmin(taskId, req.status()))).get(0);
   }
 
-  private String resolvePhone(UUID userId) {
-    if (userId == null)
-      return null;
-    UserEntity user = users.findById(userId).orElse(null);
-    return user != null ? user.getPhone() : null;
-  }
-
-  private String resolveName(UUID userId) {
-    if (userId == null)
-      return null;
-    UserEntity user = users.findById(userId).orElse(null);
-    if (user == null)
-      return null;
-    if (user.getDisplayName() != null && !user.getDisplayName().isBlank()) {
-      return user.getDisplayName();
+  private List<TaskResponse> toTaskResponses(List<com.helpinminutes.api.tasks.model.TaskEntity> taskList) {
+    if (taskList == null || taskList.isEmpty()) return List.of();
+    Set<UUID> userIds = taskList.stream()
+        .flatMap(t -> java.util.stream.Stream.of(t.getBuyerId(), t.getAssignedHelperId()))
+        .filter(java.util.Objects::nonNull)
+        .collect(java.util.stream.Collectors.toSet());
+    Map<UUID, UserEntity> userById = new HashMap<>();
+    if (!userIds.isEmpty()) {
+      users.findAllById(userIds).forEach(u -> userById.put(u.getId(), u));
     }
-    return user.getPhone();
-  }
-
-  private TaskResponse toTaskResponse(com.helpinminutes.api.tasks.model.TaskEntity t) {
-    String buyerPhone = resolvePhone(t.getBuyerId());
-    String helperPhone = resolvePhone(t.getAssignedHelperId());
-    String buyerName = resolveName(t.getBuyerId());
-    String helperName = resolveName(t.getAssignedHelperId());
-    return new TaskResponse(
-        t.getId(),
-        t.getBuyerId(),
-        buyerPhone,
-        buyerName,
-        t.getTitle(),
-        t.getDescription(),
-        t.getUrgency(),
-        t.getTimeMinutes(),
-        t.getBudgetPaise(),
-        t.getLat(),
-        t.getLng(),
-        t.getAddressText(),
-        t.getScheduledAt(),
-        t.getStatus(),
-        t.getAssignedHelperId(),
-        helperPhone,
-        helperName,
-        t.getArrivalOtp(),
-        t.getCompletionOtp(),
-        t.getArrivalSelfieUrl(),
-        t.getArrivalSelfieLat(),
-        t.getArrivalSelfieLng(),
-        t.getArrivalSelfieAddress(),
-        t.getArrivalSelfieCapturedAt(),
-        t.getCompletionSelfieUrl(),
-        t.getCompletionSelfieLat(),
-        t.getCompletionSelfieLng(),
-        t.getCompletionSelfieAddress(),
-        t.getCompletionSelfieCapturedAt(),
-        t.getBuyerRating() != null ? t.getBuyerRating().doubleValue() : null,
-        t.getBuyerRatingComment(),
-        t.getBuyerRatedAt(),
-        t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
-        t.getHelperRatingComment(),
-        t.getHelperRatedAt(),
-        null,
-        null,
-        null,
-        null,
-        t.getCancelReason(),
-        t.getCancelledByRole(),
-        t.getCancelledAt(),
-        t.getCreatedAt());
+    return taskList.stream().map(t -> {
+      UserEntity buyer = userById.get(t.getBuyerId());
+      UserEntity helper = userById.get(t.getAssignedHelperId());
+      String buyerPhone = buyer == null ? null : buyer.getPhone();
+      String helperPhone = helper == null ? null : helper.getPhone();
+      String buyerName = buyer == null ? null : (buyer.getDisplayName() != null && !buyer.getDisplayName().isBlank() ? buyer.getDisplayName() : buyer.getPhone());
+      String helperName = helper == null ? null : (helper.getDisplayName() != null && !helper.getDisplayName().isBlank() ? helper.getDisplayName() : helper.getPhone());
+      return new TaskResponse(
+          t.getId(),
+          t.getBuyerId(),
+          buyerPhone,
+          buyerName,
+          t.getTitle(),
+          t.getDescription(),
+          t.getUrgency(),
+          t.getTimeMinutes(),
+          t.getBudgetPaise(),
+          t.getLat(),
+          t.getLng(),
+          t.getAddressText(),
+          t.getScheduledAt(),
+          t.getStatus(),
+          t.getAssignedHelperId(),
+          helperPhone,
+          helperName,
+          t.getArrivalOtp(),
+          t.getCompletionOtp(),
+          t.getArrivalSelfieUrl(),
+          t.getArrivalSelfieLat(),
+          t.getArrivalSelfieLng(),
+          t.getArrivalSelfieAddress(),
+          t.getArrivalSelfieCapturedAt(),
+          t.getCompletionSelfieUrl(),
+          t.getCompletionSelfieLat(),
+          t.getCompletionSelfieLng(),
+          t.getCompletionSelfieAddress(),
+          t.getCompletionSelfieCapturedAt(),
+          t.getBuyerRating() != null ? t.getBuyerRating().doubleValue() : null,
+          t.getBuyerRatingComment(),
+          t.getBuyerRatedAt(),
+          t.getHelperRating() != null ? t.getHelperRating().doubleValue() : null,
+          t.getHelperRatingComment(),
+          t.getHelperRatedAt(),
+          null,
+          null,
+          null,
+          null,
+          t.getCancelReason(),
+          t.getCancelledByRole(),
+          t.getCancelledAt(),
+          t.getCreatedAt());
+    }).toList();
   }
 }
