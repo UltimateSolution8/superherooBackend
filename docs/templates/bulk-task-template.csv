@@ -1,0 +1,3 @@
+title,description,urgency,timeMinutes,budgetPaise,lat,lng,addressText,scheduledAt,externalRef,priority
+AC repair,Split AC not cooling in hall,HIGH,90,120000,12.9716,77.5946,"MG Road, Bengaluru",,SITE-001,2
+Deep cleaning,Kitchen and bathroom deep cleaning,NORMAL,120,180000,12.975,77.605,"Indiranagar, Bengaluru",,SITE-002,3

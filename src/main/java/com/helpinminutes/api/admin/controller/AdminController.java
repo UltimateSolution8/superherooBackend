@@ -1,6 +1,11 @@
 package com.helpinminutes.api.admin.controller;
 
 import com.helpinminutes.api.admin.dto.AdminCreateUserRequest;
+import com.helpinminutes.api.admin.dto.AdminBulkHelperKycActionRequest;
+import com.helpinminutes.api.admin.dto.AdminBulkOperationFailure;
+import com.helpinminutes.api.admin.dto.AdminBulkOperationResponse;
+import com.helpinminutes.api.admin.dto.AdminBulkTaskStatusRequest;
+import com.helpinminutes.api.admin.dto.AdminBulkUserUpdateRequest;
 import com.helpinminutes.api.admin.dto.AdminManagedUserResponse;
 import com.helpinminutes.api.admin.dto.AdminSummaryResponse;
 import com.helpinminutes.api.admin.dto.AdminUpdateUserRequest;
@@ -21,6 +26,7 @@ import jakarta.validation.Valid;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -90,6 +96,14 @@ public class AdminController {
     admin.reopenHelperKyc(helperId);
   }
 
+  @PostMapping("/helpers/pending/bulk-action")
+  public AdminBulkOperationResponse bulkPendingKycAction(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminBulkHelperKycActionRequest req) {
+    requireAdmin(principal);
+    return admin.bulkHelperKycAction(req.helperIds(), req.action(), req.reason());
+  }
+
   @GetMapping("/helpers")
   public List<AdminManagedUserResponse> listHelpers(@AuthenticationPrincipal UserPrincipal principal) {
     requireAdmin(principal);
@@ -111,6 +125,14 @@ public class AdminController {
       @Valid @RequestBody AdminUpdateUserRequest req) {
     requireAdmin(principal);
     return admin.updateUser(helperId, UserRole.HELPER, req);
+  }
+
+  @PostMapping("/helpers/bulk-update")
+  public AdminBulkOperationResponse bulkUpdateHelpers(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminBulkUserUpdateRequest req) {
+    requireAdmin(principal);
+    return admin.bulkUpdateUsers(UserRole.HELPER, req.userIds(), req.status());
   }
 
   @PostMapping("/helpers/{helperId}/delete")
@@ -140,6 +162,14 @@ public class AdminController {
       @Valid @RequestBody AdminUpdateUserRequest req) {
     requireAdmin(principal);
     return admin.updateUser(buyerId, UserRole.BUYER, req);
+  }
+
+  @PostMapping("/buyers/bulk-update")
+  public AdminBulkOperationResponse bulkUpdateBuyers(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminBulkUserUpdateRequest req) {
+    requireAdmin(principal);
+    return admin.bulkUpdateUsers(UserRole.BUYER, req.userIds(), req.status());
   }
 
   @PostMapping("/buyers/{buyerId}/delete")
@@ -177,6 +207,24 @@ public class AdminController {
       @Valid @RequestBody UpdateTaskStatusRequest req) {
     requireAdmin(principal);
     return toTaskResponses(List.of(tasks.updateStatusAsAdmin(taskId, req.status()))).get(0);
+  }
+
+  @PostMapping("/tasks/bulk-status")
+  public AdminBulkOperationResponse bulkUpdateTaskStatus(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminBulkTaskStatusRequest req) {
+    requireAdmin(principal);
+    int success = 0;
+    List<AdminBulkOperationFailure> failures = new ArrayList<>();
+    for (UUID taskId : req.taskIds()) {
+      try {
+        tasks.updateStatusAsAdmin(taskId, req.status());
+        success++;
+      } catch (Exception ex) {
+        failures.add(new AdminBulkOperationFailure(taskId.toString(), ex.getMessage() == null ? "Update failed" : ex.getMessage()));
+      }
+    }
+    return new AdminBulkOperationResponse(req.taskIds().size(), success, failures.size(), failures);
   }
 
   private List<TaskResponse> toTaskResponses(List<com.helpinminutes.api.tasks.model.TaskEntity> taskList) {

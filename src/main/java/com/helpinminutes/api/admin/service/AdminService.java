@@ -1,6 +1,8 @@
 package com.helpinminutes.api.admin.service;
 
 import com.helpinminutes.api.admin.dto.AdminCreateUserRequest;
+import com.helpinminutes.api.admin.dto.AdminBulkOperationFailure;
+import com.helpinminutes.api.admin.dto.AdminBulkOperationResponse;
 import com.helpinminutes.api.admin.dto.AdminManagedUserResponse;
 import com.helpinminutes.api.admin.dto.AdminSummaryResponse;
 import com.helpinminutes.api.admin.dto.AdminUpdateUserRequest;
@@ -24,6 +26,7 @@ import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.LinkedHashSet;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -124,6 +127,55 @@ public class AdminService {
   @Transactional
   public void verifyHelperKyc(UUID helperId) {
     approveHelper(helperId);
+  }
+
+  @Transactional
+  public AdminBulkOperationResponse bulkUpdateUsers(UserRole role, List<UUID> userIds, String statusRaw) {
+    UserStatus nextStatus = parseStatusOrDefault(statusRaw, null);
+    if (nextStatus == null) {
+      throw new BadRequestException("Invalid status");
+    }
+    List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
+    int success = 0;
+    for (UUID userId : new LinkedHashSet<>(userIds)) {
+      try {
+        UserEntity u = users.findById(userId).orElseThrow(() -> new NotFoundException("User not found"));
+        if (u.getRole() != role) {
+          throw new BadRequestException("User role mismatch");
+        }
+        u.setStatus(nextStatus);
+        users.save(u);
+        success++;
+      } catch (Exception ex) {
+        failures.add(new AdminBulkOperationFailure(userId.toString(), ex.getMessage() == null ? "Update failed" : ex.getMessage()));
+      }
+    }
+    return new AdminBulkOperationResponse(userIds.size(), success, failures.size(), failures);
+  }
+
+  @Transactional
+  public AdminBulkOperationResponse bulkHelperKycAction(List<UUID> helperIds, String actionRaw, String reason) {
+    String action = actionRaw == null ? "" : actionRaw.trim().toUpperCase(Locale.ROOT);
+    if (!"APPROVE".equals(action) && !"REJECT".equals(action) && !"REOPEN".equals(action)) {
+      throw new BadRequestException("Invalid action");
+    }
+
+    List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
+    int success = 0;
+    for (UUID helperId : new LinkedHashSet<>(helperIds)) {
+      try {
+        switch (action) {
+          case "APPROVE" -> approveHelper(helperId);
+          case "REJECT" -> rejectHelper(helperId, reason == null || reason.isBlank() ? "Rejected in bulk action" : reason.trim());
+          case "REOPEN" -> reopenHelperKyc(helperId);
+          default -> throw new BadRequestException("Invalid action");
+        }
+        success++;
+      } catch (Exception ex) {
+        failures.add(new AdminBulkOperationFailure(helperId.toString(), ex.getMessage() == null ? "Action failed" : ex.getMessage()));
+      }
+    }
+    return new AdminBulkOperationResponse(helperIds.size(), success, failures.size(), failures);
   }
 
   public List<AdminManagedUserResponse> listUsersByRole(UserRole role) {
