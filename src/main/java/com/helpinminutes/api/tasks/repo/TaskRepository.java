@@ -4,6 +4,7 @@ import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -36,6 +37,23 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     long countByAssignedHelperIdAndStatus(UUID helperId, TaskStatus status);
 
     long countByBuyerIdAndStatus(UUID buyerId, TaskStatus status);
+
+    boolean existsByAssignedHelperIdAndStatusIn(UUID helperId, Collection<TaskStatus> statuses);
+
+    @Query("""
+            select t from TaskEntity t
+            where t.status = :status
+              and t.assignedHelperId is null
+              and (
+                    (t.scheduledAt is null and t.createdAt <= :cutoff)
+                 or (t.scheduledAt is not null and t.scheduledAt <= :cutoff)
+              )
+            order by t.createdAt asc
+            """)
+    java.util.List<TaskEntity> findTimedOutSearchingTasks(
+            @Param("status") TaskStatus status,
+            @Param("cutoff") Instant cutoff,
+            Pageable pageable);
 
     @Query("select avg(t.buyerRating) from TaskEntity t where t.assignedHelperId = :helperId and t.buyerRating is not null")
     Double avgBuyerRatingForHelper(@Param("helperId") UUID helperId);
