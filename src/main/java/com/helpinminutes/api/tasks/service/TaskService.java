@@ -39,6 +39,10 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class TaskService {
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TaskService.class);
+  private static final java.util.List<TaskStatus> HELPER_ACTIVE_TASK_STATUSES = java.util.List.of(
+      TaskStatus.ASSIGNED,
+      TaskStatus.ARRIVED,
+      TaskStatus.STARTED);
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
   private final MatchingService matching;
@@ -151,8 +155,15 @@ public class TaskService {
 
   @Transactional
   public TaskResponse acceptTask(UUID helperId, UUID taskId) {
+    users.findByIdForUpdate(helperId)
+        .orElseThrow(() -> new ForbiddenException("Helper not found"));
+
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    if (tasks.existsByAssignedHelperIdAndStatusIn(helperId, HELPER_ACTIVE_TASK_STATUSES)) {
+      throw new ConflictException("Finish your current task before accepting another one");
+    }
 
     Instant now = Instant.now();
     var offerOpt = offers.findByTaskIdAndHelperId(taskId, helperId);
@@ -498,6 +509,10 @@ public class TaskService {
   public List<TaskEntity> listAvailableTasks(UUID helperId) {
     var state = presence.getHelperState(helperId);
     if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
+      return java.util.List.of();
+    }
+
+    if (tasks.existsByAssignedHelperIdAndStatusIn(helperId, HELPER_ACTIVE_TASK_STATUSES)) {
       return java.util.List.of();
     }
 

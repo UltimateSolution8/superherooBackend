@@ -8,7 +8,9 @@ import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
+import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
+import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.uber.h3core.H3Core;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,11 +26,16 @@ import org.springframework.transaction.annotation.Transactional;
 public class MatchingService {
   private static final List<Double> EXPANSION_RADII_METERS = List.of(100d, 300d, 600d, 1000d, 1500d, 2000d, 2500d,
       3000d);
+  private static final List<TaskStatus> HELPER_ACTIVE_TASK_STATUSES = List.of(
+      TaskStatus.ASSIGNED,
+      TaskStatus.ARRIVED,
+      TaskStatus.STARTED);
 
   private final AppProperties props;
   private final H3Core h3;
   private final HelperPresenceService presence;
   private final TaskOfferRepository offers;
+  private final TaskRepository tasks;
   private final RealtimePublisher realtime;
   private final NotificationQueueService notificationQueue;
 
@@ -37,12 +44,14 @@ public class MatchingService {
       H3Core h3,
       HelperPresenceService presence,
       TaskOfferRepository offers,
+      TaskRepository tasks,
       RealtimePublisher realtime,
       NotificationQueueService notificationQueue) {
     this.props = props;
     this.h3 = h3;
     this.presence = presence;
     this.offers = offers;
+    this.tasks = tasks;
     this.realtime = realtime;
     this.notificationQueue = notificationQueue;
   }
@@ -54,6 +63,7 @@ public class MatchingService {
     long taskCell = h3.latLngToCell(task.getLat(), task.getLng(), props.matching().h3Resolution());
 
     Map<UUID, Double> bestDistanceByHelper = new HashMap<>();
+    Map<UUID, Boolean> activeTaskByHelper = new HashMap<>();
     int maxKRing = Math.max(props.matching().maxKRing(), 0);
 
     log.info("Matching task {} at {}, {} (cell {}) with maxKRing {}", task.getId(), task.getLat(), task.getLng(),
@@ -66,6 +76,9 @@ public class MatchingService {
       for (UUID helperId : onlineHelpers) {
         if (helperId.equals(task.getBuyerId())) {
           continue; // Don't offer a task to the buyer who created it
+        }
+        if (helperHasActiveTask(helperId, activeTaskByHelper)) {
+          continue;
         }
         var state = presence.getHelperState(helperId);
 
@@ -94,6 +107,7 @@ public class MatchingService {
     if (bestDistanceByHelper.isEmpty()) {
       for (UUID helperId : presence.getOnlineHelpers()) {
         if (helperId.equals(task.getBuyerId())) continue;
+        if (helperHasActiveTask(helperId, activeTaskByHelper)) continue;
         var state = presence.getHelperState(helperId);
         if (!isEligibleOnlineHelper(state)) continue;
         double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
@@ -169,6 +183,12 @@ public class MatchingService {
     long staleMs = Math.max(10, props.matching().helperStaleAfterSeconds()) * 1000L;
     long ageMs = Math.max(0L, Instant.now().toEpochMilli() - state.lastSeenEpochMs());
     return ageMs <= staleMs;
+  }
+
+  private boolean helperHasActiveTask(UUID helperId, Map<UUID, Boolean> activeTaskByHelper) {
+    return activeTaskByHelper.computeIfAbsent(
+        helperId,
+        id -> tasks.existsByAssignedHelperIdAndStatusIn(id, HELPER_ACTIVE_TASK_STATUSES));
   }
 
   private record Candidate(UUID helperId, double distanceMeters) {
