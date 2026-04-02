@@ -131,6 +131,9 @@ public class AdminService {
 
   @Transactional
   public AdminBulkOperationResponse bulkUpdateUsers(UserRole role, List<UUID> userIds, String statusRaw) {
+    if (userIds == null || userIds.isEmpty()) {
+      throw new BadRequestException("At least one user id is required");
+    }
     UserStatus nextStatus = parseStatusOrDefault(statusRaw, null);
     if (nextStatus == null) {
       throw new BadRequestException("Invalid status");
@@ -138,6 +141,10 @@ public class AdminService {
     List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
     int success = 0;
     for (UUID userId : new LinkedHashSet<>(userIds)) {
+      if (userId == null) {
+        failures.add(new AdminBulkOperationFailure("missing-user-id", "Missing user id"));
+        continue;
+      }
       try {
         UserEntity u = users.findById(userId).orElseThrow(() -> new NotFoundException("User not found"));
         if (u.getRole() != role) {
@@ -147,7 +154,7 @@ public class AdminService {
         users.save(u);
         success++;
       } catch (Exception ex) {
-        failures.add(new AdminBulkOperationFailure(userId.toString(), ex.getMessage() == null ? "Update failed" : ex.getMessage()));
+        failures.add(new AdminBulkOperationFailure(userId.toString(), sanitizeFailureMessage(ex, "Update failed")));
       }
     }
     return new AdminBulkOperationResponse(userIds.size(), success, failures.size(), failures);
@@ -155,6 +162,9 @@ public class AdminService {
 
   @Transactional
   public AdminBulkOperationResponse bulkHelperKycAction(List<UUID> helperIds, String actionRaw, String reason) {
+    if (helperIds == null || helperIds.isEmpty()) {
+      throw new BadRequestException("At least one helper id is required");
+    }
     String action = actionRaw == null ? "" : actionRaw.trim().toUpperCase(Locale.ROOT);
     if (!"APPROVE".equals(action) && !"REJECT".equals(action) && !"REOPEN".equals(action)) {
       throw new BadRequestException("Invalid action");
@@ -163,6 +173,10 @@ public class AdminService {
     List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
     int success = 0;
     for (UUID helperId : new LinkedHashSet<>(helperIds)) {
+      if (helperId == null) {
+        failures.add(new AdminBulkOperationFailure("missing-helper-id", "Missing helper id"));
+        continue;
+      }
       try {
         switch (action) {
           case "APPROVE" -> approveHelper(helperId);
@@ -172,7 +186,7 @@ public class AdminService {
         }
         success++;
       } catch (Exception ex) {
-        failures.add(new AdminBulkOperationFailure(helperId.toString(), ex.getMessage() == null ? "Action failed" : ex.getMessage()));
+        failures.add(new AdminBulkOperationFailure(helperId.toString(), sanitizeFailureMessage(ex, "Action failed")));
       }
     }
     return new AdminBulkOperationResponse(helperIds.size(), success, failures.size(), failures);
@@ -315,6 +329,14 @@ public class AdminService {
     } catch (Exception e) {
       throw new BadRequestException("Invalid status");
     }
+  }
+
+  private static String sanitizeFailureMessage(Exception ex, String fallback) {
+    if (ex == null || ex.getMessage() == null) return fallback;
+    String msg = ex.getMessage().trim();
+    if (msg.isBlank()) return fallback;
+    if (msg.length() > 180) return fallback;
+    return msg;
   }
 
   private static String trimOrNull(String s) {
