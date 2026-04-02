@@ -2,12 +2,16 @@ package com.helpinminutes.api.helpers.service;
 
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ForbiddenException;
+import com.helpinminutes.api.errors.NotFoundException;
+import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.dto.HelperProfileResponse;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService;
+import com.helpinminutes.api.users.model.UserEntity;
+import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -19,14 +23,17 @@ public class HelperService {
   private final HelperProfileRepository profiles;
   private final HelperPresenceService presence;
   private final SupabaseStorageService storage;
+  private final UserRepository users;
 
   public HelperService(
       HelperProfileRepository profiles,
       HelperPresenceService presence,
-      SupabaseStorageService storage) {
+      SupabaseStorageService storage,
+      UserRepository users) {
     this.profiles = profiles;
     this.presence = presence;
     this.storage = storage;
+    this.users = users;
   }
 
   public void setOnline(UUID helperId, double lat, double lng) {
@@ -48,6 +55,32 @@ public class HelperService {
   public HelperProfileResponse getProfile(UUID helperId) {
     HelperProfileEntity p = profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
     return toResponse(p);
+  }
+
+  public HelperIdCardResponse getIdCard(UUID helperId) {
+    HelperProfileEntity profile = profiles.findById(helperId).orElseThrow(() -> new NotFoundException("Helper profile not found"));
+    UserEntity user = users.findById(helperId).orElseThrow(() -> new NotFoundException("Helper not found"));
+    String fullName = profile.getKycFullName();
+    if (fullName == null || fullName.isBlank()) {
+      fullName = user.getDisplayName();
+    }
+    if (fullName == null || fullName.isBlank()) {
+      fullName = user.getPhone();
+    }
+    String badgeId = "SHO-" + helperId.toString().substring(0, 8).toUpperCase();
+    String idNumberMasked = maskId(profile.getKycIdNumber());
+    Instant issuedAt = profile.getKycSubmittedAt() == null ? user.getCreatedAt() : profile.getKycSubmittedAt();
+    return new HelperIdCardResponse(
+        helperId,
+        badgeId,
+        fullName,
+        user.getPhone(),
+        profile.getKycStatus() == null ? "PENDING" : profile.getKycStatus().name(),
+        idNumberMasked,
+        profile.getKycSelfieUrl(),
+        profile.getKycDocFrontUrl(),
+        profile.getKycDocBackUrl(),
+        issuedAt);
   }
 
   @Transactional
@@ -93,5 +126,12 @@ public class HelperService {
         p.getKycDocBackUrl(),
         p.getKycSelfieUrl(),
         p.getKycSubmittedAt());
+  }
+
+  private static String maskId(String id) {
+    if (id == null || id.isBlank()) return null;
+    String raw = id.trim();
+    if (raw.length() <= 4) return raw;
+    return "XXXXXX" + raw.substring(raw.length() - 4);
   }
 }

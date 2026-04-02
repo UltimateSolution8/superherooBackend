@@ -194,7 +194,7 @@ public class BookingBatchService {
     }
 
     TaskEntity task = item.getTaskId() == null ? null : taskRepo.findById(item.getTaskId()).orElse(null);
-    return toItemResponse(item, task);
+    return toItemResponse(item, task, task == null ? Map.of() : resolveHelperUsers(java.util.List.of(task)));
   }
 
   @Transactional
@@ -209,7 +209,7 @@ public class BookingBatchService {
     tasks.cancelTask(actorUserId, actorRole, task.getId(), blankToNull(reason) == null ? "Cancelled from bulk console" : reason.trim());
     TaskEntity refreshed = taskRepo.findById(task.getId()).orElse(task);
     writeEvent(batchId, "ITEM_CANCELLED", "{\"itemId\":\"" + item.getId() + "\"}");
-    return toItemResponse(item, refreshed);
+    return toItemResponse(item, refreshed, resolveHelperUsers(java.util.List.of(refreshed)));
   }
 
   @Transactional(readOnly = true)
@@ -247,7 +247,11 @@ public class BookingBatchService {
     List<BookingBatchItemEntity> batchItems = items.findByBatchIdOrderByLineNoAsc(batchId);
     List<UUID> taskIds = batchItems.stream().map(BookingBatchItemEntity::getTaskId).filter(java.util.Objects::nonNull).toList();
     Map<UUID, TaskEntity> taskById = taskRepo.findAllById(taskIds).stream().collect(Collectors.toMap(TaskEntity::getId, t -> t));
-    return batchItems.stream().sorted(Comparator.comparingInt(BookingBatchItemEntity::getLineNo)).map(item -> toItemResponse(item, taskById.get(item.getTaskId()))).toList();
+    Map<UUID, UserEntity> helperUsers = resolveHelperUsers(taskById.values());
+    return batchItems.stream()
+        .sorted(Comparator.comparingInt(BookingBatchItemEntity::getLineNo))
+        .map(item -> toItemResponse(item, taskById.get(item.getTaskId()), helperUsers))
+        .toList();
   }
 
   @Transactional(readOnly = true)
@@ -257,6 +261,19 @@ public class BookingBatchService {
   }
 
   private BatchDtos.BatchItemResponse toItemResponse(BookingBatchItemEntity item, TaskEntity task) {
+    return toItemResponse(item, task, Map.of());
+  }
+
+  private BatchDtos.BatchItemResponse toItemResponse(
+      BookingBatchItemEntity item,
+      TaskEntity task,
+      Map<UUID, UserEntity> helperUsers) {
+    UserEntity helper = (task == null || task.getAssignedHelperId() == null)
+        ? null
+        : helperUsers.get(task.getAssignedHelperId());
+    String helperName = helper == null
+        ? null
+        : (helper.getDisplayName() != null && !helper.getDisplayName().isBlank() ? helper.getDisplayName() : helper.getPhone());
     return new BatchDtos.BatchItemResponse(
         item.getId(),
         item.getLineNo(),
@@ -268,10 +285,20 @@ public class BookingBatchService {
         task == null ? null : task.getStatus(),
         task == null ? null : task.getTitle(),
         task == null || task.getAssignedHelperId() == null ? null : task.getAssignedHelperId().toString(),
-        null,
+        helperName,
         null,
         canRetry(item, task),
         canCancel(task));
+  }
+
+  private Map<UUID, UserEntity> resolveHelperUsers(java.util.Collection<TaskEntity> taskValues) {
+    List<UUID> helperIds = taskValues.stream()
+        .map(TaskEntity::getAssignedHelperId)
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .toList();
+    if (helperIds.isEmpty()) return Map.of();
+    return users.findAllById(helperIds).stream().collect(Collectors.toMap(UserEntity::getId, u -> u));
   }
 
   private List<String> validateLine(BatchDtos.PreviewItem line) {
