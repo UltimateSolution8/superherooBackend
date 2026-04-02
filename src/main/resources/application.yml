@@ -113,6 +113,9 @@ app:
 
   realtime:
     redisPubSubChannel: ${REALTIME_REDIS_CHANNEL:him:rt:events}
+    publishHttpUrl: ${REALTIME_HTTP_PUBLISH_URL:}
+    publishHttpSecret: ${REALTIME_HTTP_PUBLISH_SECRET:}
+    publishHttpTimeoutMs: ${REALTIME_HTTP_PUBLISH_TIMEOUT_MS:1500}
 
 twilio:
   accountSid: ${TWILIO_ACCOUNT_SID:}

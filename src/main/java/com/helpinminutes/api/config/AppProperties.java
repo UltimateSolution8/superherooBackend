@@ -42,11 +42,17 @@ public record AppProperties(
       // start (otherwise Spring validation would reject the configuration and the
       // service would refuse to boot, which manifests as a 502 from the load
       // balancer).
-      String redisPubSubChannel
+      String redisPubSubChannel,
+      String publishHttpUrl,
+      String publishHttpSecret,
+      @Min(200) @Max(10000) int publishHttpTimeoutMs
   ) {
       public Realtime {
           if (redisPubSubChannel == null || redisPubSubChannel.isBlank()) {
               redisPubSubChannel = "him:rt:events";
+          }
+          if (publishHttpTimeoutMs <= 0) {
+              publishHttpTimeoutMs = 1500;
           }
       }
   }

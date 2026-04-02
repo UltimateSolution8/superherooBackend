@@ -8,6 +8,8 @@ import com.helpinminutes.api.notifications.queue.NotificationType;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -15,6 +17,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @Service
 public class NotificationQueueService {
+    private static final Logger log = LoggerFactory.getLogger(NotificationQueueService.class);
     private final RabbitTemplate rabbitTemplate;
 
     public NotificationQueueService(RabbitTemplate rabbitTemplate) {
@@ -59,11 +62,21 @@ public class NotificationQueueService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+                    publish(job);
                 }
             });
         } else {
+            publish(job);
+        }
+    }
+
+    private void publish(NotificationJob job) {
+        try {
             rabbitTemplate.convertAndSend(EXCHANGE_NOTIFICATIONS, ROUTING_KEY_NOTIFICATION_SEND, job);
+            log.info("Notification job queued type={} taskId={} helperCount={}",
+                    job.type(), job.taskId(), job.helperIds() == null ? 0 : job.helperIds().size());
+        } catch (Exception e) {
+            log.error("Failed to queue notification job type={} taskId={}", job.type(), job.taskId(), e);
         }
     }
 }
