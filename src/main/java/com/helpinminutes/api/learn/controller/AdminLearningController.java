@@ -2,6 +2,7 @@ package com.helpinminutes.api.learn.controller;
 
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.learn.dto.AdminUpsertAssessmentRequest;
+import com.helpinminutes.api.learn.dto.AdminLearningAssetUploadResponse;
 import com.helpinminutes.api.learn.dto.AdminUpsertTrainingMaterialRequest;
 import com.helpinminutes.api.learn.dto.HelperAssessmentAttemptResponse;
 import com.helpinminutes.api.learn.dto.HelperTrainingProgressResponse;
@@ -13,6 +14,7 @@ import com.helpinminutes.api.users.model.UserRole;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/admin/learn")
@@ -44,6 +47,14 @@ public class AdminLearningController {
       @Valid @RequestBody AdminUpsertTrainingMaterialRequest req) {
     onlyAdmin(principal);
     return learning.createMaterial(principal.userId(), req);
+  }
+
+  @PostMapping(value = "/materials/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public AdminLearningAssetUploadResponse uploadMaterialFile(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestParam("file") MultipartFile file) {
+    onlyAdmin(principal);
+    return learning.uploadMaterialAsset(principal.userId(), file);
   }
 
   @PutMapping("/materials/{materialId}")

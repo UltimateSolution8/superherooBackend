@@ -115,6 +115,31 @@ public class SupabaseStorageService {
     throw new BadRequestException("Storage is not configured");
   }
 
+  public String uploadLearningAsset(UUID adminUserId, MultipartFile file) {
+    if (file == null || file.isEmpty()) {
+      throw new BadRequestException("Learning file is required");
+    }
+    if (file.getSize() > 200L * 1024L * 1024L) {
+      throw new BadRequestException("Learning file is too large (max 200 MB)");
+    }
+
+    String contentType = safeContentType(file.getContentType());
+    if (!isAllowedLearningContent(contentType, file.getOriginalFilename())) {
+      throw new BadRequestException("Only video, audio, PDF, and links are supported");
+    }
+    String ext = detectExtension(contentType, file.getOriginalFilename());
+    String kind = classifyLearningKind(contentType, file.getOriginalFilename());
+    String key = buildKey("learning", adminUserId.toString(), kind, ext);
+
+    if (isConfigured()) {
+      return uploadFile(file, contentType, key, "learning content");
+    }
+    if (isDevMode()) {
+      return uploadToMinioFallback(file, contentType, key, "learning content");
+    }
+    throw new BadRequestException("Storage is not configured");
+  }
+
   public String generateKycPresignedPutUrl(String kind, UUID helperId, String ext) {
     return generateKycPresignedPut(kind, helperId, ext).url();
   }
@@ -412,6 +437,18 @@ public class SupabaseStorageService {
       return ".png";
     if (lowerCt.contains("pdf"))
       return ".pdf";
+    if (lowerCt.contains("mp4"))
+      return ".mp4";
+    if (lowerCt.contains("quicktime"))
+      return ".mov";
+    if (lowerCt.contains("mpeg"))
+      return ".mp3";
+    if (lowerCt.contains("wav"))
+      return ".wav";
+    if (lowerCt.contains("webm"))
+      return ".webm";
+    if (lowerCt.contains("ogg"))
+      return ".ogg";
 
     if (originalName != null) {
       String n = originalName.toLowerCase(Locale.ROOT);
@@ -421,8 +458,50 @@ public class SupabaseStorageService {
         return ".png";
       if (n.endsWith(".pdf"))
         return ".pdf";
+      if (n.endsWith(".mp4"))
+        return ".mp4";
+      if (n.endsWith(".mov"))
+        return ".mov";
+      if (n.endsWith(".mp3"))
+        return ".mp3";
+      if (n.endsWith(".wav"))
+        return ".wav";
+      if (n.endsWith(".webm"))
+        return ".webm";
+      if (n.endsWith(".ogg"))
+        return ".ogg";
     }
     return ".bin";
+  }
+
+  private static boolean isAllowedLearningContent(String contentType, String originalName) {
+    String ct = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+    if (ct.startsWith("video/") || ct.startsWith("audio/") || ct.contains("pdf")) {
+      return true;
+    }
+    if (originalName == null || originalName.isBlank()) return false;
+    String n = originalName.toLowerCase(Locale.ROOT);
+    return n.endsWith(".pdf")
+        || n.endsWith(".mp4")
+        || n.endsWith(".mov")
+        || n.endsWith(".mp3")
+        || n.endsWith(".wav")
+        || n.endsWith(".webm")
+        || n.endsWith(".ogg");
+  }
+
+  private static String classifyLearningKind(String contentType, String originalName) {
+    String ct = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+    if (ct.startsWith("video/")) return "video";
+    if (ct.startsWith("audio/")) return "audio";
+    if (ct.contains("pdf")) return "pdf";
+    if (originalName != null) {
+      String n = originalName.toLowerCase(Locale.ROOT);
+      if (n.endsWith(".pdf")) return "pdf";
+      if (n.endsWith(".mp3") || n.endsWith(".wav") || n.endsWith(".ogg")) return "audio";
+      if (n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".webm")) return "video";
+    }
+    return "resource";
   }
 
   private static String buildKey(String base, String idPath, String kind, String ext) {

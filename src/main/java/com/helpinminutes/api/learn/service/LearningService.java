@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.learn.dto.AdminUpsertAssessmentRequest;
+import com.helpinminutes.api.learn.dto.AdminLearningAssetUploadResponse;
 import com.helpinminutes.api.learn.dto.AdminUpsertTrainingMaterialRequest;
 import com.helpinminutes.api.learn.dto.HelperAssessmentAttemptResponse;
 import com.helpinminutes.api.learn.dto.HelperAssessmentStartResponse;
@@ -24,6 +25,7 @@ import com.helpinminutes.api.learn.repo.HelperAssessmentAttemptRepository;
 import com.helpinminutes.api.learn.repo.HelperTrainingProgressRepository;
 import com.helpinminutes.api.learn.repo.LearningAssessmentRepository;
 import com.helpinminutes.api.learn.repo.TrainingMaterialRepository;
+import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Duration;
@@ -40,6 +42,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class LearningService {
@@ -50,6 +53,7 @@ public class LearningService {
   private final UserRepository users;
   private final LearningMapper mapper;
   private final ObjectMapper objectMapper;
+  private final SupabaseStorageService storage;
 
   public LearningService(
       TrainingMaterialRepository materials,
@@ -58,7 +62,8 @@ public class LearningService {
       HelperAssessmentAttemptRepository attempts,
       UserRepository users,
       LearningMapper mapper,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      SupabaseStorageService storage) {
     this.materials = materials;
     this.progress = progress;
     this.assessments = assessments;
@@ -66,6 +71,7 @@ public class LearningService {
     this.users = users;
     this.mapper = mapper;
     this.objectMapper = objectMapper;
+    this.storage = storage;
   }
 
   @Transactional(readOnly = true)
@@ -116,6 +122,15 @@ public class LearningService {
     material.setCreatedBy(adminUserId);
     TrainingMaterialEntity saved = materials.save(material);
     return mapper.toMaterialResponse(saved, null, 0, 0);
+  }
+
+  @Transactional(readOnly = true)
+  public AdminLearningAssetUploadResponse uploadMaterialAsset(UUID adminUserId, MultipartFile file) {
+    String url = storage.uploadLearningAsset(adminUserId, file);
+    String contentType = file == null ? null : file.getContentType();
+    long size = file == null ? 0 : file.getSize();
+    String fileName = file == null ? null : file.getOriginalFilename();
+    return new AdminLearningAssetUploadResponse(url, contentType, size, fileName);
   }
 
   @Transactional
