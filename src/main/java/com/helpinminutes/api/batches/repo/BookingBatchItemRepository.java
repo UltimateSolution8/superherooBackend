@@ -9,4 +9,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface BookingBatchItemRepository extends JpaRepository<BookingBatchItemEntity, UUID> {
   List<BookingBatchItemEntity> findByBatchIdOrderByLineNoAsc(UUID batchId);
   Optional<BookingBatchItemEntity> findByIdAndBatchId(UUID id, UUID batchId);
+  Optional<BookingBatchItemEntity> findByTaskId(UUID taskId);
+  long countByBatchId(UUID batchId);
 }

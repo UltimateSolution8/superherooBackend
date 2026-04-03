@@ -214,14 +214,21 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkTaskStatusRequest req) {
     requireAdmin(principal);
+    if (req.taskIds() == null || req.taskIds().isEmpty()) {
+      throw new com.helpinminutes.api.errors.BadRequestException("At least one task id is required");
+    }
     int success = 0;
     List<AdminBulkOperationFailure> failures = new ArrayList<>();
     for (UUID taskId : req.taskIds()) {
+      if (taskId == null) {
+        failures.add(new AdminBulkOperationFailure("missing-task-id", "Missing task id"));
+        continue;
+      }
       try {
         tasks.updateStatusAsAdmin(taskId, req.status());
         success++;
       } catch (Exception ex) {
-        failures.add(new AdminBulkOperationFailure(taskId.toString(), ex.getMessage() == null ? "Update failed" : ex.getMessage()));
+        failures.add(new AdminBulkOperationFailure(taskId.toString(), sanitizeFailureMessage(ex, "Update failed")));
       }
     }
     return new AdminBulkOperationResponse(req.taskIds().size(), success, failures.size(), failures);
@@ -289,5 +296,13 @@ public class AdminController {
           t.getCancelledAt(),
           t.getCreatedAt());
     }).toList();
+  }
+
+  private static String sanitizeFailureMessage(Exception ex, String fallback) {
+    if (ex == null || ex.getMessage() == null) return fallback;
+    String msg = ex.getMessage().trim();
+    if (msg.isBlank()) return fallback;
+    if (msg.length() > 180) return fallback;
+    return msg;
   }
 }

@@ -1,6 +1,7 @@
 package com.helpinminutes.api.helpers.controller;
 
 import com.helpinminutes.api.helpers.dto.SetOnlineRequest;
+import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.dto.HelperProfileResponse;
 import com.helpinminutes.api.helpers.service.HelperService;
 import com.helpinminutes.api.security.UserPrincipal;
@@ -59,6 +60,14 @@ public class HelperController {
       throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
     }
     return helpers.getProfile(principal.userId());
+  }
+
+  @GetMapping("/id-card")
+  public HelperIdCardResponse idCard(@AuthenticationPrincipal UserPrincipal principal) {
+    if (principal.role() != UserRole.HELPER) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
+    }
+    return helpers.getIdCard(principal.userId());
   }
 
   @PostMapping(value = "/kyc/submit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

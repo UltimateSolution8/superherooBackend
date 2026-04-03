@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.UUID;
@@ -15,7 +16,6 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 class NotificationQueueServiceTest {
     private RabbitTemplate rabbitTemplate;
@@ -34,7 +34,7 @@ class NotificationQueueServiceTest {
         UUID helper2 = UUID.randomUUID();
 
         TaskEntity task = new TaskEntity();
-        task.setId(taskId);
+        ReflectionTestUtils.setField(task, "id", taskId);
 
         queueService.enqueueTaskCreated(List.of(helper1, helper2), task);
 

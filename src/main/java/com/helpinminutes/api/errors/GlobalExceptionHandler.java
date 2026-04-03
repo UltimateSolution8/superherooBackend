@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @ControllerAdvice
 public class GlobalExceptionHandler {
@@ -56,6 +57,12 @@ public class GlobalExceptionHandler {
   public ResponseEntity<ApiError> handleNotFound(NotFoundException ex, HttpServletRequest req) {
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
         .body(ApiError.of("NOT_FOUND", ex.getMessage(), Map.of("path", req.getRequestURI())));
+  }
+
+  @ExceptionHandler(NoResourceFoundException.class)
+  public ResponseEntity<ApiError> handleMissingRoute(NoResourceFoundException ex, HttpServletRequest req) {
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .body(ApiError.of("NOT_FOUND", "Route not found", Map.of("path", req.getRequestURI())));
   }
 
   @ExceptionHandler(ForbiddenException.class)

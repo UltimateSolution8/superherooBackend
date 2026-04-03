@@ -1,9 +1,15 @@
 package com.helpinminutes.api.tasks.controller;
 
 import com.helpinminutes.api.errors.ForbiddenException;
+import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
+import com.helpinminutes.api.helpers.service.HelperService;
 import com.helpinminutes.api.security.UserPrincipal;
+import com.helpinminutes.api.batches.dto.BatchDtos;
+import com.helpinminutes.api.batches.service.BookingBatchService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
+import com.helpinminutes.api.tasks.dto.CreateBulkTaskRequest;
+import com.helpinminutes.api.tasks.dto.CreateBulkTaskResponse;
 import com.helpinminutes.api.tasks.dto.CancelTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
@@ -31,10 +37,14 @@ import org.springframework.web.multipart.MultipartFile;
 public class TaskController {
   private final TaskService tasks;
   private final TaskMapper taskMapper;
+  private final BookingBatchService batches;
+  private final HelperService helpers;
 
-  public TaskController(TaskService tasks, TaskMapper taskMapper) {
+  public TaskController(TaskService tasks, TaskMapper taskMapper, BookingBatchService batches, HelperService helpers) {
     this.tasks = tasks;
     this.taskMapper = taskMapper;
+    this.batches = batches;
+    this.helpers = helpers;
   }
 
   @PostMapping
@@ -46,6 +56,77 @@ public class TaskController {
     }
     var result = tasks.createTask(principal.userId(), req);
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
+  }
+
+  @PostMapping("/bulk")
+  public CreateBulkTaskResponse createBulk(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody CreateBulkTaskRequest req) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can create bulk tasks");
+    }
+    int helperCount = req.helperCount() == null ? 1 : req.helperCount();
+    if (helperCount <= 1) {
+      var single = tasks.createTask(
+          principal.userId(),
+          new CreateTaskRequest(
+              req.title(),
+              req.description(),
+              req.urgency(),
+              req.timeMinutes(),
+              req.budgetPaise(),
+              req.lat(),
+              req.lng(),
+              req.addressText(),
+              req.scheduledAt()));
+      return new CreateBulkTaskResponse(
+          null,
+          1,
+          1,
+          0,
+          java.util.List.of(single.taskId()));
+    }
+
+    java.util.List<BatchDtos.CreateItem> lines = new java.util.ArrayList<>();
+    for (int i = 0; i < helperCount; i++) {
+      lines.add(new BatchDtos.CreateItem(
+          req.title(),
+          req.description(),
+          req.urgency(),
+          req.timeMinutes(),
+          req.budgetPaise(),
+          req.lat(),
+          req.lng(),
+          req.addressText(),
+          req.scheduledAt(),
+          "bulk-" + (i + 1),
+          3));
+    }
+
+    String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
+    BatchDtos.CreateResponse created = batches.create(
+        principal.userId(),
+        UserRole.BUYER,
+        new BatchDtos.CreateRequest(
+            safeTitle + " (Bulk x" + helperCount + ")",
+            "Created from buyer app bulk request",
+            req.scheduledAt(),
+            null,
+            null,
+            "buyer-bulk-" + principal.userId() + "-" + System.currentTimeMillis(),
+            lines));
+
+    java.util.List<UUID> taskIds = batches.getItems(principal.userId(), UserRole.BUYER, created.batchId()).stream()
+        .map(BatchDtos.BatchItemResponse::taskId)
+        .filter(java.util.Objects::nonNull)
+        .toList();
+
+    return new CreateBulkTaskResponse(
+        created.batchId(),
+        helperCount,
+        created.createdCount(),
+        created.failedCount(),
+        taskIds);
   }
 
   @PostMapping("/{taskId}/accept")
@@ -108,6 +189,23 @@ public class TaskController {
 
     boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
     return taskMapper.toResponse(task, includeOtp);
+  }
+
+  @GetMapping("/{taskId}/helper-id-card")
+  public HelperIdCardResponse helperIdCard(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId) {
+    TaskEntity task = tasks.getTask(taskId);
+    boolean canSee = (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
+        || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
+        || principal.role() == UserRole.ADMIN;
+    if (!canSee) {
+      throw new ForbiddenException("Not allowed");
+    }
+    if (task.getAssignedHelperId() == null) {
+      throw new com.helpinminutes.api.errors.BadRequestException("No helper assigned yet");
+    }
+    return helpers.getIdCard(task.getAssignedHelperId());
   }
 
   @GetMapping("/available")
