@@ -1,12 +1,13 @@
 -- Dual-role support allows multiple sessions to be issued in quick succession.
--- Refresh JWTs without a unique JWT ID can produce identical token hashes when
--- generated within the same second. Deduplicate legacy rows, then enforce uniqueness.
+-- Legacy refresh JWTs were minted without a random JWT ID, so two sessions created
+-- in the same second could produce the same token hash. Keep one row per hash active
+-- and revoke the rest; then enforce uniqueness only for non-revoked rows.
 WITH ranked AS (
   SELECT
     id,
     row_number() OVER (
       PARTITION BY token_hash
-      ORDER BY created_at DESC, issued_at DESC, id DESC
+      ORDER BY (CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) DESC, created_at DESC, issued_at DESC, id DESC
     ) AS rn
   FROM refresh_tokens
 )
@@ -16,15 +17,11 @@ FROM ranked r
 WHERE rt.id = r.id
   AND r.rn > 1;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_constraint
-    WHERE conname = 'uk_refresh_tokens_token_hash'
-  ) THEN
-    ALTER TABLE refresh_tokens
-      ADD CONSTRAINT uk_refresh_tokens_token_hash UNIQUE (token_hash);
-  END IF;
-END
-$$;
+-- If an earlier rollout created a strict unique constraint, remove it first.
+ALTER TABLE refresh_tokens
+  DROP CONSTRAINT IF EXISTS uk_refresh_tokens_token_hash;
+
+-- Enforce uniqueness only for active (non-revoked) refresh token hashes.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_refresh_tokens_active_hash
+  ON refresh_tokens (token_hash)
+  WHERE revoked_at IS NULL;
