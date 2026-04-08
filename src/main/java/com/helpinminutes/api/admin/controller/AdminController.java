@@ -2,6 +2,7 @@ package com.helpinminutes.api.admin.controller;
 
 import com.helpinminutes.api.admin.dto.AdminCreateUserRequest;
 import com.helpinminutes.api.admin.dto.AdminBulkHelperKycActionRequest;
+import com.helpinminutes.api.admin.dto.AdminBulkBuyerCsvAccessRequest;
 import com.helpinminutes.api.admin.dto.AdminBulkOperationFailure;
 import com.helpinminutes.api.admin.dto.AdminBulkOperationResponse;
 import com.helpinminutes.api.admin.dto.AdminBulkTaskStatusRequest;
@@ -170,6 +171,14 @@ public class AdminController {
       @Valid @RequestBody AdminBulkUserUpdateRequest req) {
     requireAdmin(principal);
     return admin.bulkUpdateUsers(UserRole.BUYER, req.userIds(), req.status());
+  }
+
+  @PostMapping("/buyers/bulk-csv-access")
+  public AdminBulkOperationResponse bulkUpdateBuyerCsvAccess(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminBulkBuyerCsvAccessRequest req) {
+    requireAdmin(principal);
+    return admin.bulkSetBuyerCsvAccess(req.userIds(), Boolean.TRUE.equals(req.enabled()));
   }
 
   @PostMapping("/buyers/{buyerId}/delete")

@@ -1,6 +1,8 @@
 package com.helpinminutes.api.learn.controller;
 
 import com.helpinminutes.api.errors.ForbiddenException;
+import com.helpinminutes.api.learn.dto.AdminAssessmentAssignmentRequest;
+import com.helpinminutes.api.learn.dto.AdminAssessmentAssignmentResponse;
 import com.helpinminutes.api.learn.dto.AdminUpsertAssessmentRequest;
 import com.helpinminutes.api.learn.dto.AdminLearningAssetUploadResponse;
 import com.helpinminutes.api.learn.dto.AdminUpsertTrainingMaterialRequest;
@@ -104,6 +106,27 @@ public class AdminLearningController {
       @PathVariable UUID assessmentId) {
     onlyAdmin(principal);
     return learning.listAdminAssessmentAttempts(assessmentId);
+  }
+
+  @GetMapping("/assessments/{assessmentId}/assignments")
+  public AdminAssessmentAssignmentResponse getAssessmentAssignments(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID assessmentId) {
+    onlyAdmin(principal);
+    return learning.getAssessmentAssignments(assessmentId);
+  }
+
+  @PostMapping("/assessments/{assessmentId}/assignments")
+  public AdminAssessmentAssignmentResponse updateAssessmentAssignments(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID assessmentId,
+      @Valid @RequestBody AdminAssessmentAssignmentRequest req) {
+    onlyAdmin(principal);
+    return learning.assignAssessment(
+        principal.userId(),
+        assessmentId,
+        Boolean.TRUE.equals(req.assignAll()),
+        req.helperIds());
   }
 
   private void onlyAdmin(UserPrincipal principal) {

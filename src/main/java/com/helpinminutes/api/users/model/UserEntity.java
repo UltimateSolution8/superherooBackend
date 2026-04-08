@@ -25,7 +25,7 @@ public class UserEntity {
   @Column(nullable = false)
   private UserStatus status;
 
-  @Column(unique = true)
+  @Column
   private String phone;
 
   @Column(unique = true)
@@ -39,6 +39,9 @@ public class UserEntity {
 
   @Column(name = "demo_balance_paise", nullable = false)
   private Long demoBalancePaise;
+
+  @Column(name = "bulk_csv_enabled", nullable = false)
+  private boolean bulkCsvEnabled;
 
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
@@ -131,6 +134,14 @@ public class UserEntity {
 
   public void setDemoBalancePaise(Long demoBalancePaise) {
     this.demoBalancePaise = demoBalancePaise;
+  }
+
+  public boolean isBulkCsvEnabled() {
+    return bulkCsvEnabled;
+  }
+
+  public void setBulkCsvEnabled(boolean bulkCsvEnabled) {
+    this.bulkCsvEnabled = bulkCsvEnabled;
   }
 
   public Instant getCreatedAt() {

@@ -12,6 +12,7 @@ public record AuthResponse(
       UUID id,
       UserRole role,
       String phone,
-      String displayName
+      String displayName,
+      boolean bulkCsvEnabled
   ) {}
 }

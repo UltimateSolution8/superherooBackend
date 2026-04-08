@@ -26,7 +26,14 @@ public class MeController {
   public MeResponse me(@AuthenticationPrincipal UserPrincipal principal) {
     UUID userId = principal.userId();
     UserEntity u = users.findById(userId).orElseThrow();
-    return new MeResponse(u.getId(), u.getRole().name(), u.getPhone(), u.getEmail(), u.getDisplayName(), u.getDemoBalancePaise());
+    return new MeResponse(
+        u.getId(),
+        u.getRole().name(),
+        u.getPhone(),
+        u.getEmail(),
+        u.getDisplayName(),
+        u.getDemoBalancePaise(),
+        u.isBulkCsvEnabled());
   }
 
   @PutMapping("/me")
@@ -39,10 +46,24 @@ public class MeController {
       u.setDisplayName(req.displayName().trim());
     }
     users.save(u);
-    return new MeResponse(u.getId(), u.getRole().name(), u.getPhone(), u.getEmail(), u.getDisplayName(), u.getDemoBalancePaise());
+    return new MeResponse(
+        u.getId(),
+        u.getRole().name(),
+        u.getPhone(),
+        u.getEmail(),
+        u.getDisplayName(),
+        u.getDemoBalancePaise(),
+        u.isBulkCsvEnabled());
   }
 
   public record UpdateMeRequest(@NotBlank String displayName) {}
 
-  public record MeResponse(UUID id, String role, String phone, String email, String displayName, Long demoBalancePaise) {}
+  public record MeResponse(
+      UUID id,
+      String role,
+      String phone,
+      String email,
+      String displayName,
+      Long demoBalancePaise,
+      boolean bulkCsvEnabled) {}
 }

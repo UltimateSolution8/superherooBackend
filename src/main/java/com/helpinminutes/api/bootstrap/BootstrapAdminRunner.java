@@ -33,11 +33,7 @@ public class BootstrapAdminRunner implements ApplicationRunner {
     String email = System.getenv("BOOTSTRAP_ADMIN_EMAIL");
     String password = System.getenv("BOOTSTRAP_ADMIN_PASSWORD");
 
-    users.findByPhone(phone).ifPresentOrElse(existing -> {
-      if (existing.getRole() != UserRole.ADMIN) {
-        log.warn("BOOTSTRAP_ADMIN_PHONE user exists but is not ADMIN (phone={})", phone);
-        return;
-      }
+    users.findByPhoneAndRole(phone, UserRole.ADMIN).ifPresentOrElse(existing -> {
       boolean updated = false;
       if (email != null && !email.isBlank() && (existing.getEmail() == null || existing.getEmail().isBlank())) {
         existing.setEmail(email.trim().toLowerCase());

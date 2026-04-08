@@ -67,7 +67,7 @@ public class AuthService {
       throw new BadRequestException("Invalid OTP");
     }
 
-    UserEntity user = users.findByPhone(phone).orElseGet(() -> {
+    UserEntity user = users.findByPhoneAndRole(phone, role).orElseGet(() -> {
       if (role == UserRole.ADMIN) {
         String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
         if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
@@ -92,10 +92,6 @@ public class AuthService {
 
     if (user.getStatus() != UserStatus.ACTIVE) {
       throw new BadRequestException("User is not active");
-    }
-
-    if (user.getRole() != role) {
-      throw new BadRequestException("Role mismatch for this phone");
     }
 
     String accessToken = jwt.createAccessToken(user);
@@ -138,7 +134,7 @@ public class AuthService {
     }
 
     String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(phone);
-    if (normalizedPhone != null && users.findByPhone(normalizedPhone).isPresent()) {
+    if (normalizedPhone != null && users.findByPhoneAndRole(normalizedPhone, role).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
 
@@ -173,7 +169,7 @@ public class AuthService {
     }
 
     String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(req.phone());
-    if (normalizedPhone != null && users.findByPhone(normalizedPhone).isPresent()) {
+    if (normalizedPhone != null && users.findByPhoneAndRole(normalizedPhone, UserRole.HELPER).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
 
@@ -260,6 +256,11 @@ public class AuthService {
     return new AuthResponse(
         accessToken,
         refreshToken,
-        new AuthResponse.User(user.getId(), user.getRole(), user.getPhone(), user.getDisplayName()));
+        new AuthResponse.User(
+            user.getId(),
+            user.getRole(),
+            user.getPhone(),
+            user.getDisplayName(),
+            user.isBulkCsvEnabled()));
   }
 }
