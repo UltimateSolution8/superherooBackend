@@ -19,6 +19,7 @@ import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -106,12 +107,19 @@ public class AuthService {
   public AuthResponse refresh(String refreshToken) {
     UserPrincipal subject = jwt.parseRefreshToken(refreshToken);
     String hash = HashUtils.sha256Hex(refreshToken);
+    Instant now = Instant.now();
 
-    RefreshTokenEntity existing = refreshTokens.findActiveByHash(hash, Instant.now())
-        .orElseThrow(() -> new BadRequestException("Refresh token invalid"));
+    List<RefreshTokenEntity> activeMatches = refreshTokens.findAllActiveByHash(hash, now);
+    if (activeMatches.isEmpty()) {
+      throw new BadRequestException("Refresh token invalid");
+    }
+    RefreshTokenEntity existing = activeMatches.get(0);
+    if (!existing.getUserId().equals(subject.userId())) {
+      throw new BadRequestException("Refresh token invalid");
+    }
 
-    // rotate
-    refreshTokens.revoke(existing.getId(), Instant.now());
+    // Rotate and aggressively clean up any duplicate rows for the same token hash.
+    refreshTokens.revokeAllByHash(hash, now);
 
     UserEntity user = users.findById(subject.userId())
         .orElseThrow(() -> new BadRequestException("User not found"));

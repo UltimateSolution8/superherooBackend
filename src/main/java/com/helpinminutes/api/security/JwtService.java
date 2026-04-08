@@ -34,6 +34,7 @@ public class JwtService {
     Instant exp = now.plusSeconds(props.jwt().accessTtlSeconds());
     return Jwts.builder()
         .subject(user.getId().toString())
+        .id(UUID.randomUUID().toString())
         .issuedAt(Date.from(now))
         .expiration(Date.from(exp))
         .claims(Map.of(
@@ -49,6 +50,7 @@ public class JwtService {
     Instant exp = now.plusSeconds(props.jwt().refreshTtlSeconds());
     return Jwts.builder()
         .subject(user.getId().toString())
+        .id(UUID.randomUUID().toString())
         .issuedAt(Date.from(now))
         .expiration(Date.from(exp))
         .claims(Map.of(
