@@ -1,6 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
 import com.helpinminutes.api.common.GeoUtils;
+import com.helpinminutes.api.common.ServiceArea;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ConflictException;
@@ -82,8 +83,18 @@ public class TaskService {
 
   @Transactional
   public CreateResult createTask(UUID buyerId, CreateTaskRequest req) {
+    return createTask(buyerId, req, TaskCreateOptions.defaultOptions());
+  }
+
+  @Transactional
+  public CreateResult createTask(UUID buyerId, CreateTaskRequest req, TaskCreateOptions options) {
+    TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+
+    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+      throw new BadRequestException("Service is currently live only in Hyderabad");
+    }
 
     long cost = req.budgetPaise() == null ? 0L : Math.max(0L, req.budgetPaise());
     Long balance = buyer.getDemoBalancePaise();
@@ -125,7 +136,7 @@ public class TaskService {
     Instant scheduledAt = task.getScheduledAt();
     if (scheduledAt == null || !scheduledAt.isAfter(now)) {
       try {
-        offeredTo = matching.dispatchOffers(task);
+        offeredTo = matching.dispatchOffers(task, resolvedOptions.sendOfferNotifications());
       } catch (Exception e) {
         log.error("Failed to dispatch offers for task {}", task.getId(), e);
       }
@@ -602,5 +613,15 @@ public class TaskService {
   }
 
   public record CreateResult(UUID taskId, List<UUID> offeredTo) {
+  }
+
+  public record TaskCreateOptions(boolean sendOfferNotifications) {
+    public static TaskCreateOptions defaultOptions() {
+      return new TaskCreateOptions(true);
+    }
+
+    public static TaskCreateOptions silentPush() {
+      return new TaskCreateOptions(false);
+    }
   }
 }

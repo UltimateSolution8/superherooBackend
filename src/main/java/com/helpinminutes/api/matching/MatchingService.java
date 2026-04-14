@@ -60,6 +60,11 @@ public class MatchingService {
 
   @Transactional
   public List<UUID> dispatchOffers(TaskEntity task) {
+    return dispatchOffers(task, true);
+  }
+
+  @Transactional
+  public List<UUID> dispatchOffers(TaskEntity task, boolean sendPushNotifications) {
     long taskCell = h3.latLngToCell(task.getLat(), task.getLng(), props.matching().h3Resolution());
 
     Map<UUID, Double> bestDistanceByHelper = new HashMap<>();
@@ -171,7 +176,9 @@ public class MatchingService {
               java.util.Map.entry("expiresAt", expires.toString())));
     }
 
-    notificationQueue.enqueueTaskOffered(helperIds, task);
+    if (sendPushNotifications) {
+      notificationQueue.enqueueTaskOffered(helperIds, task);
+    }
 
     return helperIds;
   }
