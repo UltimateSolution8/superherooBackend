@@ -19,6 +19,7 @@ import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Instant;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -67,7 +68,7 @@ public class AuthService {
       throw new BadRequestException("Invalid OTP");
     }
 
-    UserEntity user = users.findByPhone(phone).orElseGet(() -> {
+    UserEntity user = users.findByPhoneAndRole(phone, role).orElseGet(() -> {
       if (role == UserRole.ADMIN) {
         String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
         if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
@@ -94,10 +95,6 @@ public class AuthService {
       throw new BadRequestException("User is not active");
     }
 
-    if (user.getRole() != role) {
-      throw new BadRequestException("Role mismatch for this phone");
-    }
-
     String accessToken = jwt.createAccessToken(user);
     String refreshToken = jwt.createRefreshToken(user);
 
@@ -110,12 +107,19 @@ public class AuthService {
   public AuthResponse refresh(String refreshToken) {
     UserPrincipal subject = jwt.parseRefreshToken(refreshToken);
     String hash = HashUtils.sha256Hex(refreshToken);
+    Instant now = Instant.now();
 
-    RefreshTokenEntity existing = refreshTokens.findActiveByHash(hash, Instant.now())
-        .orElseThrow(() -> new BadRequestException("Refresh token invalid"));
+    List<RefreshTokenEntity> activeMatches = refreshTokens.findAllActiveByHash(hash, now);
+    if (activeMatches.isEmpty()) {
+      throw new BadRequestException("Refresh token invalid");
+    }
+    RefreshTokenEntity existing = activeMatches.get(0);
+    if (!existing.getUserId().equals(subject.userId())) {
+      throw new BadRequestException("Refresh token invalid");
+    }
 
-    // rotate
-    refreshTokens.revoke(existing.getId(), Instant.now());
+    // Rotate and aggressively clean up any duplicate rows for the same token hash.
+    refreshTokens.revokeAllByHash(hash, now);
 
     UserEntity user = users.findById(subject.userId())
         .orElseThrow(() -> new BadRequestException("User not found"));
@@ -138,7 +142,7 @@ public class AuthService {
     }
 
     String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(phone);
-    if (normalizedPhone != null && users.findByPhone(normalizedPhone).isPresent()) {
+    if (normalizedPhone != null && users.findByPhoneAndRole(normalizedPhone, role).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
 
@@ -173,7 +177,7 @@ public class AuthService {
     }
 
     String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(req.phone());
-    if (normalizedPhone != null && users.findByPhone(normalizedPhone).isPresent()) {
+    if (normalizedPhone != null && users.findByPhoneAndRole(normalizedPhone, UserRole.HELPER).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
 
@@ -260,6 +264,11 @@ public class AuthService {
     return new AuthResponse(
         accessToken,
         refreshToken,
-        new AuthResponse.User(user.getId(), user.getRole(), user.getPhone(), user.getDisplayName()));
+        new AuthResponse.User(
+            user.getId(),
+            user.getRole(),
+            user.getPhone(),
+            user.getDisplayName(),
+            user.isBulkCsvEnabled()));
   }
 }

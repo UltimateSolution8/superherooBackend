@@ -161,6 +161,34 @@ public class AdminService {
   }
 
   @Transactional
+  public AdminBulkOperationResponse bulkSetBuyerCsvAccess(List<UUID> buyerIds, boolean enabled) {
+    if (buyerIds == null || buyerIds.isEmpty()) {
+      throw new BadRequestException("At least one buyer id is required");
+    }
+
+    List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
+    int success = 0;
+    for (UUID buyerId : new LinkedHashSet<>(buyerIds)) {
+      if (buyerId == null) {
+        failures.add(new AdminBulkOperationFailure("missing-buyer-id", "Missing buyer id"));
+        continue;
+      }
+      try {
+        UserEntity u = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
+        if (u.getRole() != UserRole.BUYER) {
+          throw new BadRequestException("User role mismatch");
+        }
+        u.setBulkCsvEnabled(enabled);
+        users.save(u);
+        success++;
+      } catch (Exception ex) {
+        failures.add(new AdminBulkOperationFailure(buyerId.toString(), sanitizeFailureMessage(ex, "Update failed")));
+      }
+    }
+    return new AdminBulkOperationResponse(buyerIds.size(), success, failures.size(), failures);
+  }
+
+  @Transactional
   public AdminBulkOperationResponse bulkHelperKycAction(List<UUID> helperIds, String actionRaw, String reason) {
     if (helperIds == null || helperIds.isEmpty()) {
       throw new BadRequestException("At least one helper id is required");
@@ -220,7 +248,7 @@ public class AdminService {
     if (phone == null && email == null) {
       throw new BadRequestException("phone or email required");
     }
-    if (phone != null && users.findByPhone(phone).isPresent()) {
+    if (phone != null && users.findByPhoneAndRole(phone, role).isPresent()) {
       throw new BadRequestException("phone already in use");
     }
     if (email != null && users.findByEmail(email).isPresent()) {
@@ -260,7 +288,7 @@ public class AdminService {
     String email = InputValidators.normalizeEmailOrNull(req.email());
 
     if (phone != null && !phone.equals(u.getPhone())) {
-      users.findByPhone(phone).ifPresent(existing -> {
+      users.findByPhoneAndRole(phone, role).ifPresent(existing -> {
         if (!existing.getId().equals(u.getId())) {
           throw new BadRequestException("phone already in use");
         }
@@ -313,6 +341,7 @@ public class AdminService {
         u.getEmail(),
         u.getDisplayName(),
         u.getCreatedAt(),
+        u.isBulkCsvEnabled(),
         hp == null ? null : hp.getKycStatus(),
         hp == null ? null : hp.getKycFullName(),
         hp == null ? null : hp.getKycIdNumber(),

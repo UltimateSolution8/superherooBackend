@@ -1,6 +1,7 @@
 package com.helpinminutes.api.batches.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helpinminutes.api.common.ServiceArea;
 import com.helpinminutes.api.batches.dto.BatchDtos;
 import com.helpinminutes.api.batches.model.BookingBatchEntity;
 import com.helpinminutes.api.batches.model.BookingBatchEventEntity;
@@ -19,6 +20,7 @@ import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -40,6 +42,7 @@ public class BookingBatchService {
   private final BookingBatchItemRepository items;
   private final BookingBatchEventRepository events;
   private final TaskService tasks;
+  private final NotificationQueueService notificationQueue;
   private final TaskRepository taskRepo;
   private final UserRepository users;
   private final ObjectMapper objectMapper;
@@ -49,6 +52,7 @@ public class BookingBatchService {
       BookingBatchItemRepository items,
       BookingBatchEventRepository events,
       TaskService tasks,
+      NotificationQueueService notificationQueue,
       TaskRepository taskRepo,
       UserRepository users,
       ObjectMapper objectMapper) {
@@ -56,6 +60,7 @@ public class BookingBatchService {
     this.items = items;
     this.events = events;
     this.tasks = tasks;
+    this.notificationQueue = notificationQueue;
     this.taskRepo = taskRepo;
     this.users = users;
     this.objectMapper = objectMapper;
@@ -113,6 +118,8 @@ public class BookingBatchService {
 
     int created = 0;
     int failed = 0;
+    UUID firstCreatedTaskId = null;
+    java.util.Set<UUID> notifiedHelperIds = new java.util.LinkedHashSet<>();
     for (int i = 0; i < req.items().size(); i++) {
       BatchDtos.CreateItem line = req.items().get(i);
       BookingBatchItemEntity item = new BookingBatchItemEntity();
@@ -143,9 +150,15 @@ public class BookingBatchService {
             line.lat(),
             line.lng(),
             blankToNull(line.addressText()),
-            line.scheduledAt()));
+            line.scheduledAt()), TaskService.TaskCreateOptions.silentPush());
         item.setTaskId(createResult.taskId());
         item.setLineStatus(BookingBatchLineStatus.CREATED);
+        if (firstCreatedTaskId == null) {
+          firstCreatedTaskId = createResult.taskId();
+        }
+        if (createResult.offeredTo() != null && !createResult.offeredTo().isEmpty()) {
+          notifiedHelperIds.addAll(createResult.offeredTo());
+        }
         created++;
       } catch (Exception ex) {
         item.setLineStatus(BookingBatchLineStatus.FAILED);
@@ -153,6 +166,11 @@ public class BookingBatchService {
         failed++;
       }
       items.save(item);
+    }
+
+    if (firstCreatedTaskId != null && !notifiedHelperIds.isEmpty()) {
+      taskRepo.findById(firstCreatedTaskId).ifPresent(seedTask ->
+          notificationQueue.enqueueTaskCreated(new java.util.ArrayList<>(notifiedHelperIds), seedTask));
     }
 
     batch.setStatus(failed > 0 ? BookingBatchStatus.PARTIAL : BookingBatchStatus.COMPLETED);
@@ -309,6 +327,9 @@ public class BookingBatchService {
     if (line.budgetPaise() == null || line.budgetPaise() < 0) errors.add("budgetPaise invalid");
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
+    if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
+      errors.add("location outside service area (Hyderabad only)");
+    }
     if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().minusSeconds(60))) errors.add("scheduledAt is in the past");
     return errors;
   }

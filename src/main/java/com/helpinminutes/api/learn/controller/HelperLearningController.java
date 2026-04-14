@@ -55,7 +55,7 @@ public class HelperLearningController {
   @GetMapping("/assessments")
   public List<LearningAssessmentResponse> listAssessments(@AuthenticationPrincipal UserPrincipal principal) {
     onlyHelper(principal);
-    return learning.listHelperAssessments();
+    return learning.listHelperAssessments(principal.userId());
   }
 
   @PostMapping("/assessments/{assessmentId}/start")

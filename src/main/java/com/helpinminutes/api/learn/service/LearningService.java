@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.learn.dto.AdminUpsertAssessmentRequest;
+import com.helpinminutes.api.learn.dto.AdminAssessmentAssignmentResponse;
 import com.helpinminutes.api.learn.dto.AdminLearningAssetUploadResponse;
 import com.helpinminutes.api.learn.dto.AdminUpsertTrainingMaterialRequest;
 import com.helpinminutes.api.learn.dto.HelperAssessmentAttemptResponse;
@@ -18,15 +19,18 @@ import com.helpinminutes.api.learn.model.HelperAssessmentAttemptEntity;
 import com.helpinminutes.api.learn.model.HelperAssessmentAttemptStatus;
 import com.helpinminutes.api.learn.model.HelperTrainingProgressEntity;
 import com.helpinminutes.api.learn.model.HelperTrainingProgressStatus;
+import com.helpinminutes.api.learn.model.LearningAssessmentAssignmentEntity;
 import com.helpinminutes.api.learn.model.LearningAssessmentEntity;
 import com.helpinminutes.api.learn.model.TrainingMaterialEntity;
 import com.helpinminutes.api.learn.model.TrainingMaterialType;
+import com.helpinminutes.api.learn.repo.LearningAssessmentAssignmentRepository;
 import com.helpinminutes.api.learn.repo.HelperAssessmentAttemptRepository;
 import com.helpinminutes.api.learn.repo.HelperTrainingProgressRepository;
 import com.helpinminutes.api.learn.repo.LearningAssessmentRepository;
 import com.helpinminutes.api.learn.repo.TrainingMaterialRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
+import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Duration;
 import java.time.Instant;
@@ -49,6 +53,7 @@ public class LearningService {
   private final TrainingMaterialRepository materials;
   private final HelperTrainingProgressRepository progress;
   private final LearningAssessmentRepository assessments;
+  private final LearningAssessmentAssignmentRepository assessmentAssignments;
   private final HelperAssessmentAttemptRepository attempts;
   private final UserRepository users;
   private final LearningMapper mapper;
@@ -59,6 +64,7 @@ public class LearningService {
       TrainingMaterialRepository materials,
       HelperTrainingProgressRepository progress,
       LearningAssessmentRepository assessments,
+      LearningAssessmentAssignmentRepository assessmentAssignments,
       HelperAssessmentAttemptRepository attempts,
       UserRepository users,
       LearningMapper mapper,
@@ -67,6 +73,7 @@ public class LearningService {
     this.materials = materials;
     this.progress = progress;
     this.assessments = assessments;
+    this.assessmentAssignments = assessmentAssignments;
     this.attempts = attempts;
     this.users = users;
     this.mapper = mapper;
@@ -244,10 +251,95 @@ public class LearningService {
   }
 
   @Transactional(readOnly = true)
-  public List<LearningAssessmentResponse> listHelperAssessments() {
-    return assessments.findByActiveTrueOrderByCreatedAtDesc().stream()
+  public List<LearningAssessmentResponse> listHelperAssessments(UUID helperId) {
+    List<LearningAssessmentEntity> active = assessments.findByActiveTrueOrderByCreatedAtDesc();
+    if (active.isEmpty()) {
+      return List.of();
+    }
+
+    List<UUID> assessmentIds = active.stream().map(LearningAssessmentEntity::getId).toList();
+    List<LearningAssessmentAssignmentEntity> assignmentRows = assessmentAssignments.findByAssessmentIdIn(assessmentIds);
+
+    Set<UUID> assignedAssessments = assignmentRows.stream()
+        .map(LearningAssessmentAssignmentEntity::getAssessmentId)
+        .collect(Collectors.toSet());
+    Set<UUID> helperAssignedAssessments = assignmentRows.stream()
+        .filter(row -> Objects.equals(row.getHelperId(), helperId))
+        .map(LearningAssessmentAssignmentEntity::getAssessmentId)
+        .collect(Collectors.toSet());
+
+    return active.stream()
+        .filter(a -> !assignedAssessments.contains(a.getId()) || helperAssignedAssessments.contains(a.getId()))
         .map(mapper::toAssessmentResponse)
         .toList();
+  }
+
+  @Transactional(readOnly = true)
+  public AdminAssessmentAssignmentResponse getAssessmentAssignments(UUID assessmentId) {
+    LearningAssessmentEntity assessment = assessments.findById(assessmentId)
+        .orElseThrow(() -> new NotFoundException("Assessment not found"));
+    List<LearningAssessmentAssignmentEntity> rows = assessmentAssignments.findByAssessmentId(assessment.getId());
+    List<UUID> helperIds = rows.stream()
+        .map(LearningAssessmentAssignmentEntity::getHelperId)
+        .distinct()
+        .toList();
+    boolean assignAll = helperIds.isEmpty();
+    return new AdminAssessmentAssignmentResponse(assessment.getId(), assignAll, helperIds.size(), helperIds);
+  }
+
+  @Transactional
+  public AdminAssessmentAssignmentResponse assignAssessment(
+      UUID adminUserId,
+      UUID assessmentId,
+      boolean assignAll,
+      List<UUID> helperIds) {
+    LearningAssessmentEntity assessment = assessments.findById(assessmentId)
+        .orElseThrow(() -> new NotFoundException("Assessment not found"));
+
+    if (assignAll) {
+      assessmentAssignments.deleteByAssessmentId(assessmentId);
+      return new AdminAssessmentAssignmentResponse(assessment.getId(), true, 0, List.of());
+    }
+
+    List<UUID> requestedIds = helperIds == null ? List.of() : helperIds.stream()
+        .filter(Objects::nonNull)
+        .distinct()
+        .toList();
+    if (requestedIds.isEmpty()) {
+      throw new BadRequestException("At least one helper id is required");
+    }
+
+    List<UserEntity> helperUsers = users.findByIdInAndRole(requestedIds, UserRole.HELPER);
+    if (helperUsers.size() != requestedIds.size()) {
+      throw new BadRequestException("One or more selected helpers are invalid");
+    }
+
+    Set<UUID> targetHelperIds = new HashSet<>(requestedIds);
+    List<LearningAssessmentAssignmentEntity> existingRows = assessmentAssignments.findByAssessmentId(assessmentId);
+    Set<UUID> existingHelperIds = existingRows.stream()
+        .map(LearningAssessmentAssignmentEntity::getHelperId)
+        .collect(Collectors.toSet());
+
+    for (LearningAssessmentAssignmentEntity row : existingRows) {
+      if (!targetHelperIds.contains(row.getHelperId())) {
+        assessmentAssignments.delete(row);
+      }
+    }
+
+    for (UUID helperId : targetHelperIds) {
+      if (existingHelperIds.contains(helperId)) continue;
+      LearningAssessmentAssignmentEntity row = new LearningAssessmentAssignmentEntity();
+      row.setAssessmentId(assessmentId);
+      row.setHelperId(helperId);
+      row.setCreatedBy(adminUserId);
+      assessmentAssignments.save(row);
+    }
+
+    List<UUID> finalIds = assessmentAssignments.findByAssessmentId(assessmentId).stream()
+        .map(LearningAssessmentAssignmentEntity::getHelperId)
+        .distinct()
+        .toList();
+    return new AdminAssessmentAssignmentResponse(assessment.getId(), false, finalIds.size(), finalIds);
   }
 
   @Transactional
@@ -314,6 +406,7 @@ public class LearningService {
     if (!assessment.isActive()) {
       throw new BadRequestException("Assessment is not active");
     }
+    ensureHelperAssignedForAssessment(helperId, assessmentId);
 
     List<HelperAssessmentAttemptEntity> prev = attempts.findByHelperIdAndAssessmentIdOrderByAttemptNoDesc(helperId, assessmentId);
     HelperAssessmentAttemptEntity current = prev.stream()
@@ -394,6 +487,17 @@ public class LearningService {
     HelperAssessmentAttemptEntity saved = attempts.save(attempt);
     String helperName = users.findById(helperId).map(this::displayNameOrPhone).orElse(helperId.toString());
     return mapper.toAttemptResponse(saved, assessment.getTitle(), helperName);
+  }
+
+  private void ensureHelperAssignedForAssessment(UUID helperId, UUID assessmentId) {
+    List<LearningAssessmentAssignmentEntity> rows = assessmentAssignments.findByAssessmentId(assessmentId);
+    if (rows.isEmpty()) {
+      return;
+    }
+    boolean assigned = rows.stream().anyMatch(row -> Objects.equals(row.getHelperId(), helperId));
+    if (!assigned) {
+      throw new BadRequestException("This assessment is not assigned to you");
+    }
   }
 
   private void timeoutAttempt(HelperAssessmentAttemptEntity attempt, Integer timeLimitMinutes) {

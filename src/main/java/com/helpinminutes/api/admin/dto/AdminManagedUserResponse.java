@@ -14,6 +14,7 @@ public record AdminManagedUserResponse(
     String email,
     String displayName,
     Instant createdAt,
+    boolean bulkCsvEnabled,
     HelperKycStatus helperKycStatus,
     String helperKycFullName,
     String helperKycIdNumber,
