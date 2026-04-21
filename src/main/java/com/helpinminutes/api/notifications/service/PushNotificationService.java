@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -191,6 +192,57 @@ public class PushNotificationService {
     notifyTaskOffered(helperIds, task, distanceByHelper);
   }
 
+  public void notifyTaskCreatedMonitor(TaskEntity task) {
+    if (task == null || messaging == null) return;
+    if (!isTaskCreateMonitorEnabled()) return;
+    String phone = resolveTaskCreateMonitorPhone();
+    if (phone == null) return;
+
+    Optional<UUID> monitorUserId = users.findByPhone(phone).map(u -> u.getId());
+    if (monitorUserId.isEmpty()) {
+      log.info("Task create monitor skipped: no user found for phone {}", phone);
+      return;
+    }
+    UUID userId = monitorUserId.get();
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(userId));
+    if (tokenEntities.isEmpty()) {
+      log.info("Task create monitor skipped: no push token for user {}", userId);
+      return;
+    }
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity token : tokenEntities) {
+      if (token.getToken() != null && !token.getToken().isBlank()) {
+        tokenList.add(token.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+
+    long budgetPaise = task.getBudgetPaise() == null ? 0L : Math.max(0L, task.getBudgetPaise());
+    String amountText = formatAmountInr(budgetPaise);
+    String bodyTitle = task.getTitle() == null || task.getTitle().isBlank() ? "Task" : task.getTitle();
+    String body = amountText == null ? bodyTitle : bodyTitle + " • " + amountText;
+
+    try {
+      MulticastMessage message = MulticastMessage.builder()
+          .addAllTokens(tokenList)
+          .setNotification(Notification.builder()
+              .setTitle("New task created")
+              .setBody(body)
+              .build())
+          .putData("type", "TASK_CREATED_MONITOR")
+          .putData("taskId", task.getId().toString())
+          .putData("title", bodyTitle)
+          .putData("budgetPaise", String.valueOf(budgetPaise))
+          .putData("lat", String.valueOf(task.getLat()))
+          .putData("lng", String.valueOf(task.getLng()))
+          .build();
+      BatchResponse response = messaging.sendEachForMulticast(message);
+      pruneInvalidTokens(task.getId(), userId, tokenList, response);
+    } catch (Exception e) {
+      log.warn("Failed task create monitor push for task {}", task.getId(), e);
+    }
+  }
+
   private String formatDistanceMeters(Double meters) {
     if (meters == null || !Double.isFinite(meters) || meters <= 0) return null;
     if (meters < 1000) {
@@ -203,6 +255,22 @@ public class PushNotificationService {
     if (paise <= 0) return null;
     long rupees = Math.round(paise / 100.0);
     return "₹" + rupees;
+  }
+
+  private boolean isTaskCreateMonitorEnabled() {
+    String value = System.getenv("TASK_CREATE_MONITOR_ENABLED");
+    return value == null || value.isBlank() || !"false".equalsIgnoreCase(value.trim());
+  }
+
+  private String resolveTaskCreateMonitorPhone() {
+    String configured = System.getenv("TASK_CREATE_MONITOR_PHONE");
+    String fallback = "7842541414";
+    String source = (configured == null || configured.isBlank()) ? fallback : configured.trim();
+    String digits = source.replaceAll("\\D", "");
+    if (digits.length() > 10) {
+      digits = digits.substring(digits.length() - 10);
+    }
+    return digits.length() == 10 ? digits : null;
   }
 
   public void notifyBuyerTaskAccepted(UUID buyerId, TaskEntity task) {

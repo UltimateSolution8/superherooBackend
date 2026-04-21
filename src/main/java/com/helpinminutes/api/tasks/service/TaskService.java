@@ -10,6 +10,7 @@ import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
@@ -54,6 +55,7 @@ public class TaskService {
   private final UserRepository users;
   private final HelperProfileRepository helperProfiles;
   private final NotificationQueueService notificationQueue;
+  private final PushNotificationService pushNotifications;
   private final TaskMapper taskMapper;
 
   public TaskService(
@@ -67,6 +69,7 @@ public class TaskService {
       UserRepository users,
       HelperProfileRepository helperProfiles,
       NotificationQueueService notificationQueue,
+      PushNotificationService pushNotifications,
       TaskMapper taskMapper) {
     this.tasks = tasks;
     this.offers = offers;
@@ -78,6 +81,7 @@ public class TaskService {
     this.users = users;
     this.helperProfiles = helperProfiles;
     this.notificationQueue = notificationQueue;
+    this.pushNotifications = pushNotifications;
     this.taskMapper = taskMapper;
   }
 
@@ -155,6 +159,10 @@ public class TaskService {
                   "title", task.getTitle(),
                   "urgency", task.getUrgency().name(),
                   "status", task.getStatus().name()));
+        } catch (Exception ignored) {
+        }
+        try {
+          pushNotifications.notifyTaskCreatedMonitor(task);
         } catch (Exception ignored) {
         }
       });
