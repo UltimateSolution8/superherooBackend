@@ -67,7 +67,7 @@ public class HelperService {
     if (fullName == null || fullName.isBlank()) {
       fullName = user.getPhone();
     }
-    String badgeId = "SHO-" + helperId.toString().substring(0, 8).toUpperCase();
+    String badgeId = buildBadgeId(fullName, user.getPhone(), profile.getKycIdNumber(), helperId);
     String idNumberMasked = maskId(profile.getKycIdNumber());
     Instant issuedAt = profile.getKycSubmittedAt() == null ? user.getCreatedAt() : profile.getKycSubmittedAt();
     return new HelperIdCardResponse(
@@ -87,6 +87,7 @@ public class HelperService {
   public HelperProfileResponse submitKyc(
       UUID helperId,
       String fullName,
+      String docType,
       String idNumber,
       MultipartFile idFront,
       MultipartFile idBack,
@@ -97,14 +98,19 @@ public class HelperService {
     if (idNumber == null || idNumber.isBlank()) {
       throw new BadRequestException("idNumber is required");
     }
+    String normalizedDocType = normalizeDocType(docType);
+    String normalizedIdNumber = normalizeAndValidateIdNumber(idNumber, normalizedDocType);
+    if ("AADHAAR".equals(normalizedDocType) && (idBack == null || idBack.isEmpty())) {
+      throw new BadRequestException("Aadhaar back image is required");
+    }
 
     HelperProfileEntity p = profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
     String frontUrl = storage.uploadHelperKycDoc(helperId, "id-front", idFront);
-    String backUrl = storage.uploadHelperKycDoc(helperId, "id-back", idBack);
+    String backUrl = idBack == null || idBack.isEmpty() ? null : storage.uploadHelperKycDoc(helperId, "id-back", idBack);
     String selfieUrl = storage.uploadHelperKycDoc(helperId, "selfie", selfie);
 
     p.setKycFullName(fullName.trim());
-    p.setKycIdNumber(idNumber.trim());
+    p.setKycIdNumber(normalizedIdNumber);
     p.setKycDocFrontUrl(frontUrl);
     p.setKycDocBackUrl(backUrl);
     p.setKycSelfieUrl(selfieUrl);
@@ -116,7 +122,8 @@ public class HelperService {
     return toResponse(p);
   }
 
-  private static HelperProfileResponse toResponse(HelperProfileEntity p) {
+  private HelperProfileResponse toResponse(HelperProfileEntity p) {
+    Integer position = queuePosition(p);
     return new HelperProfileResponse(
         p.getKycStatus(),
         p.getKycRejectionReason(),
@@ -125,7 +132,31 @@ public class HelperService {
         p.getKycDocFrontUrl(),
         p.getKycDocBackUrl(),
         p.getKycSelfieUrl(),
-        p.getKycSubmittedAt());
+        p.getKycSubmittedAt(),
+        buildKycTokenNumber(p),
+        position,
+        estimatedWaitMinutes(position));
+  }
+
+  private static String buildKycTokenNumber(HelperProfileEntity p) {
+    if (p == null || p.getCreatedAt() == null) return null;
+    long suffix = Math.abs(p.getUserId().hashCode()) % 900 + 100;
+    return "KYC-" + suffix;
+  }
+
+  private static Integer estimatedWaitMinutes(Integer position) {
+    return position == null ? null : Math.max(3, position * 3);
+  }
+
+  private Integer queuePosition(HelperProfileEntity p) {
+    if (p == null || p.getKycStatus() != HelperKycStatus.PENDING) return null;
+    var pending = profiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING);
+    for (int i = 0; i < pending.size(); i++) {
+      if (pending.get(i).getUserId().equals(p.getUserId())) {
+        return i + 1;
+      }
+    }
+    return null;
   }
 
   private static String maskId(String id) {
@@ -133,5 +164,59 @@ public class HelperService {
     String raw = id.trim();
     if (raw.length() <= 4) return raw;
     return "XXXXXX" + raw.substring(raw.length() - 4);
+  }
+
+  private static String buildBadgeId(String fullName, String phone, String idNumber, UUID fallbackId) {
+    String name = fullName == null ? "" : fullName.replaceAll("[^A-Za-z]", "").toUpperCase();
+    String namePart = (name + "XXX").substring(0, 3);
+    String phoneDigits = phone == null ? "" : phone.replaceAll("\\D", "");
+    String idDigits = idNumber == null ? "" : idNumber.replaceAll("[^A-Z0-9]", "").toUpperCase();
+    String phonePart = last4OrFallback(phoneDigits, fallbackId.toString().replaceAll("\\D", ""));
+    String idPart = last4OrFallback(idDigits, fallbackId.toString().replaceAll("[^A-Fa-f0-9]", "").toUpperCase());
+    return "SHO-" + namePart + "-" + phonePart + "-" + idPart;
+  }
+
+  private static String last4OrFallback(String value, String fallback) {
+    String source = value == null || value.length() < 4 ? fallback : value;
+    if (source == null || source.isBlank()) return "0000";
+    return source.length() <= 4 ? String.format("%4s", source).replace(' ', '0') : source.substring(source.length() - 4);
+  }
+
+  private static String normalizeDocType(String docType) {
+    if (docType == null || docType.isBlank()) return "AADHAAR";
+    String value = docType.trim().toUpperCase().replace('-', '_').replace(' ', '_');
+    if ("DL".equals(value)) return "DRIVING_LICENSE";
+    return value;
+  }
+
+  private static String normalizeAndValidateIdNumber(String idNumber, String docType) {
+    String value = idNumber == null ? "" : idNumber.trim().toUpperCase();
+    if ("AADHAAR".equals(docType)) {
+      value = value.replaceAll("\\D", "");
+      if (!value.matches("\\d{12}")) throw new BadRequestException("Aadhaar must be 12 digits");
+      return value;
+    }
+    if ("PAN".equals(docType)) {
+      value = value.replaceAll("[^A-Z0-9]", "");
+      if (!value.matches("[A-Z]{5}[0-9]{4}[A-Z]")) throw new BadRequestException("PAN must match ABCDE1234F");
+      return value;
+    }
+    if ("PASSPORT".equals(docType)) {
+      value = value.replaceAll("[^A-Z0-9]", "");
+      if (!value.matches("[A-Z][0-9]{7}")) throw new BadRequestException("Passport number is invalid");
+      return value;
+    }
+    if ("DRIVING_LICENSE".equals(docType)) {
+      value = value.replaceAll("[^A-Z0-9]", "");
+      if (!value.matches("[A-Z]{2}[0-9]{2}[A-Z0-9]{8,14}")) throw new BadRequestException("Driving licence number is invalid");
+      return value;
+    }
+    if ("RATION_CARD".equals(docType)) {
+      value = value.replaceAll("[^A-Z0-9]", "");
+      if (!value.matches("[A-Z0-9]{8,20}")) throw new BadRequestException("Ration card number is invalid");
+      return value;
+    }
+    if (value.length() < 4 || value.length() > 30) throw new BadRequestException("Document number is invalid");
+    return value;
   }
 }

@@ -11,5 +11,8 @@ public record HelperProfileResponse(
     String kycDocFrontUrl,
     String kycDocBackUrl,
     String kycSelfieUrl,
-    Instant kycSubmittedAt
+    Instant kycSubmittedAt,
+    String kycTokenNumber,
+    Integer kycQueuePosition,
+    Integer kycEstimatedWaitMinutes
 ) {}

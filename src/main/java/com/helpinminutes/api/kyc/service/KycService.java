@@ -142,13 +142,17 @@ public class KycService {
         }
 
         validateKycKey(helperId, req.s3Keys().video(), "video");
-        validateKycKey(helperId, req.s3Keys().docFront(), "doc-front");
+        if (req.s3Keys().docFront() != null && !req.s3Keys().docFront().isBlank()) {
+            validateKycKey(helperId, req.s3Keys().docFront(), "doc-front");
+        }
         if (req.s3Keys().docBack() != null && !req.s3Keys().docBack().isBlank()) {
             validateKycKey(helperId, req.s3Keys().docBack(), "doc-back");
         }
 
         validateObjectMeta(req.s3Keys().video(), true);
-        validateObjectMeta(req.s3Keys().docFront(), false);
+        if (req.s3Keys().docFront() != null && !req.s3Keys().docFront().isBlank()) {
+            validateObjectMeta(req.s3Keys().docFront(), false);
+        }
         if (req.s3Keys().docBack() != null && !req.s3Keys().docBack().isBlank()) {
             validateObjectMeta(req.s3Keys().docBack(), false);
         }
@@ -222,8 +226,8 @@ public class KycService {
         }
 
         String roomId = entity.getLiveRoomId();
-        if (roomId == null || roomId.isBlank()) {
-            roomId = "kyc-" + helperId + "-" + System.currentTimeMillis();
+        if (roomId == null || roomId.isBlank() || !isZegoSafeId(roomId)) {
+            roomId = "kyc_" + sanitizeZegoId(helperId.toString()) + "_" + System.currentTimeMillis();
             entity.setLiveRoomId(roomId);
         }
         entity.setLiveStartedAt(Instant.now());
@@ -237,7 +241,8 @@ public class KycService {
         long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
         Instant expiresAt = Instant.now().plusSeconds(ttl);
         String userName = resolveHelperName(admin);
-        String token = zegoTokenService.generateToken(adminId.toString(), roomId, userName, ttl);
+        String adminZegoUserId = "admin_" + sanitizeZegoId(adminId.toString());
+        String token = zegoTokenService.generateToken(adminZegoUserId, roomId, userName, ttl);
 
         return new LiveKycSessionResponse(
                 entity.getId(),
@@ -245,7 +250,7 @@ public class KycService {
                 resolveHelperName(helper),
                 zegoProps.appId(),
                 roomId,
-                adminId.toString(),
+                adminZegoUserId,
                 userName,
                 token,
                 entity.getStatus().name(),
@@ -267,14 +272,15 @@ public class KycService {
         long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
         Instant expiresAt = Instant.now().plusSeconds(ttl);
         String userName = resolveHelperName(helper);
-        String token = zegoTokenService.generateToken(helperId.toString(), entity.getLiveRoomId(), userName, ttl);
+        String helperZegoUserId = "helper_" + sanitizeZegoId(helperId.toString());
+        String token = zegoTokenService.generateToken(helperZegoUserId, entity.getLiveRoomId(), userName, ttl);
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
                 resolveHelperName(helper),
                 zegoProps.appId(),
                 entity.getLiveRoomId(),
-                helperId.toString(),
+                helperZegoUserId,
                 userName,
                 token,
                 entity.getStatus().name(),
@@ -483,6 +489,16 @@ public class KycService {
             return normalized;
         }
         throw new BadRequestException("Invalid snapshot kind");
+    }
+
+    private boolean isZegoSafeId(String value) {
+        return value != null && value.matches("[A-Za-z0-9_]{1,64}");
+    }
+
+    private String sanitizeZegoId(String value) {
+        String sanitized = value == null ? "" : value.replaceAll("[^A-Za-z0-9_]", "_");
+        if (sanitized.isBlank()) return "user";
+        return sanitized.length() <= 58 ? sanitized : sanitized.substring(0, 58);
     }
 
     private String resolveRecordingUrl(String videoKey, String liveRecordingUrl) {

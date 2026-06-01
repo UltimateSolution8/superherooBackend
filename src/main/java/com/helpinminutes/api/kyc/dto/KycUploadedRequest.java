@@ -9,7 +9,7 @@ public record KycUploadedRequest(
         @Min(0) Integer durationSeconds) {
     public record S3Keys(
             @NotBlank String video,
-            @NotBlank String docFront,
+            String docFront,
             String docBack) {
     }
 }
