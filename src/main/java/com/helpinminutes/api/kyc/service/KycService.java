@@ -240,14 +240,14 @@ public class KycService {
 
         long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
         Instant expiresAt = Instant.now().plusSeconds(ttl);
-        String userName = resolveHelperName(admin);
+        String userName = sanitizeZegoUserName(resolveHelperName(admin), "Admin");
         String adminZegoUserId = "admin_" + sanitizeZegoId(adminId.toString());
         String token = zegoTokenService.generateToken(adminZegoUserId, roomId, userName, ttl);
 
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
-                resolveHelperName(helper),
+                sanitizeZegoUserName(resolveHelperName(helper), "Superherooo"),
                 zegoProps.appId(),
                 roomId,
                 adminZegoUserId,
@@ -271,13 +271,13 @@ public class KycService {
         }
         long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
         Instant expiresAt = Instant.now().plusSeconds(ttl);
-        String userName = resolveHelperName(helper);
+        String userName = sanitizeZegoUserName(resolveHelperName(helper), "Superherooo");
         String helperZegoUserId = "helper_" + sanitizeZegoId(helperId.toString());
         String token = zegoTokenService.generateToken(helperZegoUserId, entity.getLiveRoomId(), userName, ttl);
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
-                resolveHelperName(helper),
+                userName,
                 zegoProps.appId(),
                 entity.getLiveRoomId(),
                 helperZegoUserId,
@@ -499,6 +499,12 @@ public class KycService {
         String sanitized = value == null ? "" : value.replaceAll("[^A-Za-z0-9_]", "_");
         if (sanitized.isBlank()) return "user";
         return sanitized.length() <= 58 ? sanitized : sanitized.substring(0, 58);
+    }
+
+    private String sanitizeZegoUserName(String value, String fallback) {
+        String sanitized = value == null ? "" : value.replaceAll("[^A-Za-z0-9 _-]", " ").replaceAll("\\s+", " ").trim();
+        if (sanitized.isBlank()) sanitized = fallback;
+        return sanitized.length() <= 32 ? sanitized : sanitized.substring(0, 32).trim();
     }
 
     private String resolveRecordingUrl(String videoKey, String liveRecordingUrl) {

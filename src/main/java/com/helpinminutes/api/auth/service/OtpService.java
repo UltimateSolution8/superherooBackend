@@ -1,11 +1,18 @@
 package com.helpinminutes.api.auth.service;
 
 import com.helpinminutes.api.config.AppProperties;
+import com.helpinminutes.api.config.ExotelProperties;
 import com.helpinminutes.api.config.TwilioProperties;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
+import java.nio.charset.StandardCharsets;
 import com.twilio.Twilio;
 import com.twilio.rest.verify.v2.service.Verification;
 import com.twilio.rest.verify.v2.service.VerificationCheck;
@@ -22,15 +29,28 @@ public class OtpService {
   private final StringRedisTemplate redis;
   private final AppProperties props;
   private final TwilioProperties twilio;
+  private final ExotelProperties exotel;
   private final ConcurrentHashMap<String, LocalOtp> localFallback = new ConcurrentHashMap<>();
+  private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
-  public OtpService(StringRedisTemplate redis, AppProperties props, TwilioProperties twilio) {
+  public OtpService(StringRedisTemplate redis, AppProperties props, TwilioProperties twilio, ExotelProperties exotel) {
     this.redis = redis;
     this.props = props;
     this.twilio = twilio;
+    this.exotel = exotel;
   }
 
   public String startOtp(String phone, String channel) {
+    if (exotel != null && exotel.enabled()) {
+      String otp = createAndStoreLocalOtp(phone);
+      if (exotel.canSendSms()) {
+        sendExotelOtp(phone, otp);
+      } else {
+        log.warn("Exotel OTP is enabled but SMS is not sent because EXOTEL_FROM or credentials are missing. Using dev/local OTP.");
+      }
+      return otp;
+    }
+
     String recipient = toTwilioRecipient(phone);
     if (twilio.enabled()) {
       try {
@@ -44,6 +64,31 @@ public class OtpService {
       }
     }
     return createAndStoreLocalOtp(phone);
+  }
+
+  private void sendExotelOtp(String phone, String otp) {
+    try {
+      String to = toIndiaRecipient(phone);
+      String body = "Your Superherooo OTP is " + otp + ". It is valid for "
+          + Math.max(1, props.otp().ttlSeconds() / 60) + " minutes.";
+      String form = "From=" + enc(exotel.from().trim())
+          + "&To=" + enc(to)
+          + "&Body=" + enc(body);
+      String userInfo = encUserInfo(exotel.apiKey()) + ":" + encUserInfo(exotel.apiToken());
+      URI uri = URI.create("https://" + userInfo + "@" + exotel.normalizedSubdomain()
+          + "/v1/Accounts/" + encPath(exotel.accountSid()) + "/Sms/send");
+      HttpRequest req = HttpRequest.newBuilder(uri)
+          .timeout(Duration.ofSeconds(10))
+          .header("Content-Type", "application/x-www-form-urlencoded")
+          .POST(HttpRequest.BodyPublishers.ofString(form))
+          .build();
+      HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+      if (res.statusCode() < 200 || res.statusCode() >= 300) {
+        log.warn("Exotel OTP SMS failed for {} status={} body={}", to, res.statusCode(), safeLogBody(res.body()));
+      }
+    } catch (Exception e) {
+      log.warn("Exotel OTP SMS failed for {}: {}", phone, e.getMessage());
+    }
   }
 
   public boolean verifyOtp(String phone, String otp) {
@@ -108,6 +153,32 @@ public class OtpService {
     if (normalized.matches("^91[6-9]\\d{9}$")) return "+" + normalized;
     if (normalized.matches("^[6-9]\\d{9}$")) return "+91" + normalized;
     return normalized;
+  }
+
+  private static String toIndiaRecipient(String phone) {
+    if (phone == null) return "";
+    String digits = phone.replaceAll("\\D", "");
+    if (digits.length() > 10) {
+      digits = digits.substring(digits.length() - 10);
+    }
+    return digits.matches("^[6-9]\\d{9}$") ? "91" + digits : digits;
+  }
+
+  private static String enc(String value) {
+    return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
+  }
+
+  private static String encPath(String value) {
+    return enc(value).replace("+", "%20");
+  }
+
+  private static String encUserInfo(String value) {
+    return enc(value).replace("+", "%20");
+  }
+
+  private static String safeLogBody(String body) {
+    if (body == null) return "";
+    return body.length() <= 300 ? body : body.substring(0, 300);
   }
 
   private String createAndStoreLocalOtp(String phone) {

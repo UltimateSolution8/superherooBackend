@@ -1,6 +1,7 @@
 package com.helpinminutes.api;
 
 import com.helpinminutes.api.config.AppProperties;
+import com.helpinminutes.api.config.ExotelProperties;
 import com.helpinminutes.api.config.TwilioProperties;
 import com.helpinminutes.api.config.ZegoProperties;
 import org.springframework.boot.SpringApplication;
@@ -10,7 +11,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
-@EnableConfigurationProperties({AppProperties.class, TwilioProperties.class, ZegoProperties.class})
+@EnableConfigurationProperties({AppProperties.class, TwilioProperties.class, ExotelProperties.class, ZegoProperties.class})
 public class HelpInMinutesApiApplication {
   public static void main(String[] args) {
     SpringApplication.run(HelpInMinutesApiApplication.class, args);
