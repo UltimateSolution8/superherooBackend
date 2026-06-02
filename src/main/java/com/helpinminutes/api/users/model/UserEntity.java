@@ -37,6 +37,9 @@ public class UserEntity {
   @Column(name = "display_name")
   private String displayName;
 
+  @Column(name = "email_verified", nullable = false)
+  private boolean emailVerified;
+
   @Column(name = "demo_balance_paise", nullable = false)
   private Long demoBalancePaise;
 
@@ -126,6 +129,14 @@ public class UserEntity {
 
   public void setDisplayName(String displayName) {
     this.displayName = displayName;
+  }
+
+  public boolean isEmailVerified() {
+    return emailVerified;
+  }
+
+  public void setEmailVerified(boolean emailVerified) {
+    this.emailVerified = emailVerified;
   }
 
   public Long getDemoBalancePaise() {

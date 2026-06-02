@@ -35,6 +35,7 @@ public record TaskResponse(
     Double completionSelfieLng,
     String completionSelfieAddress,
     Instant completionSelfieCapturedAt,
+    Instant workStartedAt,
     Double buyerRating,
     String buyerRatingComment,
     Instant buyerRatedAt,

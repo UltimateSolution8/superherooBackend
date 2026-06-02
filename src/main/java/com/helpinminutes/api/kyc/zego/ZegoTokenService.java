@@ -8,7 +8,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Map;
-import java.util.Random;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -23,7 +22,6 @@ public class ZegoTokenService {
   private final ZegoProperties props;
   private final ObjectMapper mapper;
   private final SecureRandom secureRandom = new SecureRandom();
-  private final Random nonceRandom = new Random();
 
   public ZegoTokenService(ZegoProperties props, ObjectMapper mapper) {
     this.props = props;
@@ -45,7 +43,7 @@ public class ZegoTokenService {
 
     long now = System.currentTimeMillis() / 1000;
     long expireTime = now + Math.max(60, effectiveSeconds);
-    int nonce = nonceRandom.nextInt();
+    int nonce = secureRandom.nextInt(Integer.MAX_VALUE);
     String payload = payloadJson == null ? "" : payloadJson;
 
     try {

@@ -98,6 +98,10 @@ public class TaskEntity {
 
   @Column(name = "completion_selfie_captured_at")
   private Instant completionSelfieCapturedAt;
+
+  @Column(name = "work_started_at")
+  private Instant workStartedAt;
+
   @Column(name = "cancel_reason")
   private String cancelReason;
   @Column(name = "cancelled_by_role")
@@ -389,6 +393,14 @@ public class TaskEntity {
 
   public void setCompletionSelfieCapturedAt(Instant completionSelfieCapturedAt) {
     this.completionSelfieCapturedAt = completionSelfieCapturedAt;
+  }
+
+  public Instant getWorkStartedAt() {
+    return workStartedAt;
+  }
+
+  public void setWorkStartedAt(Instant workStartedAt) {
+    this.workStartedAt = workStartedAt;
   }
 
   public String getCancelReason() {

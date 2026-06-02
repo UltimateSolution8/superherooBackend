@@ -285,6 +285,9 @@ public class TaskService {
     }
 
     task.setStatus(newStatus);
+    if (newStatus == TaskStatus.STARTED && task.getWorkStartedAt() == null) {
+      task.setWorkStartedAt(Instant.now());
+    }
 
     if (newStatus == TaskStatus.COMPLETED && task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
       if (task.getEscrowStatus() == TaskEscrowStatus.HELD) {

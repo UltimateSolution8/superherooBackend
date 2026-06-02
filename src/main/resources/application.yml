@@ -122,6 +122,14 @@ twilio:
   authToken: ${TWILIO_AUTH_TOKEN:}
   verifyServiceSid: ${TWILIO_VERIFY_SERVICE_SID:}
 
+exotel:
+  enabled: ${EXOTEL_ENABLED:false}
+  apiKey: ${EXOTEL_API_KEY:}
+  apiToken: ${EXOTEL_API_TOKEN:}
+  accountSid: ${EXOTEL_ACCOUNT_SID:}
+  subdomain: ${EXOTEL_SUBDOMAIN:api.exotel.com}
+  from: ${EXOTEL_FROM:}
+
 zego:
   appId: ${ZEGO_APP_ID:0}
   serverSecret: ${ZEGO_SERVER_SECRET:}

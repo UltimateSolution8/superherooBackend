@@ -74,13 +74,14 @@ public class HelperController {
   public HelperProfileResponse submitKyc(
       @AuthenticationPrincipal UserPrincipal principal,
       @RequestParam String fullName,
+      @RequestParam(required = false) String docType,
       @RequestParam String idNumber,
       @RequestParam("idFront") MultipartFile idFront,
-      @RequestParam("idBack") MultipartFile idBack,
+      @RequestParam(value = "idBack", required = false) MultipartFile idBack,
       @RequestParam("selfie") MultipartFile selfie) {
     if (principal.role() != UserRole.HELPER) {
       throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
     }
-    return helpers.submitKyc(principal.userId(), fullName, idNumber, idFront, idBack, selfie);
+    return helpers.submitKyc(principal.userId(), fullName, docType, idNumber, idFront, idBack, selfie);
   }
 }

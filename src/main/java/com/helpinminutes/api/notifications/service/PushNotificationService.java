@@ -10,12 +10,17 @@ import com.google.firebase.messaging.MessagingErrorCode;
 import com.google.firebase.messaging.MulticastMessage;
 import com.google.firebase.messaging.Notification;
 import com.google.firebase.messaging.SendResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
 import com.helpinminutes.api.notifications.model.PushTokenEntity;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.io.ByteArrayInputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,13 +45,16 @@ public class PushNotificationService {
   private final UserRepository users;
   private final BookingBatchItemRepository batchItems;
   private final StringRedisTemplate redis;
+  private final ObjectMapper mapper;
   private final FirebaseMessaging messaging;
+  private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
   public PushNotificationService(
       PushTokenService tokens,
       UserRepository users,
       BookingBatchItemRepository batchItems,
       StringRedisTemplate redis,
+      ObjectMapper mapper,
       @Value("${FIREBASE_SERVICE_ACCOUNT_JSON:}") String serviceAccountJson,
       @Value("${FIREBASE_SERVICE_ACCOUNT_BASE64:}") String serviceAccountBase64,
       @Value("${FIREBASE_SERVICE_ACCOUNT_PATH:}") String serviceAccountPath) {
@@ -54,6 +62,7 @@ public class PushNotificationService {
     this.users = users;
     this.batchItems = batchItems;
     this.redis = redis;
+    this.mapper = mapper;
     this.messaging = initFirebase(serviceAccountJson, serviceAccountBase64, serviceAccountPath);
   }
 
@@ -89,10 +98,6 @@ public class PushNotificationService {
   }
 
   public void notifyTaskOffered(List<UUID> helperIds, TaskEntity task, Map<UUID, Double> distanceByHelper) {
-    if (messaging == null) {
-      log.warn("Push skipped for task {} because Firebase messaging is not initialized", task != null ? task.getId() : null);
-      return;
-    }
     if (task == null || helperIds == null || helperIds.isEmpty()) return;
 
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(helperIds);
@@ -141,34 +146,26 @@ public class PushNotificationService {
       }
 
       try {
-        MulticastMessage.Builder builder = MulticastMessage.builder()
-            .addAllTokens(tokenList)
-            .setNotification(Notification.builder()
-                .setTitle(title)
-                .setBody(body)
-                .build())
-            .putData("type", "TASK_OFFERED")
-            .putData("taskId", task.getId().toString())
-            .putData("title", task.getTitle() == null ? "Task" : task.getTitle())
-            .putData("urgency", task.getUrgency().name())
-            .putData("budgetPaise", String.valueOf(budgetPaise))
-            .putData("amountText", amountText == null ? "" : amountText)
-            .putData("lat", String.valueOf(task.getLat()))
-            .putData("lng", String.valueOf(task.getLng()));
+        Map<String, String> data = new HashMap<>();
+        data.put("type", "TASK_OFFERED");
+        data.put("taskId", task.getId().toString());
+        data.put("title", task.getTitle() == null ? "Task" : task.getTitle());
+        data.put("urgency", task.getUrgency().name());
+        data.put("budgetPaise", String.valueOf(budgetPaise));
+        data.put("amountText", amountText == null ? "" : amountText);
+        data.put("lat", String.valueOf(task.getLat()));
+        data.put("lng", String.valueOf(task.getLng()));
         if (bulkMeta != null) {
-          builder.putData("bulkRequest", "true");
-          builder.putData("batchId", bulkMeta.batchId().toString());
-          builder.putData("helpersNeeded", String.valueOf(bulkMeta.totalCount()));
+          data.put("bulkRequest", "true");
+          data.put("batchId", bulkMeta.batchId().toString());
+          data.put("helpersNeeded", String.valueOf(bulkMeta.totalCount()));
         }
 
         if (distMeters != null) {
-          builder.putData("distanceMeters", String.valueOf(Math.round(distMeters)));
+          data.put("distanceMeters", String.valueOf(Math.round(distMeters)));
         }
 
-        BatchResponse response = messaging.sendEachForMulticast(builder.build());
-        log.info("Push sent for task {} helper {}: success={}, failure={}",
-            task.getId(), helperId, response.getSuccessCount(), response.getFailureCount());
-        pruneInvalidTokens(task.getId(), helperId, tokenList, response);
+        sendToTokens(task.getId(), helperId, tokenList, title, body, data);
       } catch (Exception e) {
         log.warn("Failed to send push notifications for task {} to helper {}", task.getId(), helperId, e);
       }
@@ -193,7 +190,7 @@ public class PushNotificationService {
   }
 
   public void notifyTaskCreatedMonitor(TaskEntity task) {
-    if (task == null || messaging == null) return;
+    if (task == null) return;
     if (!isTaskCreateMonitorEnabled()) return;
     String phone = resolveTaskCreateMonitorPhone();
     if (phone == null) return;
@@ -223,21 +220,14 @@ public class PushNotificationService {
     String body = amountText == null ? bodyTitle : bodyTitle + " • " + amountText;
 
     try {
-      MulticastMessage message = MulticastMessage.builder()
-          .addAllTokens(tokenList)
-          .setNotification(Notification.builder()
-              .setTitle("New task created")
-              .setBody(body)
-              .build())
-          .putData("type", "TASK_CREATED_MONITOR")
-          .putData("taskId", task.getId().toString())
-          .putData("title", bodyTitle)
-          .putData("budgetPaise", String.valueOf(budgetPaise))
-          .putData("lat", String.valueOf(task.getLat()))
-          .putData("lng", String.valueOf(task.getLng()))
-          .build();
-      BatchResponse response = messaging.sendEachForMulticast(message);
-      pruneInvalidTokens(task.getId(), userId, tokenList, response);
+      Map<String, String> data = new HashMap<>();
+      data.put("type", "TASK_CREATED_MONITOR");
+      data.put("taskId", task.getId().toString());
+      data.put("title", bodyTitle);
+      data.put("budgetPaise", String.valueOf(budgetPaise));
+      data.put("lat", String.valueOf(task.getLat()));
+      data.put("lng", String.valueOf(task.getLng()));
+      sendToTokens(task.getId(), userId, tokenList, "New task created", body, data);
     } catch (Exception e) {
       log.warn("Failed task create monitor push for task {}", task.getId(), e);
     }
@@ -274,7 +264,7 @@ public class PushNotificationService {
   }
 
   public void notifyBuyerTaskAccepted(UUID buyerId, TaskEntity task) {
-    if (messaging == null || buyerId == null) return;
+    if (buyerId == null) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
     if (tokenEntities.isEmpty()) return;
     List<String> tokenList = new ArrayList<>();
@@ -285,24 +275,15 @@ public class PushNotificationService {
     }
     if (tokenList.isEmpty()) return;
     try {
-      MulticastMessage msg = MulticastMessage.builder()
-          .addAllTokens(tokenList)
-          .setNotification(Notification.builder()
-              .setTitle("Task accepted")
-              .setBody("A Superheroo is on the way.")
-              .build())
-          .putData("type", "TASK_ACCEPTED")
-          .putData("taskId", task.getId().toString())
-          .build();
-      BatchResponse response = messaging.sendEachForMulticast(msg);
-      pruneInvalidTokens(task.getId(), buyerId, tokenList, response);
+      sendToTokens(task.getId(), buyerId, tokenList, "Task accepted", "A Superheroo is on the way.",
+          Map.of("type", "TASK_ACCEPTED", "taskId", task.getId().toString()));
     } catch (Exception e) {
       log.warn("Failed to send task accepted notification for task {}", task.getId(), e);
     }
   }
 
   public void notifyBuyerTaskCompleted(UUID buyerId, TaskEntity task) {
-    if (messaging == null || buyerId == null) return;
+    if (buyerId == null) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
     if (tokenEntities.isEmpty()) return;
     List<String> tokenList = new ArrayList<>();
@@ -313,24 +294,14 @@ public class PushNotificationService {
     }
     if (tokenList.isEmpty()) return;
     try {
-      MulticastMessage msg = MulticastMessage.builder()
-          .addAllTokens(tokenList)
-          .setNotification(Notification.builder()
-              .setTitle("Task completed")
-              .setBody("Please rate your Superheroo.")
-              .build())
-          .putData("type", "TASK_COMPLETED")
-          .putData("taskId", task.getId().toString())
-          .build();
-      BatchResponse response = messaging.sendEachForMulticast(msg);
-      pruneInvalidTokens(task.getId(), buyerId, tokenList, response);
+      sendToTokens(task.getId(), buyerId, tokenList, "Task completed", "Please rate your Superheroo.",
+          Map.of("type", "TASK_COMPLETED", "taskId", task.getId().toString()));
     } catch (Exception e) {
       log.warn("Failed to send task completed notification for task {}", task.getId(), e);
     }
   }
 
   public void notifyHelperKycApproved(UUID helperId) {
-    if (messaging == null) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(helperId));
     if (tokenEntities.isEmpty()) return;
 
@@ -343,16 +314,8 @@ public class PushNotificationService {
     if (tokenList.isEmpty()) return;
 
     try {
-      MulticastMessage msg = MulticastMessage.builder()
-          .addAllTokens(tokenList)
-          .setNotification(Notification.builder()
-              .setTitle("KYC approved")
-              .setBody("You are approved and can now go online.")
-              .build())
-          .putData("type", "KYC_APPROVED")
-          .build();
-      BatchResponse response = messaging.sendEachForMulticast(msg);
-      pruneInvalidTokens(null, helperId, tokenList, response);
+      sendToTokens(null, helperId, tokenList, "KYC approved", "You are approved and can now go online.",
+          Map.of("type", "KYC_APPROVED"));
     } catch (Exception e) {
       log.warn("Failed to send KYC approved push notification for helper {}", helperId, e);
     }
@@ -373,6 +336,75 @@ public class PushNotificationService {
     if (invalidTokens.isEmpty()) return;
     long deleted = tokens.removeTokens(invalidTokens);
     log.info("Pruned {} invalid push token(s) for user {} task {}", deleted, userId, taskId);
+  }
+
+  private void sendToTokens(UUID taskId, UUID userId, List<String> tokenList, String title, String body, Map<String, String> data) {
+    if (tokenList == null || tokenList.isEmpty()) return;
+    List<String> expoTokens = new ArrayList<>();
+    List<String> fcmTokens = new ArrayList<>();
+    for (String token : tokenList) {
+      if (isExpoToken(token)) {
+        expoTokens.add(token);
+      } else {
+        fcmTokens.add(token);
+      }
+    }
+    if (!fcmTokens.isEmpty()) {
+      if (messaging == null) {
+        log.warn("FCM push skipped for user {} task {} because Firebase messaging is not initialized", userId, taskId);
+      } else {
+        MulticastMessage.Builder builder = MulticastMessage.builder()
+            .addAllTokens(fcmTokens)
+            .setNotification(Notification.builder().setTitle(title).setBody(body).build());
+        data.forEach(builder::putData);
+        try {
+          BatchResponse response = messaging.sendEachForMulticast(builder.build());
+          log.info("FCM push sent user={} task={}: success={}, failure={}",
+              userId, taskId, response.getSuccessCount(), response.getFailureCount());
+          pruneInvalidTokens(taskId, userId, fcmTokens, response);
+        } catch (Exception e) {
+          log.warn("Failed FCM push user={} task={}", userId, taskId, e);
+        }
+      }
+    }
+    if (!expoTokens.isEmpty()) {
+      sendExpoPush(userId, taskId, expoTokens, title, body, data);
+    }
+  }
+
+  private boolean isExpoToken(String token) {
+    return token != null && (token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken["));
+  }
+
+  private void sendExpoPush(UUID userId, UUID taskId, List<String> tokenList, String title, String body, Map<String, String> data) {
+    try {
+      List<Map<String, Object>> payload = tokenList.stream()
+          .map(token -> {
+            Map<String, Object> item = new HashMap<>();
+            item.put("to", token);
+            item.put("sound", "default");
+            item.put("title", title);
+            item.put("body", body);
+            item.put("data", data);
+            return item;
+          })
+          .toList();
+      HttpRequest request = HttpRequest.newBuilder()
+          .uri(URI.create("https://exp.host/--/api/v2/push/send"))
+          .timeout(Duration.ofSeconds(10))
+          .header("Content-Type", "application/json")
+          .header("Accept", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
+          .build();
+      HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        log.warn("Expo push failed user={} task={} status={} body={}", userId, taskId, response.statusCode(), response.body());
+        return;
+      }
+      log.info("Expo push sent user={} task={} count={}", userId, taskId, tokenList.size());
+    } catch (Exception e) {
+      log.warn("Failed Expo push user={} task={}", userId, taskId, e);
+    }
   }
 
   private boolean isPermanentTokenError(FirebaseMessagingException ex) {

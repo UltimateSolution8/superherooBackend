@@ -290,6 +290,7 @@ public class AdminController {
           t.getCompletionSelfieLng(),
           t.getCompletionSelfieAddress(),
           t.getCompletionSelfieCapturedAt(),
+          t.getWorkStartedAt(),
           t.getBuyerRating() != null ? t.getBuyerRating().doubleValue() : null,
           t.getBuyerRatingComment(),
           t.getBuyerRatedAt(),
