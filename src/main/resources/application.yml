@@ -131,9 +131,9 @@ exotel:
   from: ${EXOTEL_FROM:}
 
 zego:
-  appId: ${ZEGO_APP_ID:0}
-  serverSecret: ${ZEGO_SERVER_SECRET:}
-  callbackSecret: ${ZEGO_CALLBACK_SECRET:}
+  appId: ${ZEGO_APP_ID:1860318111}
+  serverSecret: ${ZEGO_SERVER_SECRET:f15670aeb2dae097e530312e43a1ebdf}
+  callbackSecret: ${ZEGO_CALLBACK_SECRET:4a4ed25ad8a5d5844685a77662d4e426}
   tokenTtlSeconds: ${ZEGO_TOKEN_TTL_SECONDS:3600}
   recordApiBaseUrl: ${ZEGO_RECORD_API_BASE_URL:https://cloudrecord-api.zego.im}
 
