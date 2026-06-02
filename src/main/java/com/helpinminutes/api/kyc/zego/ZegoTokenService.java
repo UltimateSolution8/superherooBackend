@@ -43,7 +43,7 @@ public class ZegoTokenService {
 
     long now = System.currentTimeMillis() / 1000;
     long expireTime = now + Math.max(60, effectiveSeconds);
-    long nonce = Math.abs(secureRandom.nextLong());
+    int nonce = secureRandom.nextInt(Integer.MAX_VALUE);
     String payload = payloadJson == null ? "" : payloadJson;
 
     try {
