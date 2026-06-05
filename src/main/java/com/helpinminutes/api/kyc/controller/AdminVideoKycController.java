@@ -35,15 +35,19 @@ public class AdminVideoKycController {
         this.kycService = kycService;
     }
 
+    private static void requireAdmin(UserPrincipal principal) {
+        if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+            throw new ForbiddenException("Not an admin");
+        }
+    }
+
     @GetMapping
     public Page<AdminKycResponse> listRequests(
             @AuthenticationPrincipal UserPrincipal principal,
             @RequestParam(required = false) KycRequestStatus status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        if (principal.role() != UserRole.ADMIN) {
-            throw new ForbiddenException("Not an admin");
-        }
+        requireAdmin(principal);
         return kycService.listRequestsForAdmin(status, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
     }
 
@@ -52,9 +56,7 @@ public class AdminVideoKycController {
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") UUID id,
             @Valid @RequestBody KycActionRequest req) {
-        if (principal.role() != UserRole.ADMIN) {
-            throw new ForbiddenException("Not an admin");
-        }
+        requireAdmin(principal);
         kycService.adminAction(id, principal.userId(), req);
     }
 
@@ -62,9 +64,7 @@ public class AdminVideoKycController {
     public LiveKycSessionResponse startLive(
             @AuthenticationPrincipal UserPrincipal principal,
             @Valid @RequestBody LiveKycStartRequest req) {
-        if (principal.role() != UserRole.ADMIN) {
-            throw new ForbiddenException("Not an admin");
-        }
+        requireAdmin(principal);
         return kycService.startLiveKyc(req.helperId(), principal.userId());
     }
 
@@ -73,9 +73,7 @@ public class AdminVideoKycController {
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") UUID id,
             @RequestParam("kind") String kind) {
-        if (principal.role() != UserRole.ADMIN) {
-            throw new ForbiddenException("Not an admin");
-        }
+        requireAdmin(principal);
         return kycService.createLiveSnapshotUrl(id, principal.userId(), kind);
     }
 
@@ -84,9 +82,7 @@ public class AdminVideoKycController {
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") UUID id,
             @Valid @RequestBody LiveKycSnapshotRequest req) {
-        if (principal.role() != UserRole.ADMIN) {
-            throw new ForbiddenException("Not an admin");
-        }
+        requireAdmin(principal);
         kycService.confirmLiveSnapshot(id, principal.userId(), req);
     }
 
@@ -94,9 +90,7 @@ public class AdminVideoKycController {
     public void endLive(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable("id") UUID id) {
-        if (principal.role() != UserRole.ADMIN) {
-            throw new ForbiddenException("Not an admin");
-        }
+        requireAdmin(principal);
         kycService.endLiveSession(id, principal.userId());
     }
 }

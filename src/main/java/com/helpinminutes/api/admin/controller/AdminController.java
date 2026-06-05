@@ -53,7 +53,7 @@ public class AdminController {
   }
 
   private static void requireAdmin(UserPrincipal principal) {
-    if (principal.role() != UserRole.ADMIN) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
       throw new ForbiddenException("Admin only");
     }
   }

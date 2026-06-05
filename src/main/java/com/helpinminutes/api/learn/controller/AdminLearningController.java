@@ -130,7 +130,7 @@ public class AdminLearningController {
   }
 
   private void onlyAdmin(UserPrincipal principal) {
-    if (principal.role() != UserRole.ADMIN) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
       throw new ForbiddenException("Admin only");
     }
   }
