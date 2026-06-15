@@ -59,11 +59,15 @@ public class HelperPresenceService {
 
   public HelperState getHelperState(UUID helperId) {
     String stateKey = keyHelperState(helperId);
-    Object lat = redis.opsForHash().get(stateKey, "lat");
-    Object lng = redis.opsForHash().get(stateKey, "lng");
-    Object cell = redis.opsForHash().get(stateKey, "h3");
-    Object online = redis.opsForHash().get(stateKey, "online");
-    Object lastSeen = redis.opsForHash().get(stateKey, "lastSeenEpochMs");
+    List<Object> fields = redis.opsForHash().multiGet(stateKey, List.of("lat", "lng", "h3", "online", "lastSeenEpochMs"));
+    if (fields == null || fields.size() < 5) {
+      return null;
+    }
+    Object lat = fields.get(0);
+    Object lng = fields.get(1);
+    Object cell = fields.get(2);
+    Object online = fields.get(3);
+    Object lastSeen = fields.get(4);
 
     if (!(lat instanceof String latS) || !(lng instanceof String lngS)) {
       return null;
