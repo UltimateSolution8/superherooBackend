@@ -14,6 +14,7 @@ import com.helpinminutes.api.tasks.dto.CancelTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
+import com.helpinminutes.api.tasks.dto.ExtendTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.service.TaskMapper;
@@ -242,5 +243,16 @@ public class TaskController {
       @PathVariable UUID taskId,
       @Valid @RequestBody CancelTaskRequest req) {
     return tasks.cancelTask(principal.userId(), principal.role(), taskId, req.reason());
+  }
+
+  @PostMapping("/{taskId}/extend")
+  public TaskResponse extendTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody ExtendTaskRequest req) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can extend tasks");
+    }
+    return tasks.extendTask(principal.userId(), taskId, req.additionalTimeMinutes(), req.additionalBudgetPaise());
   }
 }

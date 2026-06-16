@@ -9,7 +9,7 @@ import jakarta.validation.constraints.Pattern;
 public record PasswordSignupRequest(
     @NotBlank @Email String email,
     @NotBlank String password,
-    @Pattern(regexp = "^[6-9]\\d{9}$", message = "phone must be a valid Indian mobile number") String phone,
+    String phone,
     String displayName,
     @NotNull UserRole role
 ) {}

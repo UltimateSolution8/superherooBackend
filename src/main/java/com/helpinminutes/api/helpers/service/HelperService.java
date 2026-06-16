@@ -12,6 +12,11 @@ import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
+import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.tasks.model.TaskEntity;
+import com.helpinminutes.api.tasks.model.TaskStatus;
+import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.common.GeoUtils;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -24,16 +29,22 @@ public class HelperService {
   private final HelperPresenceService presence;
   private final SupabaseStorageService storage;
   private final UserRepository users;
+  private final TaskRepository tasks;
+  private final MatchingService matching;
 
   public HelperService(
       HelperProfileRepository profiles,
       HelperPresenceService presence,
       SupabaseStorageService storage,
-      UserRepository users) {
+      UserRepository users,
+      TaskRepository tasks,
+      MatchingService matching) {
     this.profiles = profiles;
     this.presence = presence;
     this.storage = storage;
     this.users = users;
+    this.tasks = tasks;
+    this.matching = matching;
   }
 
   public void setOnline(UUID helperId, double lat, double lng) {
@@ -45,6 +56,19 @@ public class HelperService {
     }
 
     presence.setOnline(helperId, lat, lng);
+
+    try {
+      java.util.List<TaskEntity> searching = tasks.findTop100ByStatusOrderByCreatedAtDesc(TaskStatus.SEARCHING);
+      for (TaskEntity task : searching) {
+        if (task.getAssignedHelperId() == null) {
+          double dist = GeoUtils.distanceMeters(task.getLat(), task.getLng(), lat, lng);
+          if (dist <= 3000d) {
+            matching.dispatchOffers(task);
+          }
+        }
+      }
+    } catch (Exception ignored) {
+    }
   }
 
   public void setOffline(UUID helperId) {

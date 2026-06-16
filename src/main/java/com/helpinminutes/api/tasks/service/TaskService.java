@@ -623,6 +623,49 @@ public class TaskService {
     });
   }
 
+  @Transactional
+  public TaskResponse extendTask(UUID buyerId, UUID taskId, int additionalTimeMinutes, long additionalBudgetPaise) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    if (!task.getBuyerId().equals(buyerId)) {
+      throw new ForbiddenException("Not allowed to modify this task");
+    }
+
+    if (task.getStatus() != TaskStatus.STARTED) {
+      throw new BadRequestException("Task can only be extended while in progress (STARTED status)");
+    }
+
+    UserEntity buyer = users.findById(buyerId)
+        .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+
+    Long balance = buyer.getDemoBalancePaise();
+    long current = balance == null ? 1_000_000L : balance;
+    if (additionalBudgetPaise > current) {
+      throw new BadRequestException("Insufficient demo balance for extension");
+    }
+    
+    buyer.setDemoBalancePaise(current - additionalBudgetPaise);
+    users.save(buyer);
+
+    task.setTimeMinutes(task.getTimeMinutes() + additionalTimeMinutes);
+    task.setBudgetPaise(task.getBudgetPaise() + additionalBudgetPaise);
+    task.setEscrowAmountPaise(task.getEscrowAmountPaise() + additionalBudgetPaise);
+    tasks.save(task);
+
+    try {
+      realtime.publish(
+          "task_status_changed",
+          java.util.Map.of(
+              "taskId", task.getId().toString(),
+              "buyerId", task.getBuyerId().toString(),
+              "status", task.getStatus().name()));
+    } catch (Exception ignored) {
+    }
+
+    return taskMapper.toResponse(task, true);
+  }
+
   public record CreateResult(UUID taskId, List<UUID> offeredTo) {
   }
 
