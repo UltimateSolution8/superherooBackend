@@ -8,6 +8,11 @@ public final class InputValidators {
   private static final Pattern EMAIL_PATTERN = Pattern.compile("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}$");
   private static final Pattern INDIA_PHONE_PATTERN = Pattern.compile("^[6-9]\\d{9}$");
 
+  private static final java.util.Set<String> COMMON_EMAIL_TYPO_DOMAINS = java.util.Set.of(
+      "gamil.com", "gmai.com", "gmial.com", "gmail.co", "gmaill.com", "gnail.com",
+      "gzail.com", "hotnail.com", "hotmai.com", "yaho.com", "yhaoo.com", "outlok.com", "outllok.com"
+  );
+
   private InputValidators() {}
 
   public static String requireEmail(String email) {
@@ -27,6 +32,10 @@ public final class InputValidators {
     }
     if (!EMAIL_PATTERN.matcher(normalized.toUpperCase(Locale.ROOT)).matches()) {
       throw new BadRequestException("Invalid email format");
+    }
+    String[] parts = normalized.split("@");
+    if (parts.length == 2 && COMMON_EMAIL_TYPO_DOMAINS.contains(parts[1])) {
+      throw new BadRequestException("Invalid email domain");
     }
     return normalized;
   }
