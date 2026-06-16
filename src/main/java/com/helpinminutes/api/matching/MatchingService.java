@@ -11,6 +11,8 @@ import com.helpinminutes.api.tasks.model.TaskOfferStatus;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.uber.h3core.H3Core;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -38,6 +40,7 @@ public class MatchingService {
   private final TaskRepository tasks;
   private final RealtimePublisher realtime;
   private final NotificationQueueService notificationQueue;
+  private final HelperProfileRepository helperProfiles;
 
   public MatchingService(
       AppProperties props,
@@ -46,7 +49,8 @@ public class MatchingService {
       TaskOfferRepository offers,
       TaskRepository tasks,
       RealtimePublisher realtime,
-      NotificationQueueService notificationQueue) {
+      NotificationQueueService notificationQueue,
+      HelperProfileRepository helperProfiles) {
     this.props = props;
     this.h3 = h3;
     this.presence = presence;
@@ -54,6 +58,7 @@ public class MatchingService {
     this.tasks = tasks;
     this.realtime = realtime;
     this.notificationQueue = notificationQueue;
+    this.helperProfiles = helperProfiles;
   }
 
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchingService.class);
@@ -81,6 +86,10 @@ public class MatchingService {
       for (UUID helperId : onlineHelpers) {
         if (helperId.equals(task.getBuyerId())) {
           continue; // Don't offer a task to the buyer who created it
+        }
+        var profileOpt = helperProfiles.findById(helperId);
+        if (profileOpt.isEmpty() || profileOpt.get().getKycStatus() != HelperKycStatus.APPROVED) {
+          continue; // Only offer to KYC approved helpers
         }
         if (helperHasActiveTask(helperId, activeTaskByHelper)) {
           continue;
@@ -112,6 +121,10 @@ public class MatchingService {
     if (bestDistanceByHelper.isEmpty()) {
       for (UUID helperId : presence.getOnlineHelpers()) {
         if (helperId.equals(task.getBuyerId())) continue;
+        var profileOpt = helperProfiles.findById(helperId);
+        if (profileOpt.isEmpty() || profileOpt.get().getKycStatus() != HelperKycStatus.APPROVED) {
+          continue;
+        }
         if (helperHasActiveTask(helperId, activeTaskByHelper)) continue;
         var state = presence.getHelperState(helperId);
         if (!isEligibleOnlineHelper(state)) continue;

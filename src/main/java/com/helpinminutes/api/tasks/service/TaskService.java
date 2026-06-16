@@ -25,6 +25,7 @@ import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -176,6 +177,12 @@ public class TaskService {
   public TaskResponse acceptTask(UUID helperId, UUID taskId) {
     users.findByIdForUpdate(helperId)
         .orElseThrow(() -> new ForbiddenException("Helper not found"));
+
+    var profile = helperProfiles.findById(helperId)
+        .orElseThrow(() -> new ForbiddenException("Helper profile not found"));
+    if (profile.getKycStatus() != HelperKycStatus.APPROVED) {
+      throw new ForbiddenException("KYC verification is required to accept tasks");
+    }
 
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
@@ -529,6 +536,11 @@ public class TaskService {
   }
 
   public List<TaskEntity> listAvailableTasks(UUID helperId) {
+    var profileOpt = helperProfiles.findById(helperId);
+    if (profileOpt.isEmpty() || profileOpt.get().getKycStatus() != HelperKycStatus.APPROVED) {
+      return java.util.List.of();
+    }
+
     var state = presence.getHelperState(helperId);
     if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
       return java.util.List.of();
