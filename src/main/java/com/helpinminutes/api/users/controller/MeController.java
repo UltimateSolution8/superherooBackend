@@ -43,7 +43,9 @@ public class MeController {
         u.isEmailVerified(),
         u.getDisplayName(),
         u.getDemoBalancePaise(),
-        u.isBulkCsvEnabled());
+        u.isBulkCsvEnabled(),
+        u.getDob(),
+        u.getBloodGroup());
   }
 
   @PutMapping("/me")
@@ -74,6 +76,12 @@ public class MeController {
         u.setEmailVerified(false);
       }
     }
+    if (req.dob() != null) {
+      u.setDob(req.dob().trim().isEmpty() ? null : req.dob().trim());
+    }
+    if (req.bloodGroup() != null) {
+      u.setBloodGroup(req.bloodGroup().trim().isEmpty() ? null : req.bloodGroup().trim());
+    }
     users.save(u);
     return new MeResponse(
         u.getId(),
@@ -83,7 +91,9 @@ public class MeController {
         u.isEmailVerified(),
         u.getDisplayName(),
         u.getDemoBalancePaise(),
-        u.isBulkCsvEnabled());
+        u.isBulkCsvEnabled(),
+        u.getDob(),
+        u.getBloodGroup());
   }
 
   @PostMapping("/me/email/verify/send")
@@ -118,10 +128,12 @@ public class MeController {
         u.isEmailVerified(),
         u.getDisplayName(),
         u.getDemoBalancePaise(),
-        u.isBulkCsvEnabled());
+        u.isBulkCsvEnabled(),
+        u.getDob(),
+        u.getBloodGroup());
   }
 
-  public record UpdateMeRequest(String displayName, String email) {}
+  public record UpdateMeRequest(String displayName, String email, String dob, String bloodGroup) {}
 
   public record MeResponse(
       UUID id,
@@ -131,7 +143,9 @@ public class MeController {
       boolean emailVerified,
       String displayName,
       Long demoBalancePaise,
-      boolean bulkCsvEnabled) {}
+      boolean bulkCsvEnabled,
+      String dob,
+      String bloodGroup) {}
 
   public record SendEmailOtpResponse(boolean success, String otp) {}
 }

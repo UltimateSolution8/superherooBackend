@@ -46,6 +46,12 @@ public class UserEntity {
   @Column(name = "bulk_csv_enabled", nullable = false)
   private boolean bulkCsvEnabled;
 
+  @Column(name = "dob")
+  private String dob;
+
+  @Column(name = "blood_group")
+  private String bloodGroup;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -161,5 +167,21 @@ public class UserEntity {
 
   public Instant getUpdatedAt() {
     return updatedAt;
+  }
+
+  public String getDob() {
+    return dob;
+  }
+
+  public void setDob(String dob) {
+    this.dob = dob;
+  }
+
+  public String getBloodGroup() {
+    return bloodGroup;
+  }
+
+  public void setBloodGroup(String bloodGroup) {
+    this.bloodGroup = bloodGroup;
   }
 }
