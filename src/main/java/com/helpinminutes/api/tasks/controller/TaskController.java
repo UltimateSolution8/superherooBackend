@@ -8,6 +8,8 @@ import com.helpinminutes.api.batches.dto.BatchDtos;
 import com.helpinminutes.api.batches.service.BookingBatchService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskRequest;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskResponse;
 import com.helpinminutes.api.tasks.dto.CreateBulkTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateBulkTaskResponse;
 import com.helpinminutes.api.tasks.dto.CancelTaskRequest;
@@ -57,6 +59,16 @@ public class TaskController {
     }
     var result = tasks.createTask(principal.userId(), req);
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
+  }
+
+  @PostMapping("/recurring")
+  public CreateRecurringTaskResponse createRecurring(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody CreateRecurringTaskRequest req) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can create recurring tasks");
+    }
+    return tasks.createRecurringTask(principal.userId(), req);
   }
 
   @PostMapping("/bulk")

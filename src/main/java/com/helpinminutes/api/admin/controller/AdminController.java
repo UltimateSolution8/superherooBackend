@@ -13,6 +13,8 @@ import com.helpinminutes.api.admin.dto.AdminUpdateUserRequest;
 import com.helpinminutes.api.admin.dto.PendingHelperResponse;
 import com.helpinminutes.api.admin.dto.RejectHelperRequest;
 import com.helpinminutes.api.admin.service.AdminService;
+import com.helpinminutes.api.admin.dto.AdminSendNotificationRequest;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.tasks.controller.TaskController;
@@ -45,11 +47,13 @@ public class AdminController {
   private final AdminService admin;
   private final TaskService tasks;
   private final UserRepository users;
+  private final PushNotificationService pushNotifications;
 
-  public AdminController(AdminService admin, TaskService tasks, UserRepository users) {
+  public AdminController(AdminService admin, TaskService tasks, UserRepository users, PushNotificationService pushNotifications) {
     this.admin = admin;
     this.tasks = tasks;
     this.users = users;
+    this.pushNotifications = pushNotifications;
   }
 
   private static void requireAdmin(UserPrincipal principal) {
@@ -314,5 +318,13 @@ public class AdminController {
     if (msg.isBlank()) return fallback;
     if (msg.length() > 180) return fallback;
     return msg;
+  }
+
+  @PostMapping("/notifications/send")
+  public void sendPushNotification(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminSendNotificationRequest req) {
+    requireAdmin(principal);
+    pushNotifications.sendAdminNotification(req.role(), req.userIds(), req.title(), req.body());
   }
 }

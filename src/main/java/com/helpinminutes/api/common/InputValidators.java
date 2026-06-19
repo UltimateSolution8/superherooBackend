@@ -34,8 +34,19 @@ public final class InputValidators {
       throw new BadRequestException("Invalid email format");
     }
     String[] parts = normalized.split("@");
-    if (parts.length == 2 && COMMON_EMAIL_TYPO_DOMAINS.contains(parts[1])) {
-      throw new BadRequestException("Invalid email domain");
+    if (parts.length == 2) {
+      String domain = parts[1];
+      if (COMMON_EMAIL_TYPO_DOMAINS.contains(domain)) {
+        throw new BadRequestException("Invalid email domain");
+      }
+      java.util.Set<String> majorProviders = java.util.Set.of(
+          "gmail.com", "yahoo.com", "yahoo.co.in", "outlook.com", "hotmail.com", "icloud.com",
+          "aol.com", "zoho.com", "zoho.in", "protonmail.com", "proton.me", "live.com", "msn.com",
+          "ymail.com", "rediffmail.com", "gmx.com", "mail.com", "yandex.com"
+      );
+      if (!majorProviders.contains(domain)) {
+        throw new BadRequestException("Only major email providers are allowed (e.g. Gmail, Yahoo, Outlook)");
+      }
     }
     return normalized;
   }

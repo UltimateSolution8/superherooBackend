@@ -39,6 +39,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
+import com.helpinminutes.api.tasks.repo.RecurringTaskRepository;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskRequest;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskResponse;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+
 @Service
 public class TaskService {
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TaskService.class);
@@ -58,6 +67,7 @@ public class TaskService {
   private final NotificationQueueService notificationQueue;
   private final PushNotificationService pushNotifications;
   private final TaskMapper taskMapper;
+  private final RecurringTaskRepository recurringTasks;
 
   public TaskService(
       TaskRepository tasks,
@@ -71,7 +81,8 @@ public class TaskService {
       HelperProfileRepository helperProfiles,
       NotificationQueueService notificationQueue,
       PushNotificationService pushNotifications,
-      TaskMapper taskMapper) {
+      TaskMapper taskMapper,
+      RecurringTaskRepository recurringTasks) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -84,6 +95,83 @@ public class TaskService {
     this.notificationQueue = notificationQueue;
     this.pushNotifications = pushNotifications;
     this.taskMapper = taskMapper;
+    this.recurringTasks = recurringTasks;
+  }
+
+  @Transactional
+  public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
+    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+      throw new BadRequestException("Service is currently live only in Hyderabad");
+    }
+
+    LocalTime time;
+    try {
+      String ts = req.timeSlot().trim();
+      time = LocalTime.parse(ts);
+    } catch (Exception e) {
+      throw new BadRequestException("Invalid time slot format. Must be HH:mm or HH:mm:ss");
+    }
+
+    if (req.startDate().isAfter(req.endDate())) {
+      throw new BadRequestException("Start date cannot be after end date");
+    }
+
+    RecurringTaskEntity rec = new RecurringTaskEntity();
+    rec.setBuyerId(buyerId);
+    rec.setTitle(req.title().trim());
+    rec.setDescription(req.description().trim());
+    rec.setUrgency(req.urgency());
+    rec.setTimeMinutes(req.timeMinutes());
+    rec.setBudgetPaise(req.budgetPaise());
+    rec.setLat(req.lat());
+    rec.setLng(req.lng());
+    rec.setAddressText(req.addressText() != null ? req.addressText().trim() : null);
+    rec.setFrequency(req.frequency().trim().toUpperCase());
+    rec.setStartDate(req.startDate());
+    rec.setEndDate(req.endDate());
+    rec.setTimeSlot(req.timeSlot().trim());
+    rec.setCreatedAt(Instant.now());
+    recurringTasks.save(rec);
+
+    ZoneId zone = ZoneId.of("Asia/Kolkata");
+    LocalDate current = req.startDate();
+    LocalDate end = req.endDate();
+    List<UUID> createdTaskIds = new ArrayList<>();
+
+    while (!current.isAfter(end)) {
+      boolean matches = false;
+      String freq = req.frequency().trim().toUpperCase();
+      if ("EVERYDAY".equals(freq) || "DAILY".equals(freq)) {
+        matches = true;
+      } else {
+        String dayOfWeek = current.getDayOfWeek().name();
+        if (dayOfWeek.equals(freq)) {
+          matches = true;
+        }
+      }
+
+      if (matches) {
+        ZonedDateTime zdt = ZonedDateTime.of(current, time, zone);
+        Instant scheduledAt = zdt.toInstant();
+        if (scheduledAt.isAfter(Instant.now())) {
+          var single = createTask(buyerId, new CreateTaskRequest(
+              req.title(),
+              req.description(),
+              req.urgency(),
+              req.timeMinutes(),
+              req.budgetPaise(),
+              req.lat(),
+              req.lng(),
+              req.addressText(),
+              scheduledAt
+          ), TaskCreateOptions.defaultOptions());
+          createdTaskIds.add(single.taskId());
+        }
+      }
+      current = current.plusDays(1);
+    }
+
+    return new CreateRecurringTaskResponse(rec.getId(), createdTaskIds);
   }
 
   @Transactional

@@ -443,6 +443,52 @@ public class PushNotificationService {
     }
   }
 
+  public void sendAdminNotification(String role, List<UUID> userIds, String title, String body) {
+    List<UUID> targetUserIds = new ArrayList<>();
+    if (userIds != null && !userIds.isEmpty()) {
+      targetUserIds.addAll(userIds);
+    } else {
+      if ("ALL".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.HELPER);
+        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.BUYER);
+        for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
+        for (com.helpinminutes.api.users.model.UserEntity u : allBuyers) targetUserIds.add(u.getId());
+      } else if ("CITIZEN".equalsIgnoreCase(role) || "BUYER".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.BUYER);
+        for (com.helpinminutes.api.users.model.UserEntity u : allBuyers) targetUserIds.add(u.getId());
+      } else if ("PARTNER".equalsIgnoreCase(role) || "HELPER".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.HELPER);
+        for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
+      }
+    }
+
+    if (targetUserIds.isEmpty()) {
+      log.warn("No target users found for admin notification role={} userIds={}", role, userIds);
+      return;
+    }
+
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(targetUserIds);
+    if (tokenEntities.isEmpty()) {
+      log.info("No active push tokens found for target users");
+      return;
+    }
+
+    Map<UUID, List<String>> tokensByUser = new HashMap<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() == null || t.getToken().isBlank()) continue;
+      tokensByUser.computeIfAbsent(t.getUserId(), k -> new ArrayList<>()).add(t.getToken());
+    }
+
+    for (UUID userId : tokensByUser.keySet()) {
+      List<String> tokenList = tokensByUser.get(userId);
+      try {
+        sendToTokens(null, userId, tokenList, title, body, Map.of("type", "ADMIN_BROADCAST"));
+      } catch (Exception e) {
+        log.warn("Failed to send admin push notification to user {}", userId, e);
+      }
+    }
+  }
+
   private record BulkMeta(UUID batchId, int totalCount) {
   }
 }

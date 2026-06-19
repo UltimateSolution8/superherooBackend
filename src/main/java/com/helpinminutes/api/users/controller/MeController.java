@@ -7,6 +7,7 @@ import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
 import com.helpinminutes.api.users.service.EmailVerificationService;
+import com.helpinminutes.api.auth.service.OtpService;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,11 +25,13 @@ public class MeController {
   private final UserRepository users;
   private final EmailVerificationService emailVerificationService;
   private final AppProperties props;
+  private final OtpService otpService;
 
-  public MeController(UserRepository users, EmailVerificationService emailVerificationService, AppProperties props) {
+  public MeController(UserRepository users, EmailVerificationService emailVerificationService, AppProperties props, OtpService otpService) {
     this.users = users;
     this.emailVerificationService = emailVerificationService;
     this.props = props;
+    this.otpService = otpService;
   }
 
   @GetMapping("/me")
@@ -45,7 +48,8 @@ public class MeController {
         u.getDemoBalancePaise(),
         u.isBulkCsvEnabled(),
         u.getDob(),
-        u.getBloodGroup());
+        u.getBloodGroup(),
+        u.getGender());
   }
 
   @PutMapping("/me")
@@ -82,6 +86,9 @@ public class MeController {
     if (req.bloodGroup() != null) {
       u.setBloodGroup(req.bloodGroup().trim().isEmpty() ? null : req.bloodGroup().trim());
     }
+    if (req.gender() != null) {
+      u.setGender(req.gender().trim().isEmpty() ? null : req.gender().trim());
+    }
     users.save(u);
     return new MeResponse(
         u.getId(),
@@ -93,7 +100,8 @@ public class MeController {
         u.getDemoBalancePaise(),
         u.isBulkCsvEnabled(),
         u.getDob(),
-        u.getBloodGroup());
+        u.getBloodGroup(),
+        u.getGender());
   }
 
   @PostMapping("/me/email/verify/send")
@@ -130,10 +138,62 @@ public class MeController {
         u.getDemoBalancePaise(),
         u.isBulkCsvEnabled(),
         u.getDob(),
-        u.getBloodGroup());
+        u.getBloodGroup(),
+        u.getGender());
   }
 
-  public record UpdateMeRequest(String displayName, String email, String dob, String bloodGroup) {}
+  @PostMapping("/me/phone/verify/send")
+  public SendPhoneOtpResponse sendPhoneOtp(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestParam("phone") String phone) {
+    String normalized = InputValidators.normalizeIndianPhoneOrNull(phone);
+    if (normalized == null || normalized.isBlank()) {
+      throw new BadRequestException("Invalid phone number");
+    }
+    users.findByPhone(normalized).ifPresent(existing -> {
+      if (!existing.getId().equals(principal.userId())) {
+        throw new BadRequestException("Phone number already in use");
+      }
+    });
+    String otp = otpService.startOtp(normalized, "sms");
+    return new SendPhoneOtpResponse(true, props.otp().returnOtpInResponse() ? otp : null);
+  }
+
+  @PutMapping("/me/phone/verify")
+  public MeResponse verifyPhone(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestParam("phone") String phone,
+      @RequestParam("otp") String otp) {
+    String normalized = InputValidators.normalizeIndianPhoneOrNull(phone);
+    if (normalized == null || normalized.isBlank()) {
+      throw new BadRequestException("Invalid phone number");
+    }
+    users.findByPhone(normalized).ifPresent(existing -> {
+      if (!existing.getId().equals(principal.userId())) {
+        throw new BadRequestException("Phone number already in use");
+      }
+    });
+    if (!otpService.verifyOtp(normalized, otp)) {
+      throw new BadRequestException("Invalid verification code");
+    }
+    UserEntity u = users.findById(principal.userId()).orElseThrow();
+    u.setPhone(normalized);
+    users.save(u);
+    return new MeResponse(
+        u.getId(),
+        u.getRole().name(),
+        u.getPhone(),
+        u.getEmail(),
+        u.isEmailVerified(),
+        u.getDisplayName(),
+        u.getDemoBalancePaise(),
+        u.isBulkCsvEnabled(),
+        u.getDob(),
+        u.getBloodGroup(),
+        u.getGender());
+  }
+
+  public record UpdateMeRequest(String displayName, String email, String dob, String bloodGroup, String gender) {}
 
   public record MeResponse(
       UUID id,
@@ -145,7 +205,10 @@ public class MeController {
       Long demoBalancePaise,
       boolean bulkCsvEnabled,
       String dob,
-      String bloodGroup) {}
+      String bloodGroup,
+      String gender) {}
 
   public record SendEmailOtpResponse(boolean success, String otp) {}
+
+  public record SendPhoneOtpResponse(boolean success, String otp) {}
 }

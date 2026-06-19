@@ -184,4 +184,15 @@ public class UserEntity {
   public void setBloodGroup(String bloodGroup) {
     this.bloodGroup = bloodGroup;
   }
+
+  @Column(name = "gender")
+  private String gender;
+
+  public String getGender() {
+    return gender;
+  }
+
+  public void setGender(String gender) {
+    this.gender = gender;
+  }
 }
