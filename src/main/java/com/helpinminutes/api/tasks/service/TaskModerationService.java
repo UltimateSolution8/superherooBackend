@@ -86,7 +86,9 @@ public class TaskModerationService {
             "Paint walls and touch up doors",
             "Data entry copy paste job in Excel",
             "Stand in queue to buy tickets",
-            "Distribute paper flyers on the street corner"
+            "Distribute paper flyers on the street corner",
+            "need low alcohol homeo medicine from pharmacy",
+            "pick up homeopathic medicines from clinic"
         );
 
         List<String> prohibitedSamples = List.of(
@@ -174,15 +176,23 @@ public class TaskModerationService {
         List<String> tokens = tokenize(combined);
         boolean hasNsfw = false;
         boolean hasMedia = false;
+        boolean hasExemption = false;
 
         for (String token : tokens) {
-            if (BLACKLIST.contains(token)) {
+            boolean exempted = isExempted(token, combinedLower);
+            if (exempted) {
+                hasExemption = true;
+            }
+            
+            if (BLACKLIST.contains(token) && !exempted) {
                 throw new BadRequestException("Task contains prohibited content or services: " + token);
             }
 
-            for (String prefix : DISALLOWED_PREFIXES) {
-                if (token.startsWith(prefix)) {
-                    throw new BadRequestException("Task contains prohibited content or services: " + token);
+            if (!exempted) {
+                for (String prefix : DISALLOWED_PREFIXES) {
+                    if (token.startsWith(prefix)) {
+                        throw new BadRequestException("Task contains prohibited content or services: " + token);
+                    }
                 }
             }
 
@@ -200,9 +210,43 @@ public class TaskModerationService {
         }
 
         // 4. Classifier validation
-        if (classifyProhibited(tokens)) {
+        if (!hasExemption && classifyProhibited(tokens)) {
             throw new BadRequestException("Task flagged by automated content moderation engine.");
         }
+    }
+
+    private boolean isExempted(String token, String text) {
+        if ("alcohol".equals(token)) {
+            // Allow if part of medical or homeo context
+            if (text.contains("homeo") || text.contains("medicine") || text.contains("cough") || text.contains("syrup") || text.contains("tincture") || text.contains("homeopathic")) {
+                return true;
+            }
+        }
+        if ("wine".equals(token)) {
+            // "wine glass", "wine glasses", "wine bottle opener"
+            if (text.contains("glass") || text.contains("opener")) {
+                return true;
+            }
+        }
+        if ("beer".equals(token)) {
+            // "root beer", "ginger beer"
+            if (text.contains("root") || text.contains("ginger")) {
+                return true;
+            }
+        }
+        if ("doctor".equals(token) || "lawyer".equals(token) || "advocate".equals(token)) {
+            // Allow pick ups, drops, documents, appointments, reports, key delivery
+            if (text.contains("pick") || text.contains("drop") || text.contains("deliver") || text.contains("bring") || text.contains("get") || text.contains("fetch") || text.contains("document") || text.contains("report") || text.contains("letter") || text.contains("file")) {
+                return true;
+            }
+        }
+        if ("knife".equals(token)) {
+            // "kitchen knife", "butter knife", "sharpen"
+            if (text.contains("kitchen") || text.contains("butter") || text.contains("sharpen") || text.contains("cut") || text.contains("vegetable") || text.contains("fruit")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean classifyProhibited(List<String> tokens) {

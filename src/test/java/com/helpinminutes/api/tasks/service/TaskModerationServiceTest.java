@@ -50,6 +50,15 @@ public class TaskModerationServiceTest {
     }
 
     @Test
+    public void testExemptions() {
+        assertDoesNotThrow(() -> moderationService.validateTask("Need low alcohol homeo medicine", "For personal healthcare use"));
+        assertDoesNotThrow(() -> moderationService.validateTask("Pick up documents from lawyer office", "Delivery task"));
+        assertDoesNotThrow(() -> moderationService.validateTask("Need a root beer", "Soft drink errand"));
+        assertDoesNotThrow(() -> moderationService.validateTask("Sharpen kitchen knife", "Home maintenance request"));
+        assertDoesNotThrow(() -> moderationService.validateTask("Buy a set of wine glasses", "Household item shopping"));
+    }
+
+    @Test
     public void testClassifier() {
         assertThrows(BadRequestException.class, () -> moderationService.validateTask("escort services or romance", "looking for hookup"));
     }
