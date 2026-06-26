@@ -213,7 +213,7 @@ public class AuthService {
 
   @Transactional
   public AuthResponse loginWithPassword(String email, String password) {
-    String em = InputValidators.requireEmail(email);
+    String em = InputValidators.requireEmail(email, false);
     UserEntity user = users.findByEmail(em).orElseThrow(() -> new BadRequestException("Invalid credentials"));
     if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
       throw new BadRequestException("Password login not enabled for this user");

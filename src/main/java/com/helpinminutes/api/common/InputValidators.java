@@ -16,7 +16,11 @@ public final class InputValidators {
   private InputValidators() {}
 
   public static String requireEmail(String email) {
-    String normalized = normalizeEmailOrNull(email);
+    return requireEmail(email, true);
+  }
+
+  public static String requireEmail(String email, boolean enforceProviderLimit) {
+    String normalized = normalizeEmailOrNull(email, enforceProviderLimit);
     if (normalized == null) {
       throw new BadRequestException("Email is required");
     }
@@ -24,6 +28,10 @@ public final class InputValidators {
   }
 
   public static String normalizeEmailOrNull(String email) {
+    return normalizeEmailOrNull(email, true);
+  }
+
+  public static String normalizeEmailOrNull(String email, boolean enforceProviderLimit) {
     if (email == null) return null;
     String normalized = email.trim().toLowerCase(Locale.ROOT);
     if (normalized.isBlank()) return null;
@@ -39,13 +47,15 @@ public final class InputValidators {
       if (COMMON_EMAIL_TYPO_DOMAINS.contains(domain)) {
         throw new BadRequestException("Invalid email domain");
       }
-      java.util.Set<String> majorProviders = java.util.Set.of(
-          "gmail.com", "yahoo.com", "yahoo.co.in", "outlook.com", "hotmail.com", "icloud.com",
-          "aol.com", "zoho.com", "zoho.in", "protonmail.com", "proton.me", "live.com", "msn.com",
-          "ymail.com", "rediffmail.com", "gmx.com", "mail.com", "yandex.com"
-      );
-      if (!majorProviders.contains(domain)) {
-        throw new BadRequestException("Only major email providers are allowed (e.g. Gmail, Yahoo, Outlook)");
+      if (enforceProviderLimit) {
+        java.util.Set<String> majorProviders = java.util.Set.of(
+            "gmail.com", "yahoo.com", "yahoo.co.in", "outlook.com", "hotmail.com", "icloud.com",
+            "aol.com", "zoho.com", "zoho.in", "protonmail.com", "proton.me", "live.com", "msn.com",
+            "ymail.com", "rediffmail.com", "gmx.com", "mail.com", "yandex.com", "superheroo.test", "helpinminutes.app"
+        );
+        if (!majorProviders.contains(domain)) {
+          throw new BadRequestException("Only major email providers are allowed (e.g. Gmail, Yahoo, Outlook)");
+        }
       }
     }
     return normalized;
