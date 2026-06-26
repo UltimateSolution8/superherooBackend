@@ -68,6 +68,7 @@ public class TaskService {
   private final PushNotificationService pushNotifications;
   private final TaskMapper taskMapper;
   private final RecurringTaskRepository recurringTasks;
+  private final TaskModerationService taskModerationService;
 
   public TaskService(
       TaskRepository tasks,
@@ -82,7 +83,8 @@ public class TaskService {
       NotificationQueueService notificationQueue,
       PushNotificationService pushNotifications,
       TaskMapper taskMapper,
-      RecurringTaskRepository recurringTasks) {
+      RecurringTaskRepository recurringTasks,
+      TaskModerationService taskModerationService) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -96,10 +98,12 @@ public class TaskService {
     this.pushNotifications = pushNotifications;
     this.taskMapper = taskMapper;
     this.recurringTasks = recurringTasks;
+    this.taskModerationService = taskModerationService;
   }
 
   @Transactional
   public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
+    taskModerationService.validateTask(req.title(), req.description());
     if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in Hyderabad");
     }
@@ -181,6 +185,7 @@ public class TaskService {
 
   @Transactional
   public CreateResult createTask(UUID buyerId, CreateTaskRequest req, TaskCreateOptions options) {
+    taskModerationService.validateTask(req.title(), req.description());
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));

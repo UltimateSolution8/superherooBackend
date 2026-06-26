@@ -19,10 +19,12 @@ import org.springframework.stereotype.Component;
 public class TaskMapper {
     private final UserRepository users;
     private final TaskRepository tasks;
+    private final com.helpinminutes.api.common.TranslationService translationService;
 
-    public TaskMapper(UserRepository users, TaskRepository tasks) {
+    public TaskMapper(UserRepository users, TaskRepository tasks, com.helpinminutes.api.common.TranslationService translationService) {
         this.users = users;
         this.tasks = tasks;
+        this.translationService = translationService;
     }
 
     public TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
@@ -71,13 +73,17 @@ public class TaskMapper {
                         : helper.getPhone())
                 : null;
 
+        String acceptLanguage = getAcceptLanguageHeader();
+        String translatedTitle = translationService.translate(t.getTitle(), acceptLanguage);
+        String translatedDescription = translationService.translate(t.getDescription(), acceptLanguage);
+
         return new TaskResponse(
                 t.getId(),
                 t.getBuyerId(),
                 buyerPhone,
                 buyerName,
-                t.getTitle(),
-                t.getDescription(),
+                translatedTitle,
+                translatedDescription,
                 t.getUrgency(),
                 t.getTimeMinutes(),
                 t.getBudgetPaise(),
@@ -116,6 +122,21 @@ public class TaskMapper {
                 t.getCancelledByRole(),
                 t.getCancelledAt(),
                 t.getCreatedAt());
+    }
+
+    private String getAcceptLanguageHeader() {
+        try {
+            org.springframework.web.context.request.RequestAttributes attrs = 
+                org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+            if (attrs instanceof org.springframework.web.context.request.ServletRequestAttributes) {
+                jakarta.servlet.http.HttpServletRequest request = 
+                    ((org.springframework.web.context.request.ServletRequestAttributes) attrs).getRequest();
+                return request.getHeader("Accept-Language");
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        return null;
     }
 
     private UserStats fetchUserStats(UUID userId) {

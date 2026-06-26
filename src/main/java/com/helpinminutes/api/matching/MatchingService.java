@@ -140,6 +140,7 @@ public class MatchingService {
     Instant expires = now.plusSeconds(props.matching().offerTtlSeconds());
 
     List<UUID> helperIds = new ArrayList<>();
+    List<TaskOfferEntity> offerList = new ArrayList<>();
     for (Candidate c : chosen) {
       TaskOfferEntity offer = new TaskOfferEntity();
       offer.setTaskId(task.getId());
@@ -147,7 +148,7 @@ public class MatchingService {
       offer.setStatus(TaskOfferStatus.OFFERED);
       offer.setOfferedAt(now);
       offer.setExpiresAt(expires);
-      offers.save(offer);
+      offerList.add(offer);
 
       helperIds.add(c.helperId());
 
@@ -165,6 +166,9 @@ public class MatchingService {
               java.util.Map.entry("lng", task.getLng()),
               java.util.Map.entry("distanceMeters", c.distanceMeters()),
               java.util.Map.entry("expiresAt", expires.toString())));
+    }
+    if (!offerList.isEmpty()) {
+      offers.saveAll(offerList);
     }
 
     if (sendPushNotifications) {

@@ -20,6 +20,7 @@ import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
+import com.helpinminutes.api.tasks.service.TaskModerationService;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
@@ -46,6 +47,7 @@ public class BookingBatchService {
   private final TaskRepository taskRepo;
   private final UserRepository users;
   private final ObjectMapper objectMapper;
+  private final TaskModerationService taskModerationService;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -55,7 +57,8 @@ public class BookingBatchService {
       NotificationQueueService notificationQueue,
       TaskRepository taskRepo,
       UserRepository users,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      TaskModerationService taskModerationService) {
     this.batches = batches;
     this.items = items;
     this.events = events;
@@ -64,6 +67,7 @@ public class BookingBatchService {
     this.taskRepo = taskRepo;
     this.users = users;
     this.objectMapper = objectMapper;
+    this.taskModerationService = taskModerationService;
   }
 
   public BatchDtos.PreviewResponse preview(BatchDtos.PreviewRequest req) {
@@ -331,6 +335,14 @@ public class BookingBatchService {
       errors.add("location outside service area (Hyderabad only)");
     }
     if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().minusSeconds(60))) errors.add("scheduledAt is in the past");
+    
+    if (line.title() != null && line.description() != null && line.title().trim().length() >= 3 && line.description().trim().length() >= 10) {
+      try {
+        taskModerationService.validateTask(line.title(), line.description());
+      } catch (BadRequestException e) {
+        errors.add("moderation flagged: " + e.getMessage());
+      }
+    }
     return errors;
   }
 

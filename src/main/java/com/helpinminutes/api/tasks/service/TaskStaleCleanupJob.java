@@ -40,7 +40,7 @@ public class TaskStaleCleanupJob {
       SupportService supportService,
       RealtimePublisher realtime,
       @Value("${TASK_ASSIGNED_STALE_MINUTES:20}") long staleAssignedMinutes,
-      @Value("${TASK_SEARCH_TIMEOUT_SECONDS:120}") long searchingTimeoutSeconds) {
+      @Value("${TASK_SEARCH_TIMEOUT_SECONDS:240}") long searchingTimeoutSeconds) {
     this.tasks = tasks;
     this.users = users;
     this.supportService = supportService;
@@ -94,7 +94,7 @@ public class TaskStaleCleanupJob {
         CreateTicketRequest ticketReq = new CreateTicketRequest(
             SupportTicketCategory.CANCELLATION,
             "Task Auto-Cancelled: Timeout",
-            "Task with title '" + task.getTitle() + "' and ID " + task.getId() + " was auto-cancelled because no helper accepted it within 2 minutes.",
+            "Task with title '" + task.getTitle() + "' and ID " + task.getId() + " was auto-cancelled because no helper accepted it within 4 minutes.",
             task.getId().toString()
         );
         supportService.createTicket(task.getBuyerId(), UserRole.BUYER, ticketReq);
