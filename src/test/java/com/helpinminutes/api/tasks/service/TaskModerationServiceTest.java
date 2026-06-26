@@ -31,6 +31,22 @@ public class TaskModerationServiceTest {
     @Test
     public void testIllegalPattern() {
         assertThrows(BadRequestException.class, () -> moderationService.validateTask("Private erotic companion needed", "Must be adult companion"));
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("Need a prostitute", "Bring her to home"));
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("Looking for prostitution", "In Hyderabad"));
+    }
+
+    @Test
+    public void testObfuscationBypasses() {
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("Need s.e.x services", "obfuscated keyword"));
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("Looking for s*e*x", "another obfuscation"));
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("s e x video", "spaced out keyword"));
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("download p*o*r*n movie", "porn obfuscation"));
+    }
+
+    @Test
+    public void testNsfwMediaCombinations() {
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("Download sex videos", "Normal looking request but has adult media"));
+        assertThrows(BadRequestException.class, () -> moderationService.validateTask("Send me nude photos", "Another adult media combination"));
     }
 
     @Test
