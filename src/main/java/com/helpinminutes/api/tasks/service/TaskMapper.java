@@ -121,7 +121,8 @@ public class TaskMapper {
                 t.getCancelReason(),
                 t.getCancelledByRole(),
                 t.getCancelledAt(),
-                t.getCreatedAt());
+                t.getCreatedAt(),
+                t.getLandmark());
     }
 
     private String getAcceptLanguageHeader() {

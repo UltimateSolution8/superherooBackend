@@ -167,7 +167,8 @@ public class TaskService {
               req.lat(),
               req.lng(),
               req.addressText(),
-              scheduledAt
+              scheduledAt,
+              null
           ), TaskCreateOptions.defaultOptions());
           createdTaskIds.add(single.taskId());
         }
@@ -217,6 +218,7 @@ public class TaskService {
     task.setLat(req.lat());
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
+    task.setLandmark(req.landmark());
     if (req.scheduledAt() != null) {
       task.setScheduledAt(req.scheduledAt());
     }

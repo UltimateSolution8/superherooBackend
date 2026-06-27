@@ -154,7 +154,8 @@ public class BookingBatchService {
             line.lat(),
             line.lng(),
             blankToNull(line.addressText()),
-            line.scheduledAt()), TaskService.TaskCreateOptions.silentPush());
+            line.scheduledAt(),
+            null), TaskService.TaskCreateOptions.silentPush());
         item.setTaskId(createResult.taskId());
         item.setLineStatus(BookingBatchLineStatus.CREATED);
         if (firstCreatedTaskId == null) {
@@ -203,7 +204,8 @@ public class BookingBatchService {
           line.lat(),
           line.lng(),
           blankToNull(line.addressText()),
-          line.scheduledAt()));
+          line.scheduledAt(),
+          null));
       item.setTaskId(createResult.taskId());
       item.setLineStatus(BookingBatchLineStatus.CREATED);
       item.setErrorMessage(null);

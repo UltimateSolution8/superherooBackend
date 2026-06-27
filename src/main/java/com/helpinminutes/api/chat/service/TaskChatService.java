@@ -10,6 +10,7 @@ import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
+import com.helpinminutes.api.realtime.RealtimePublisher;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,11 +23,13 @@ public class TaskChatService {
   private final TaskRepository tasks;
   private final TaskChatMessageRepository messages;
   private final UserRepository users;
+  private final RealtimePublisher realtime;
 
-  public TaskChatService(TaskRepository tasks, TaskChatMessageRepository messages, UserRepository users) {
+  public TaskChatService(TaskRepository tasks, TaskChatMessageRepository messages, UserRepository users, RealtimePublisher realtime) {
     this.tasks = tasks;
     this.messages = messages;
     this.users = users;
+    this.realtime = realtime;
   }
 
   @Transactional(readOnly = true)
@@ -52,6 +55,16 @@ public class TaskChatService {
     row.setMessage(clean.length() > 1000 ? clean.substring(0, 1000) : clean);
     TaskChatMessageEntity saved = messages.save(row);
     UserEntity sender = users.findById(userId).orElse(null);
+    UUID targetUserId = (role == UserRole.BUYER) ? task.getAssignedHelperId() : task.getBuyerId();
+    if (targetUserId != null) {
+      realtime.publish("CHAT_MESSAGE_RECEIVED", Map.of(
+          "taskId", task.getId().toString(),
+          "senderUserId", userId.toString(),
+          "targetUserId", targetUserId.toString(),
+          "message", clean,
+          "senderName", (sender != null && sender.getDisplayName() != null) ? sender.getDisplayName() : "Someone"
+      ));
+    }
     return toResponse(saved, sender);
   }
 

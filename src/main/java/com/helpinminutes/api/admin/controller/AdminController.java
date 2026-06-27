@@ -308,7 +308,8 @@ public class AdminController {
           t.getCancelReason(),
           t.getCancelledByRole(),
           t.getCancelledAt(),
-          t.getCreatedAt());
+          t.getCreatedAt(),
+          t.getLandmark());
     }).toList();
   }
 

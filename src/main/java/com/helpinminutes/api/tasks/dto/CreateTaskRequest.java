@@ -16,5 +16,6 @@ public record CreateTaskRequest(
     @Min(-90) @Max(90) double lat,
     @Min(-180) @Max(180) double lng,
     String addressText,
-    Instant scheduledAt
+    Instant scheduledAt,
+    String landmark
 ) {}

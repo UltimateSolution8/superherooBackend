@@ -40,7 +40,7 @@ public class TaskStaleCleanupJob {
       SupportService supportService,
       RealtimePublisher realtime,
       @Value("${TASK_ASSIGNED_STALE_MINUTES:20}") long staleAssignedMinutes,
-      @Value("${TASK_SEARCH_TIMEOUT_SECONDS:240}") long searchingTimeoutSeconds) {
+      @Value("${TASK_SEARCH_TIMEOUT_SECONDS:120}") long searchingTimeoutSeconds) {
     this.tasks = tasks;
     this.users = users;
     this.supportService = supportService;

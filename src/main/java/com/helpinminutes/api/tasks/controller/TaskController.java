@@ -91,7 +91,8 @@ public class TaskController {
               req.lat(),
               req.lng(),
               req.addressText(),
-              req.scheduledAt()));
+              req.scheduledAt(),
+              req.landmark()));
       return new CreateBulkTaskResponse(
           null,
           1,
