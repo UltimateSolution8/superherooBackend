@@ -5,6 +5,7 @@ import com.helpinminutes.api.chat.model.TaskChatMessageEntity;
 import com.helpinminutes.api.chat.repo.TaskChatMessageRepository;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -14,6 +15,7 @@ import com.helpinminutes.api.realtime.RealtimePublisher;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,12 +26,15 @@ public class TaskChatService {
   private final TaskChatMessageRepository messages;
   private final UserRepository users;
   private final RealtimePublisher realtime;
+  private final PushNotificationService pushNotifications;
 
-  public TaskChatService(TaskRepository tasks, TaskChatMessageRepository messages, UserRepository users, RealtimePublisher realtime) {
+  public TaskChatService(TaskRepository tasks, TaskChatMessageRepository messages, UserRepository users,
+      RealtimePublisher realtime, PushNotificationService pushNotifications) {
     this.tasks = tasks;
     this.messages = messages;
     this.users = users;
     this.realtime = realtime;
+    this.pushNotifications = pushNotifications;
   }
 
   @Transactional(readOnly = true)
@@ -56,14 +61,27 @@ public class TaskChatService {
     TaskChatMessageEntity saved = messages.save(row);
     UserEntity sender = users.findById(userId).orElse(null);
     UUID targetUserId = (role == UserRole.BUYER) ? task.getAssignedHelperId() : task.getBuyerId();
+    String senderName = (sender != null && sender.getDisplayName() != null) ? sender.getDisplayName() : "Someone";
     if (targetUserId != null) {
       realtime.publish("CHAT_MESSAGE_RECEIVED", Map.of(
           "taskId", task.getId().toString(),
           "senderUserId", userId.toString(),
           "targetUserId", targetUserId.toString(),
           "message", clean,
-          "senderName", (sender != null && sender.getDisplayName() != null) ? sender.getDisplayName() : "Someone"
+          "senderName", senderName
       ));
+      // Send push notification asynchronously so the recipient gets notified even when the app is backgrounded.
+      final UUID finalTargetUserId = targetUserId;
+      final UUID finalTaskId = task.getId();
+      final String finalSenderName = senderName;
+      final String finalMessage = clean;
+      CompletableFuture.runAsync(() -> {
+        try {
+          pushNotifications.notifyChatMessage(finalTargetUserId, finalTaskId, finalSenderName, finalMessage);
+        } catch (Exception e) {
+          // Swallow push errors to never block the chat message response.
+        }
+      });
     }
     return toResponse(saved, sender);
   }
@@ -86,3 +104,4 @@ public class TaskChatService {
     return new MessageResponse(m.getId(), m.getTaskId(), m.getSenderUserId(), m.getSenderRole(), name, m.getMessage(), m.getCreatedAt());
   }
 }
+

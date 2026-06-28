@@ -6,6 +6,7 @@ import static com.helpinminutes.api.config.RabbitConfig.ROUTING_KEY_NOTIFICATION
 import com.helpinminutes.api.notifications.queue.NotificationJob;
 import com.helpinminutes.api.notifications.queue.NotificationType;
 import com.helpinminutes.api.tasks.model.TaskEntity;
+import com.helpinminutes.api.tasks.repo.TaskRepository;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -19,9 +20,13 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class NotificationQueueService {
     private static final Logger log = LoggerFactory.getLogger(NotificationQueueService.class);
     private final RabbitTemplate rabbitTemplate;
+    private final PushNotificationService pushNotifications;
+    private final TaskRepository tasks;
 
-    public NotificationQueueService(RabbitTemplate rabbitTemplate) {
+    public NotificationQueueService(RabbitTemplate rabbitTemplate, PushNotificationService pushNotifications, TaskRepository tasks) {
         this.rabbitTemplate = rabbitTemplate;
+        this.pushNotifications = pushNotifications;
+        this.tasks = tasks;
     }
 
     public void enqueueTaskOffered(List<UUID> helperIds, TaskEntity task) {
@@ -76,7 +81,50 @@ public class NotificationQueueService {
             log.info("Notification job queued type={} taskId={} helperCount={}",
                     job.type(), job.taskId(), job.helperIds() == null ? 0 : job.helperIds().size());
         } catch (Exception e) {
-            log.error("Failed to queue notification job type={} taskId={}", job.type(), job.taskId(), e);
+            log.error("Failed to queue notification job type={} taskId={}; attempting direct push fallback", job.type(), job.taskId(), e);
+            directFallback(job);
+        }
+    }
+
+    /**
+     * When RabbitMQ is unavailable, call push notification service directly
+     * so notifications are still delivered instead of being silently lost.
+     */
+    private void directFallback(NotificationJob job) {
+        try {
+            TaskEntity task = null;
+            if (job.taskId() != null) {
+                task = tasks.findById(job.taskId()).orElse(null);
+            }
+            switch (job.type()) {
+                case TASK_OFFERED, TASK_CREATED -> {
+                    if (task != null && job.helperIds() != null) {
+                        pushNotifications.notifyTaskOffered(job.helperIds(), task);
+                    }
+                }
+                case TASK_ACCEPTED -> {
+                    if (task != null) {
+                        UUID buyerId = job.buyerId() != null ? job.buyerId() : task.getBuyerId();
+                        pushNotifications.notifyBuyerTaskAccepted(buyerId, task);
+                    }
+                }
+                case TASK_COMPLETED -> {
+                    if (task != null) {
+                        UUID buyerId = job.buyerId() != null ? job.buyerId() : task.getBuyerId();
+                        pushNotifications.notifyBuyerTaskCompleted(buyerId, task);
+                    }
+                }
+                case KYC_APPROVED -> {
+                    if (job.helperIds() != null && !job.helperIds().isEmpty()) {
+                        pushNotifications.notifyHelperKycApproved(job.helperIds().get(0));
+                    }
+                }
+                default -> log.warn("Direct fallback: unknown notification type {}", job.type());
+            }
+            log.info("Direct fallback push sent for type={} taskId={}", job.type(), job.taskId());
+        } catch (Exception fallbackEx) {
+            log.error("Direct fallback also failed for type={} taskId={}", job.type(), job.taskId(), fallbackEx);
         }
     }
 }
+
