@@ -11,14 +11,19 @@ import com.helpinminutes.api.tasks.model.TaskOfferStatus;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.uber.h3core.H3Core;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +43,7 @@ public class MatchingService {
   private final TaskRepository tasks;
   private final RealtimePublisher realtime;
   private final NotificationQueueService notificationQueue;
+  private final HelperProfileRepository helperProfiles;
 
   public MatchingService(
       AppProperties props,
@@ -46,7 +52,8 @@ public class MatchingService {
       TaskOfferRepository offers,
       TaskRepository tasks,
       RealtimePublisher realtime,
-      NotificationQueueService notificationQueue) {
+      NotificationQueueService notificationQueue,
+      HelperProfileRepository helperProfiles) {
     this.props = props;
     this.h3 = h3;
     this.presence = presence;
@@ -54,6 +61,7 @@ public class MatchingService {
     this.tasks = tasks;
     this.realtime = realtime;
     this.notificationQueue = notificationQueue;
+    this.helperProfiles = helperProfiles;
   }
 
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchingService.class);
@@ -68,40 +76,24 @@ public class MatchingService {
     long taskCell = h3.latLngToCell(task.getLat(), task.getLng(), props.matching().h3Resolution());
 
     Map<UUID, Double> bestDistanceByHelper = new HashMap<>();
-    Map<UUID, Boolean> activeTaskByHelper = new HashMap<>();
     int maxKRing = Math.max(props.matching().maxKRing(), 0);
 
-    log.info("Matching task {} at {}, {} (cell {}) with maxKRing {}", task.getId(), task.getLat(), task.getLng(),
+    log.debug("Matching task {} at {}, {} (cell {}) with maxKRing {}", task.getId(), task.getLat(), task.getLng(),
         taskCell, maxKRing);
 
-    for (int k = 0; k <= maxKRing; k++) {
-      List<Long> ringCells = h3.gridDisk(taskCell, k);
-      var onlineHelpers = presence.getOnlineHelpersForCells(ringCells);
-      log.info("Ring {} has {} cells and {} online helpers", k, ringCells.size(), onlineHelpers.size());
-      for (UUID helperId : onlineHelpers) {
-        if (helperId.equals(task.getBuyerId())) {
-          continue; // Don't offer a task to the buyer who created it
-        }
-        if (helperHasActiveTask(helperId, activeTaskByHelper)) {
-          continue;
-        }
-        var state = presence.getHelperState(helperId);
+    List<Long> nearbyCells = h3.gridDisk(taskCell, maxKRing);
+    Set<UUID> nearbyOnlineHelpers = presence.getOnlineHelpersForCells(nearbyCells);
+    Set<UUID> eligibleNearbyHelpers = eligibleHelpers(nearbyOnlineHelpers, task.getBuyerId());
+    log.debug("{} nearby H3 cells contain {} online helpers ({} eligible)",
+        nearbyCells.size(), nearbyOnlineHelpers.size(), eligibleNearbyHelpers.size());
 
-        log.info("Helper {} raw state: {}, online={}, lastSeen={}", helperId, state,
-            state != null ? state.online() : "null", state != null ? state.lastSeenEpochMs() : "null");
-
-        if (!isEligibleOnlineHelper(state)) {
-          log.warn("Helper {} is not fully online. State: {}", helperId, state);
-          continue;
-        }
-
-        double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
-        log.info("Helper {} is valid, distance to task: {} meters", helperId, distMeters);
-
-        if (distMeters > 3000d) {
-          log.warn("Helper {} is too far ({} meters > 3000)", helperId, distMeters);
-          continue;
-        }
+    for (UUID helperId : eligibleNearbyHelpers) {
+      var state = presence.getHelperState(helperId);
+      if (!isEligibleOnlineHelper(state)) {
+        continue;
+      }
+      double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
+      if (distMeters <= 3000d) {
         bestDistanceByHelper.merge(helperId, distMeters, Math::min);
       }
     }
@@ -110,9 +102,8 @@ public class MatchingService {
     // helper set and compute distance directly. This keeps offers/realtime robust even if
     // a helper misses cell bucket updates.
     if (bestDistanceByHelper.isEmpty()) {
-      for (UUID helperId : presence.getOnlineHelpers()) {
-        if (helperId.equals(task.getBuyerId())) continue;
-        if (helperHasActiveTask(helperId, activeTaskByHelper)) continue;
+      Set<UUID> globallyEligible = eligibleHelpers(presence.getOnlineHelpers(), task.getBuyerId());
+      for (UUID helperId : globallyEligible) {
         var state = presence.getHelperState(helperId);
         if (!isEligibleOnlineHelper(state)) continue;
         double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
@@ -120,7 +111,7 @@ public class MatchingService {
           bestDistanceByHelper.merge(helperId, distMeters, Math::min);
         }
       }
-      log.info("Fallback matching found {} online helpers near task {}", bestDistanceByHelper.size(), task.getId());
+      log.debug("Fallback matching found {} online helpers near task {}", bestDistanceByHelper.size(), task.getId());
     }
 
     List<Candidate> candidates = bestDistanceByHelper.entrySet().stream()
@@ -149,6 +140,7 @@ public class MatchingService {
     Instant expires = now.plusSeconds(props.matching().offerTtlSeconds());
 
     List<UUID> helperIds = new ArrayList<>();
+    List<TaskOfferEntity> offerList = new ArrayList<>();
     for (Candidate c : chosen) {
       TaskOfferEntity offer = new TaskOfferEntity();
       offer.setTaskId(task.getId());
@@ -156,7 +148,7 @@ public class MatchingService {
       offer.setStatus(TaskOfferStatus.OFFERED);
       offer.setOfferedAt(now);
       offer.setExpiresAt(expires);
-      offers.save(offer);
+      offerList.add(offer);
 
       helperIds.add(c.helperId());
 
@@ -175,6 +167,9 @@ public class MatchingService {
               java.util.Map.entry("distanceMeters", c.distanceMeters()),
               java.util.Map.entry("expiresAt", expires.toString())));
     }
+    if (!offerList.isEmpty()) {
+      offers.saveAll(offerList);
+    }
 
     if (sendPushNotifications) {
       notificationQueue.enqueueTaskOffered(helperIds, task);
@@ -192,10 +187,26 @@ public class MatchingService {
     return ageMs <= staleMs;
   }
 
-  private boolean helperHasActiveTask(UUID helperId, Map<UUID, Boolean> activeTaskByHelper) {
-    return activeTaskByHelper.computeIfAbsent(
-        helperId,
-        id -> tasks.existsByAssignedHelperIdAndStatusIn(id, HELPER_ACTIVE_TASK_STATUSES));
+  private Set<UUID> eligibleHelpers(Set<UUID> helperIds, UUID buyerId) {
+    if (helperIds == null || helperIds.isEmpty()) {
+      return Set.of();
+    }
+    Set<UUID> candidates = helperIds.stream()
+        .filter(id -> !id.equals(buyerId))
+        .collect(Collectors.toSet());
+    if (candidates.isEmpty()) {
+      return Set.of();
+    }
+    Set<UUID> approved = helperProfiles.findAllById(candidates).stream()
+        .filter(profile -> profile.getKycStatus() == HelperKycStatus.APPROVED)
+        .map(profile -> profile.getUserId())
+        .collect(Collectors.toSet());
+    if (approved.isEmpty()) {
+      return Set.of();
+    }
+    Set<UUID> busy = new HashSet<>(tasks.findAssignedHelperIdsWithStatuses(approved, HELPER_ACTIVE_TASK_STATUSES));
+    approved.removeAll(busy);
+    return approved;
   }
 
   private record Candidate(UUID helperId, double distanceMeters) {

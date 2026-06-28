@@ -12,6 +12,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.nio.charset.StandardCharsets;
 import com.twilio.Twilio;
 import com.twilio.rest.verify.v2.service.Verification;
@@ -19,6 +21,7 @@ import com.twilio.rest.verify.v2.service.VerificationCheck;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -30,21 +33,34 @@ public class OtpService {
   private final AppProperties props;
   private final TwilioProperties twilio;
   private final ExotelProperties exotel;
+  private final Executor otpDeliveryExecutor;
   private final ConcurrentHashMap<String, LocalOtp> localFallback = new ConcurrentHashMap<>();
   private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
-  public OtpService(StringRedisTemplate redis, AppProperties props, TwilioProperties twilio, ExotelProperties exotel) {
+  public OtpService(
+      StringRedisTemplate redis,
+      AppProperties props,
+      TwilioProperties twilio,
+      ExotelProperties exotel,
+      @Qualifier("otpDeliveryExecutor") Executor otpDeliveryExecutor) {
     this.redis = redis;
     this.props = props;
     this.twilio = twilio;
     this.exotel = exotel;
+    this.otpDeliveryExecutor = otpDeliveryExecutor;
   }
 
   public String startOtp(String phone, String channel) {
     if (exotel != null && exotel.enabled()) {
       String otp = createAndStoreLocalOtp(phone);
       if (exotel.canSendSms()) {
-        sendExotelOtp(phone, otp);
+        try {
+          // OTP generation must not wait on an external SMS gateway. Delivery is
+          // best-effort and dev OTP remains available as the configured fallback.
+          otpDeliveryExecutor.execute(() -> sendExotelOtp(phone, otp));
+        } catch (RejectedExecutionException e) {
+          log.warn("Exotel OTP delivery queue is full for {}. Using dev/local OTP.", phone);
+        }
       } else {
         log.warn("Exotel OTP is enabled but SMS is not sent because EXOTEL_FROM or credentials are missing. Using dev/local OTP.");
       }
@@ -53,15 +69,22 @@ public class OtpService {
 
     String recipient = toTwilioRecipient(phone);
     if (twilio.enabled()) {
+      String localOtp = createAndStoreLocalOtp(phone);
       try {
-        Twilio.init(twilio.accountSid(), twilio.authToken());
         String chosen = normalizeChannel(channel);
-        Verification.creator(twilio.verifyServiceSid(), recipient, chosen).create();
-        return null;
+        otpDeliveryExecutor.execute(() -> {
+          try {
+            Twilio.init(twilio.accountSid(), twilio.authToken());
+            Verification.creator(twilio.verifyServiceSid(), recipient, chosen).create();
+            log.info("Twilio OTP request sent asynchronously for {}", recipient);
+          } catch (Exception ex) {
+            log.warn("Twilio OTP async start failed for {}: {}", recipient, ex.getMessage());
+          }
+        });
       } catch (Exception e) {
-        log.warn("Twilio OTP start failed for {} (channel {}), falling back to local OTP: {}", recipient, channel, e.getMessage());
-        return createAndStoreLocalOtp(phone);
+        log.warn("Failed to queue Twilio OTP request for {}: {}", recipient, e.getMessage());
       }
+      return localOtp;
     }
     return createAndStoreLocalOtp(phone);
   }
@@ -118,10 +141,17 @@ public class OtpService {
     if (twilio.enabled()) {
       try {
         Twilio.init(twilio.accountSid(), twilio.authToken());
-        VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid()).setCode(otp).setTo(toTwilioRecipient(phone)).create();
-        return "approved".equalsIgnoreCase(check.getStatus());
+        String recipient = toTwilioRecipient(phone);
+        boolean isApproved = executeWithTimeout(() -> {
+          VerificationCheck check = VerificationCheck.creator(twilio.verifyServiceSid())
+              .setCode(otp)
+              .setTo(recipient)
+              .create();
+          return "approved".equalsIgnoreCase(check.getStatus());
+        }, 4); // Fail fast after 4 seconds
+        return isApproved;
       } catch (Exception e) {
-        log.warn("Twilio OTP verify failed: {}", e.getMessage());
+        log.warn("Twilio OTP verify failed or timed out: {}", e.getMessage());
         return false;
       }
     }
@@ -204,6 +234,23 @@ public class OtpService {
 
   private long expiresAtMs() {
     return System.currentTimeMillis() + (props.otp().ttlSeconds() * 1000L);
+  }
+
+  private <T> T executeWithTimeout(java.util.concurrent.Callable<T> callable, int timeoutSeconds) throws Exception {
+    try {
+      return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+        try {
+          return callable.call();
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
+      }, otpDeliveryExecutor).orTimeout(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS).get();
+    } catch (java.util.concurrent.ExecutionException e) {
+      if (e.getCause() instanceof Exception) {
+        throw (Exception) e.getCause();
+      }
+      throw e;
+    }
   }
 
   private record LocalOtp(String code, long expiresAtMs) {

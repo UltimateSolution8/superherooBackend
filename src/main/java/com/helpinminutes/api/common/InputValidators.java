@@ -8,10 +8,19 @@ public final class InputValidators {
   private static final Pattern EMAIL_PATTERN = Pattern.compile("^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}$");
   private static final Pattern INDIA_PHONE_PATTERN = Pattern.compile("^[6-9]\\d{9}$");
 
+  private static final java.util.Set<String> COMMON_EMAIL_TYPO_DOMAINS = java.util.Set.of(
+      "gamil.com", "gmai.com", "gmial.com", "gmail.co", "gmaill.com", "gnail.com",
+      "gzail.com", "hotnail.com", "hotmai.com", "yaho.com", "yhaoo.com", "outlok.com", "outllok.com"
+  );
+
   private InputValidators() {}
 
   public static String requireEmail(String email) {
-    String normalized = normalizeEmailOrNull(email);
+    return requireEmail(email, true);
+  }
+
+  public static String requireEmail(String email, boolean enforceProviderLimit) {
+    String normalized = normalizeEmailOrNull(email, enforceProviderLimit);
     if (normalized == null) {
       throw new BadRequestException("Email is required");
     }
@@ -19,6 +28,10 @@ public final class InputValidators {
   }
 
   public static String normalizeEmailOrNull(String email) {
+    return normalizeEmailOrNull(email, true);
+  }
+
+  public static String normalizeEmailOrNull(String email, boolean enforceProviderLimit) {
     if (email == null) return null;
     String normalized = email.trim().toLowerCase(Locale.ROOT);
     if (normalized.isBlank()) return null;
@@ -27,6 +40,23 @@ public final class InputValidators {
     }
     if (!EMAIL_PATTERN.matcher(normalized.toUpperCase(Locale.ROOT)).matches()) {
       throw new BadRequestException("Invalid email format");
+    }
+    String[] parts = normalized.split("@");
+    if (parts.length == 2) {
+      String domain = parts[1];
+      if (COMMON_EMAIL_TYPO_DOMAINS.contains(domain)) {
+        throw new BadRequestException("Invalid email domain");
+      }
+      if (enforceProviderLimit) {
+        java.util.Set<String> majorProviders = java.util.Set.of(
+            "gmail.com", "yahoo.com", "yahoo.co.in", "outlook.com", "hotmail.com", "icloud.com",
+            "aol.com", "zoho.com", "zoho.in", "protonmail.com", "proton.me", "live.com", "msn.com",
+            "ymail.com", "rediffmail.com", "gmx.com", "mail.com", "yandex.com", "superheroo.test", "helpinminutes.app"
+        );
+        if (!majorProviders.contains(domain)) {
+          throw new BadRequestException("Only major email providers are allowed (e.g. Gmail, Yahoo, Outlook)");
+        }
+      }
     }
     return normalized;
   }

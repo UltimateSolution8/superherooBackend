@@ -18,12 +18,18 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.helpinminutes.api.support.service.SupportService;
+import com.helpinminutes.api.support.dto.CreateTicketRequest;
+import com.helpinminutes.api.support.model.SupportTicketCategory;
+import com.helpinminutes.api.users.model.UserRole;
+
 @Component
 public class TaskStaleCleanupJob {
   private static final Logger log = LoggerFactory.getLogger(TaskStaleCleanupJob.class);
 
   private final TaskRepository tasks;
   private final UserRepository users;
+  private final SupportService supportService;
   private final Duration staleAssigned;
   private final Duration searchingTimeout;
   private final RealtimePublisher realtime;
@@ -31,11 +37,13 @@ public class TaskStaleCleanupJob {
   public TaskStaleCleanupJob(
       TaskRepository tasks,
       UserRepository users,
+      SupportService supportService,
       RealtimePublisher realtime,
       @Value("${TASK_ASSIGNED_STALE_MINUTES:20}") long staleAssignedMinutes,
       @Value("${TASK_SEARCH_TIMEOUT_SECONDS:120}") long searchingTimeoutSeconds) {
     this.tasks = tasks;
     this.users = users;
+    this.supportService = supportService;
     this.realtime = realtime;
     this.staleAssigned = Duration.ofMinutes(Math.max(5, staleAssignedMinutes));
     this.searchingTimeout = Duration.ofSeconds(Math.max(60, searchingTimeoutSeconds));
@@ -82,6 +90,17 @@ public class TaskStaleCleanupJob {
       refundEscrow(task, now);
       tasks.save(task);
       closed++;
+      try {
+        CreateTicketRequest ticketReq = new CreateTicketRequest(
+            SupportTicketCategory.CANCELLATION,
+            "Task Auto-Cancelled: Timeout",
+            "Task with title '" + task.getTitle() + "' and ID " + task.getId() + " was auto-cancelled because no helper accepted it within 4 minutes.",
+            task.getId().toString()
+        );
+        supportService.createTicket(task.getBuyerId(), UserRole.BUYER, ticketReq);
+      } catch (Exception e) {
+        log.warn("Could not create support ticket for timed out task {}", task.getId(), e);
+      }
       try {
         realtime.publish(
             "task_status_changed",

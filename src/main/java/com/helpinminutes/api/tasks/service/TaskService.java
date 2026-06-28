@@ -25,6 +25,7 @@ import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -37,6 +38,15 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+
+import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
+import com.helpinminutes.api.tasks.repo.RecurringTaskRepository;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskRequest;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskResponse;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 
 @Service
 public class TaskService {
@@ -57,6 +67,8 @@ public class TaskService {
   private final NotificationQueueService notificationQueue;
   private final PushNotificationService pushNotifications;
   private final TaskMapper taskMapper;
+  private final RecurringTaskRepository recurringTasks;
+  private final TaskModerationService taskModerationService;
 
   public TaskService(
       TaskRepository tasks,
@@ -70,7 +82,9 @@ public class TaskService {
       HelperProfileRepository helperProfiles,
       NotificationQueueService notificationQueue,
       PushNotificationService pushNotifications,
-      TaskMapper taskMapper) {
+      TaskMapper taskMapper,
+      RecurringTaskRepository recurringTasks,
+      TaskModerationService taskModerationService) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -83,6 +97,86 @@ public class TaskService {
     this.notificationQueue = notificationQueue;
     this.pushNotifications = pushNotifications;
     this.taskMapper = taskMapper;
+    this.recurringTasks = recurringTasks;
+    this.taskModerationService = taskModerationService;
+  }
+
+  @Transactional
+  public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
+    taskModerationService.validateTask(req.title(), req.description());
+    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+      throw new BadRequestException("Service is currently live only in Hyderabad");
+    }
+
+    LocalTime time;
+    try {
+      String ts = req.timeSlot().trim();
+      time = LocalTime.parse(ts);
+    } catch (Exception e) {
+      throw new BadRequestException("Invalid time slot format. Must be HH:mm or HH:mm:ss");
+    }
+
+    if (req.startDate().isAfter(req.endDate())) {
+      throw new BadRequestException("Start date cannot be after end date");
+    }
+
+    RecurringTaskEntity rec = new RecurringTaskEntity();
+    rec.setBuyerId(buyerId);
+    rec.setTitle(req.title().trim());
+    rec.setDescription(req.description().trim());
+    rec.setUrgency(req.urgency());
+    rec.setTimeMinutes(req.timeMinutes());
+    rec.setBudgetPaise(req.budgetPaise());
+    rec.setLat(req.lat());
+    rec.setLng(req.lng());
+    rec.setAddressText(req.addressText() != null ? req.addressText().trim() : null);
+    rec.setFrequency(req.frequency().trim().toUpperCase());
+    rec.setStartDate(req.startDate());
+    rec.setEndDate(req.endDate());
+    rec.setTimeSlot(req.timeSlot().trim());
+    rec.setCreatedAt(Instant.now());
+    recurringTasks.save(rec);
+
+    ZoneId zone = ZoneId.of("Asia/Kolkata");
+    LocalDate current = req.startDate();
+    LocalDate end = req.endDate();
+    List<UUID> createdTaskIds = new ArrayList<>();
+
+    while (!current.isAfter(end)) {
+      boolean matches = false;
+      String freq = req.frequency().trim().toUpperCase();
+      if ("EVERYDAY".equals(freq) || "DAILY".equals(freq)) {
+        matches = true;
+      } else {
+        String dayOfWeek = current.getDayOfWeek().name();
+        if (dayOfWeek.equals(freq)) {
+          matches = true;
+        }
+      }
+
+      if (matches) {
+        ZonedDateTime zdt = ZonedDateTime.of(current, time, zone);
+        Instant scheduledAt = zdt.toInstant();
+        if (scheduledAt.isAfter(Instant.now())) {
+          var single = createTask(buyerId, new CreateTaskRequest(
+              req.title(),
+              req.description(),
+              req.urgency(),
+              req.timeMinutes(),
+              req.budgetPaise(),
+              req.lat(),
+              req.lng(),
+              req.addressText(),
+              scheduledAt,
+              null
+          ), TaskCreateOptions.defaultOptions());
+          createdTaskIds.add(single.taskId());
+        }
+      }
+      current = current.plusDays(1);
+    }
+
+    return new CreateRecurringTaskResponse(rec.getId(), createdTaskIds);
   }
 
   @Transactional
@@ -92,6 +186,7 @@ public class TaskService {
 
   @Transactional
   public CreateResult createTask(UUID buyerId, CreateTaskRequest req, TaskCreateOptions options) {
+    taskModerationService.validateTask(req.title(), req.description());
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
@@ -123,6 +218,7 @@ public class TaskService {
     task.setLat(req.lat());
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
+    task.setLandmark(req.landmark());
     if (req.scheduledAt() != null) {
       task.setScheduledAt(req.scheduledAt());
     }
@@ -176,6 +272,12 @@ public class TaskService {
   public TaskResponse acceptTask(UUID helperId, UUID taskId) {
     users.findByIdForUpdate(helperId)
         .orElseThrow(() -> new ForbiddenException("Helper not found"));
+
+    var profile = helperProfiles.findById(helperId)
+        .orElseThrow(() -> new ForbiddenException("Helper profile not found"));
+    if (profile.getKycStatus() != HelperKycStatus.APPROVED) {
+      throw new ForbiddenException("KYC verification is required to accept tasks");
+    }
 
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
@@ -529,6 +631,11 @@ public class TaskService {
   }
 
   public List<TaskEntity> listAvailableTasks(UUID helperId) {
+    var profileOpt = helperProfiles.findById(helperId);
+    if (profileOpt.isEmpty() || profileOpt.get().getKycStatus() != HelperKycStatus.APPROVED) {
+      return java.util.List.of();
+    }
+
     var state = presence.getHelperState(helperId);
     if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
       return java.util.List.of();
@@ -621,6 +728,49 @@ public class TaskService {
         // best-effort for demo
       }
     });
+  }
+
+  @Transactional
+  public TaskResponse extendTask(UUID buyerId, UUID taskId, int additionalTimeMinutes, long additionalBudgetPaise) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    if (!task.getBuyerId().equals(buyerId)) {
+      throw new ForbiddenException("Not allowed to modify this task");
+    }
+
+    if (task.getStatus() != TaskStatus.STARTED) {
+      throw new BadRequestException("Task can only be extended while in progress (STARTED status)");
+    }
+
+    UserEntity buyer = users.findById(buyerId)
+        .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+
+    Long balance = buyer.getDemoBalancePaise();
+    long current = balance == null ? 1_000_000L : balance;
+    if (additionalBudgetPaise > current) {
+      throw new BadRequestException("Insufficient demo balance for extension");
+    }
+    
+    buyer.setDemoBalancePaise(current - additionalBudgetPaise);
+    users.save(buyer);
+
+    task.setTimeMinutes(task.getTimeMinutes() + additionalTimeMinutes);
+    task.setBudgetPaise(task.getBudgetPaise() + additionalBudgetPaise);
+    task.setEscrowAmountPaise(task.getEscrowAmountPaise() + additionalBudgetPaise);
+    tasks.save(task);
+
+    try {
+      realtime.publish(
+          "task_status_changed",
+          java.util.Map.of(
+              "taskId", task.getId().toString(),
+              "buyerId", task.getBuyerId().toString(),
+              "status", task.getStatus().name()));
+    } catch (Exception ignored) {
+    }
+
+    return taskMapper.toResponse(task, true);
   }
 
   public record CreateResult(UUID taskId, List<UUID> offeredTo) {

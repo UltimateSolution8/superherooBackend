@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
@@ -39,7 +40,7 @@ class NotificationQueueServiceTest {
         queueService.enqueueTaskCreated(List.of(helper1, helper2), task);
 
         ArgumentCaptor<NotificationJob> captor = ArgumentCaptor.forClass(NotificationJob.class);
-        verify(rabbitTemplate).convertAndSend(RabbitConfig.EXCHANGE_NOTIFICATIONS, RabbitConfig.ROUTING_KEY_NOTIFICATION_SEND, captor.capture());
+        verify(rabbitTemplate).convertAndSend(eq(RabbitConfig.EXCHANGE_NOTIFICATIONS), eq(RabbitConfig.ROUTING_KEY_NOTIFICATION_SEND), captor.capture());
 
         NotificationJob job = captor.getValue();
         assertNotNull(job);

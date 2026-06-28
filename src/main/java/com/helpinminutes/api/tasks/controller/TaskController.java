@@ -8,12 +8,15 @@ import com.helpinminutes.api.batches.dto.BatchDtos;
 import com.helpinminutes.api.batches.service.BookingBatchService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskRequest;
+import com.helpinminutes.api.tasks.dto.CreateRecurringTaskResponse;
 import com.helpinminutes.api.tasks.dto.CreateBulkTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateBulkTaskResponse;
 import com.helpinminutes.api.tasks.dto.CancelTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
+import com.helpinminutes.api.tasks.dto.ExtendTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.service.TaskMapper;
@@ -58,6 +61,16 @@ public class TaskController {
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
   }
 
+  @PostMapping("/recurring")
+  public CreateRecurringTaskResponse createRecurring(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody CreateRecurringTaskRequest req) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can create recurring tasks");
+    }
+    return tasks.createRecurringTask(principal.userId(), req);
+  }
+
   @PostMapping("/bulk")
   public CreateBulkTaskResponse createBulk(
       @AuthenticationPrincipal UserPrincipal principal,
@@ -78,7 +91,8 @@ public class TaskController {
               req.lat(),
               req.lng(),
               req.addressText(),
-              req.scheduledAt()));
+              req.scheduledAt(),
+              req.landmark()));
       return new CreateBulkTaskResponse(
           null,
           1,
@@ -242,5 +256,16 @@ public class TaskController {
       @PathVariable UUID taskId,
       @Valid @RequestBody CancelTaskRequest req) {
     return tasks.cancelTask(principal.userId(), principal.role(), taskId, req.reason());
+  }
+
+  @PostMapping("/{taskId}/extend")
+  public TaskResponse extendTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody ExtendTaskRequest req) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can extend tasks");
+    }
+    return tasks.extendTask(principal.userId(), taskId, req.additionalTimeMinutes(), req.additionalBudgetPaise());
   }
 }

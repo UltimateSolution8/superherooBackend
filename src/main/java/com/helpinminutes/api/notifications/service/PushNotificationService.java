@@ -76,7 +76,7 @@ public class PushNotificationService {
         payload = new String(java.util.Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
       }
       if (payload == null || payload.isBlank()) {
-        log.warn("Push notifications disabled: missing FIREBASE_SERVICE_ACCOUNT_JSON or BASE64.");
+        log.warn("Push notifications disabled: missing FIREBASE_SERVICE_ACCOUNT_JSON or BASE64. Will use Expo push API as fallback.");
         return null;
       }
       if (FirebaseApp.getApps().isEmpty()) {
@@ -301,6 +301,44 @@ public class PushNotificationService {
     }
   }
 
+  /**
+   * Send a push notification when a chat message is received.
+   */
+  public void notifyChatMessage(UUID targetUserId, UUID taskId, String senderName, String messagePreview) {
+    if (targetUserId == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(targetUserId));
+    if (tokenEntities.isEmpty()) {
+      log.info("Chat push skipped for user {} task {}: no push tokens", targetUserId, taskId);
+      return;
+    }
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    String preview = messagePreview != null && messagePreview.length() > 100
+        ? messagePreview.substring(0, 100) + "…" : messagePreview;
+    String title = "New message from " + (senderName != null ? senderName : "Someone");
+    try {
+      Map<String, String> data = new HashMap<>();
+      data.put("type", "CHAT_MESSAGE");
+      if (taskId != null) data.put("taskId", taskId.toString());
+      data.put("senderName", senderName != null ? senderName : "Someone");
+      sendToTokens(taskId, targetUserId, tokenList, title, preview != null ? preview : "You have a new message", data);
+    } catch (Exception e) {
+      log.warn("Failed to send chat push notification to user {} task {}", targetUserId, taskId, e);
+    }
+  }
+
+  /**
+   * Health check for push notification system readiness.
+   */
+  public boolean isReady() {
+    return messaging != null;
+  }
+
   public void notifyHelperKycApproved(UUID helperId) {
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(helperId));
     if (tokenEntities.isEmpty()) return;
@@ -351,7 +389,10 @@ public class PushNotificationService {
     }
     if (!fcmTokens.isEmpty()) {
       if (messaging == null) {
-        log.warn("FCM push skipped for user {} task {} because Firebase messaging is not initialized", userId, taskId);
+        // Firebase is not initialized — route FCM tokens through Expo push API as fallback.
+        // Expo can relay push notifications to FCM devices if the app uses expo-notifications.
+        log.info("Firebase not initialized; routing {} FCM token(s) through Expo push API fallback for user {} task {}", fcmTokens.size(), userId, taskId);
+        expoTokens.addAll(fcmTokens);
       } else {
         MulticastMessage.Builder builder = MulticastMessage.builder()
             .addAllTokens(fcmTokens)
@@ -363,7 +404,9 @@ public class PushNotificationService {
               userId, taskId, response.getSuccessCount(), response.getFailureCount());
           pruneInvalidTokens(taskId, userId, fcmTokens, response);
         } catch (Exception e) {
-          log.warn("Failed FCM push user={} task={}", userId, taskId, e);
+          log.warn("Failed FCM push user={} task={}; falling back to Expo push API", userId, taskId, e);
+          // Fallback: try sending FCM tokens via Expo push API
+          expoTokens.addAll(fcmTokens);
         }
       }
     }
@@ -443,6 +486,76 @@ public class PushNotificationService {
     }
   }
 
+  /**
+   * Admin notifications are low-priority. They run asynchronously on a
+   * background thread with a small delay between sends so they never
+   * block or starve higher-priority app notifications (task offers,
+   * chat messages, task status changes).
+   */
+  public void sendAdminNotification(String role, List<UUID> userIds, String title, String body) {
+    List<UUID> targetUserIds = new ArrayList<>();
+    if (userIds != null && !userIds.isEmpty()) {
+      targetUserIds.addAll(userIds);
+    } else {
+      if ("ALL".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.HELPER);
+        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.BUYER);
+        for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
+        for (com.helpinminutes.api.users.model.UserEntity u : allBuyers) targetUserIds.add(u.getId());
+      } else if ("CITIZEN".equalsIgnoreCase(role) || "BUYER".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.BUYER);
+        for (com.helpinminutes.api.users.model.UserEntity u : allBuyers) targetUserIds.add(u.getId());
+      } else if ("PARTNER".equalsIgnoreCase(role) || "HELPER".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.HELPER);
+        for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
+      }
+    }
+
+    if (targetUserIds.isEmpty()) {
+      log.warn("No target users found for admin notification role={} userIds={}", role, userIds);
+      return;
+    }
+
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(targetUserIds);
+    if (tokenEntities.isEmpty()) {
+      log.info("No active push tokens found for target users");
+      return;
+    }
+
+    Map<UUID, List<String>> tokensByUser = new HashMap<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() == null || t.getToken().isBlank()) continue;
+      tokensByUser.computeIfAbsent(t.getUserId(), k -> new ArrayList<>()).add(t.getToken());
+    }
+
+    int totalUsers = tokensByUser.size();
+    log.info("Admin notification queued for {} users (async, low-priority)", totalUsers);
+
+    // Run the actual sends on a background thread with rate-limiting.
+    java.util.concurrent.CompletableFuture.runAsync(() -> {
+      int sent = 0;
+      for (Map.Entry<UUID, List<String>> entry : tokensByUser.entrySet()) {
+        try {
+          sendToTokens(null, entry.getKey(), entry.getValue(), title, body, Map.of("type", "ADMIN_BROADCAST"));
+          sent++;
+          // Throttle: 200ms between each user to avoid flooding push servers
+          // and to yield CPU/network to higher-priority app notifications.
+          if (sent < totalUsers) {
+            Thread.sleep(200);
+          }
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          log.warn("Admin notification sending interrupted after {}/{} users", sent, totalUsers);
+          break;
+        } catch (Exception e) {
+          log.warn("Failed to send admin push notification to user {}", entry.getKey(), e);
+        }
+      }
+      log.info("Admin notification completed: {}/{} users sent", sent, totalUsers);
+    });
+  }
+
   private record BulkMeta(UUID batchId, int totalCount) {
   }
 }
+
