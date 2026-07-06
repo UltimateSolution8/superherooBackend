@@ -1,6 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
 import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
 import com.helpinminutes.api.tasks.model.TaskStatus;
@@ -21,14 +22,17 @@ public class TaskScheduleDispatchJob {
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
   private final MatchingService matching;
+  private final RealtimePublisher realtime;
 
   public TaskScheduleDispatchJob(
       TaskRepository tasks,
       TaskOfferRepository offers,
-      MatchingService matching) {
+      MatchingService matching,
+      RealtimePublisher realtime) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
+    this.realtime = realtime;
   }
 
   @Scheduled(fixedDelayString = "${TASK_SCHEDULE_DISPATCH_MS:60000}")
@@ -36,7 +40,7 @@ public class TaskScheduleDispatchJob {
   public void dispatchScheduledTasks() {
     Instant now = Instant.now();
     List<TaskEntity> due = tasks.findTop50ByStatusAndScheduledAtBeforeAndAssignedHelperIdIsNullOrderByScheduledAtAsc(
-        TaskStatus.SEARCHING,
+        TaskStatus.SCHEDULED_PENDING,
         now);
 
     if (due.isEmpty()) {
@@ -49,6 +53,20 @@ public class TaskScheduleDispatchJob {
         continue;
       }
       try {
+        task.setStatus(TaskStatus.SEARCHING);
+        tasks.save(task);
+
+        try {
+          realtime.publish(
+              "task_status_changed",
+              java.util.Map.of(
+                  "taskId", task.getId().toString(),
+                  "buyerId", task.getBuyerId().toString(),
+                  "status", TaskStatus.SEARCHING.name()));
+        } catch (Exception re) {
+          log.warn("Failed to publish real-time status change for task {}", task.getId(), re);
+        }
+
         matching.dispatchOffers(task);
         dispatched++;
       } catch (Exception e) {

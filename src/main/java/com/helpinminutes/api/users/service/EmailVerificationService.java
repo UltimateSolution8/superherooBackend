@@ -23,7 +23,7 @@ public class EmailVerificationService {
   private final AppProperties props;
   private final RestTemplate restTemplate;
   
-  @Value("${mojoauth.api-key:5ea4db1c-7992-4359-937a-384d5c3fce41}")
+  @Value("${mojoauth.api-key:}")
   private String mojoAuthApiKey;
 
   private final ConcurrentHashMap<String, String> localStateIdFallback = new ConcurrentHashMap<>();

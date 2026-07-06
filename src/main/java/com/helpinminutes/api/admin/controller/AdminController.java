@@ -309,7 +309,8 @@ public class AdminController {
           t.getCancelledByRole(),
           t.getCancelledAt(),
           t.getCreatedAt(),
-          t.getLandmark());
+          t.getLandmark(),
+          t.getRecurringTaskId());
     }).toList();
   }
 

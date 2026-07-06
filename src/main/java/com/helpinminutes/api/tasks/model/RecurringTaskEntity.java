@@ -7,6 +7,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -60,6 +61,26 @@ public class RecurringTaskEntity {
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
+  @Enumerated(EnumType.STRING)
+  @Column(nullable = false)
+  private RecurringTaskStatus status = RecurringTaskStatus.ACTIVE;
+
+  @Column(name = "recurrence_interval", nullable = false)
+  private Integer recurrenceInterval = 1;
+
+  @Column(name = "by_day")
+  private int[] byDay;
+
+  @Column(name = "by_month_day")
+  private Integer byMonthDay;
+
+  @Column(nullable = false)
+  private String timezone = "Asia/Kolkata";
+
+  @Version
+  @Column(nullable = false)
+  private Long version = 0L;
+
   @PrePersist
   public void prePersist() {
     if (id == null) {
@@ -67,6 +88,9 @@ public class RecurringTaskEntity {
     }
     if (createdAt == null) {
       createdAt = Instant.now();
+    }
+    if (status == null) {
+      status = RecurringTaskStatus.ACTIVE;
     }
   }
 
@@ -188,5 +212,53 @@ public class RecurringTaskEntity {
 
   public void setCreatedAt(Instant createdAt) {
     this.createdAt = createdAt;
+  }
+
+  public RecurringTaskStatus getStatus() {
+    return status;
+  }
+
+  public void setStatus(RecurringTaskStatus status) {
+    this.status = status;
+  }
+
+  public Integer getRecurrenceInterval() {
+    return recurrenceInterval;
+  }
+
+  public void setRecurrenceInterval(Integer recurrenceInterval) {
+    this.recurrenceInterval = recurrenceInterval;
+  }
+
+  public int[] getByDay() {
+    return byDay;
+  }
+
+  public void setByDay(int[] byDay) {
+    this.byDay = byDay;
+  }
+
+  public Integer getByMonthDay() {
+    return byMonthDay;
+  }
+
+  public void setByMonthDay(Integer byMonthDay) {
+    this.byMonthDay = byMonthDay;
+  }
+
+  public String getTimezone() {
+    return timezone;
+  }
+
+  public void setTimezone(String timezone) {
+    this.timezone = timezone;
+  }
+
+  public Long getVersion() {
+    return version;
+  }
+
+  public void setVersion(Long version) {
+    this.version = version;
   }
 }

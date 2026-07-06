@@ -145,6 +145,9 @@ public class TaskEntity {
   @Column(name = "assigned_helper_id")
   private UUID assignedHelperId;
 
+  @Column(name = "recurring_task_id")
+  private UUID recurringTaskId;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -532,5 +535,13 @@ public class TaskEntity {
 
   public Instant getUpdatedAt() {
     return updatedAt;
+  }
+
+  public UUID getRecurringTaskId() {
+    return recurringTaskId;
+  }
+
+  public void setRecurringTaskId(UUID recurringTaskId) {
+    this.recurringTaskId = recurringTaskId;
   }
 }

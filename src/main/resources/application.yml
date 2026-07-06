@@ -24,8 +24,8 @@ spring:
   mail:
     host: ${SPRING_MAIL_HOST:smtp.gmail.com}
     port: ${SPRING_MAIL_PORT:587}
-    username: ${SPRING_MAIL_USERNAME:superheroooprivatelimited@gmail.com}
-    password: ${SPRING_MAIL_PASSWORD:azmobkaphakimddk}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
     properties:
       mail:
         smtp:
@@ -102,6 +102,15 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  health:
+    defaults:
+      enabled: ${MANAGEMENT_HEALTH_DEFAULTS_ENABLED:false}
+    redis:
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:false}
+    rabbit:
+      enabled: ${MANAGEMENT_HEALTH_RABBIT_ENABLED:false}
+    db:
+      enabled: ${MANAGEMENT_HEALTH_DB_ENABLED:false}
 
 app:
   env: ${APP_ENV:dev}
@@ -143,20 +152,20 @@ exotel:
   from: ${EXOTEL_FROM:}
 
 zego:
-  appId: ${ZEGO_APP_ID:1860318111}
-  serverSecret: ${ZEGO_SERVER_SECRET:f15670aeb2dae097e530312e43a1ebdf}
-  callbackSecret: ${ZEGO_CALLBACK_SECRET:4a4ed25ad8a5d5844685a77662d4e426}
+  appId: ${ZEGO_APP_ID:}
+  serverSecret: ${ZEGO_SERVER_SECRET:}
+  callbackSecret: ${ZEGO_CALLBACK_SECRET:}
   tokenTtlSeconds: ${ZEGO_TOKEN_TTL_SECONDS:3600}
   recordApiBaseUrl: ${ZEGO_RECORD_API_BASE_URL:https://cloudrecord-api.zego.im}
 
 sentry:
   dsn: ${SENTRY_DSN:}
   environment: ${APP_ENV:dev}
-  send-default-pii: ${SENTRY_SEND_DEFAULT_PII:true}
+  send-default-pii: ${SENTRY_SEND_DEFAULT_PII:false}
   logs:
     enabled: ${SENTRY_LOGS_ENABLED:true}
-  traces-sample-rate: ${SENTRY_TRACES_SAMPLE_RATE:1.0}
-  profile-session-sample-rate: ${SENTRY_PROFILE_SESSION_SAMPLE_RATE:1.0}
+  traces-sample-rate: ${SENTRY_TRACES_SAMPLE_RATE:0.05}
+  profile-session-sample-rate: ${SENTRY_PROFILE_SESSION_SAMPLE_RATE:0.01}
   profile-lifecycle: ${SENTRY_PROFILE_LIFECYCLE:TRACE}
 
 logging:

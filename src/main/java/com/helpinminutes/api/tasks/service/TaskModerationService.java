@@ -168,7 +168,7 @@ public class TaskModerationService {
         // 1. Check obfuscation patterns
         for (Map.Entry<String, Pattern> entry : OBFUSCATED_PATTERNS.entrySet()) {
             if (entry.getValue().matcher(combinedLower).find()) {
-                throw new BadRequestException("Task contains prohibited content or services: " + entry.getKey());
+                throw new BadRequestException("Please check your task description for any inappropriate or restricted words: " + entry.getKey());
             }
         }
 
@@ -185,13 +185,13 @@ public class TaskModerationService {
             }
             
             if (BLACKLIST.contains(token) && !exempted) {
-                throw new BadRequestException("Task contains prohibited content or services: " + token);
+                throw new BadRequestException("Please check your task description for any inappropriate or restricted words: " + token);
             }
 
             if (!exempted) {
                 for (String prefix : DISALLOWED_PREFIXES) {
                     if (token.startsWith(prefix)) {
-                        throw new BadRequestException("Task contains prohibited content or services: " + token);
+                        throw new BadRequestException("Please check your task description for any inappropriate or restricted words: " + token);
                     }
                 }
             }
@@ -206,12 +206,12 @@ public class TaskModerationService {
 
         // 3. Block NSFW combined with Media (e.g. sex videos, nude photos)
         if (hasNsfw && hasMedia) {
-            throw new BadRequestException("Task contains prohibited adult media content.");
+            throw new BadRequestException("We couldn't post your request. Please check your task description for inappropriate or restricted words.");
         }
 
         // 4. Classifier validation
         if (!hasExemption && classifyProhibited(tokens)) {
-            throw new BadRequestException("Task flagged by automated content moderation engine.");
+            throw new BadRequestException("We couldn't post your request. Please check your task description for inappropriate or restricted words.");
         }
     }
 

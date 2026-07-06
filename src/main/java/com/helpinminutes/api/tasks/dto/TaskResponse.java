@@ -50,5 +50,6 @@ public record TaskResponse(
     String cancelledByRole,
     Instant cancelledAt,
     Instant createdAt,
-    String landmark
+    String landmark,
+    UUID recurringTaskId
 ) {}

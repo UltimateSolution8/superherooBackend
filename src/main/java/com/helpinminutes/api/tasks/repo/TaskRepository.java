@@ -87,4 +87,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
             @Param("helperId") UUID helperId,
             @Param("expectedStatus") TaskStatus expectedStatus,
             @Param("newStatus") TaskStatus newStatus);
+
+    java.util.List<TaskEntity> findByRecurringTaskIdAndStatus(UUID recurringTaskId, TaskStatus status);
+
+    java.util.List<TaskEntity> findByRecurringTaskId(UUID recurringTaskId);
 }

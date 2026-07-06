@@ -26,6 +26,8 @@ import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import com.helpinminutes.api.tasks.dto.RecurringTaskResponse;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -69,6 +71,45 @@ public class TaskController {
       throw new ForbiddenException("Only buyers can create recurring tasks");
     }
     return tasks.createRecurringTask(principal.userId(), req);
+  }
+
+  @GetMapping("/recurring")
+  public java.util.List<RecurringTaskResponse> getRecurringTasks(
+      @AuthenticationPrincipal UserPrincipal principal) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can view recurring tasks");
+    }
+    return tasks.getMyRecurringTasks(principal.userId());
+  }
+
+  @DeleteMapping("/recurring/{recurringTaskId}")
+  public void deleteRecurringTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID recurringTaskId) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can delete recurring tasks");
+    }
+    tasks.deleteRecurringTask(principal.userId(), recurringTaskId);
+  }
+
+  @PostMapping("/recurring/{recurringTaskId}/pause")
+  public void pauseRecurringTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID recurringTaskId) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can pause recurring tasks");
+    }
+    tasks.pauseRecurringTask(principal.userId(), recurringTaskId);
+  }
+
+  @PostMapping("/recurring/{recurringTaskId}/resume")
+  public void resumeRecurringTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID recurringTaskId) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can resume recurring tasks");
+    }
+    tasks.resumeRecurringTask(principal.userId(), recurringTaskId);
   }
 
   @PostMapping("/bulk")
