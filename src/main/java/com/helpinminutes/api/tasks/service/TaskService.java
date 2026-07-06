@@ -227,22 +227,27 @@ public class TaskService {
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
     task.setLandmark(req.landmark());
-    if (req.scheduledAt() != null) {
-      task.setScheduledAt(req.scheduledAt());
+    Instant now = Instant.now();
+    Instant scheduledAt = req.scheduledAt();
+    if (scheduledAt != null) {
+      task.setScheduledAt(scheduledAt);
     }
-    task.setStatus(TaskStatus.SEARCHING);
+    boolean isFutureScheduled = scheduledAt != null && scheduledAt.isAfter(now.plus(java.time.Duration.ofMinutes(1)));
+    if (isFutureScheduled) {
+      task.setStatus(TaskStatus.SCHEDULED_PENDING);
+    } else {
+      task.setStatus(TaskStatus.SEARCHING);
+    }
     task.setEscrowStatus(TaskEscrowStatus.HELD);
     task.setEscrowAmountPaise(cost);
-    task.setEscrowHeldAt(Instant.now());
+    task.setEscrowHeldAt(now);
     task.setArrivalOtp(generateOtp());
     task.setCompletionOtp(generateOtp());
 
     tasks.save(task);
 
     List<UUID> offeredTo = new ArrayList<>();
-    Instant now = Instant.now();
-    Instant scheduledAt = task.getScheduledAt();
-    if (scheduledAt == null || !scheduledAt.isAfter(now)) {
+    if (!isFutureScheduled) {
       try {
         offeredTo = matching.dispatchOffers(task, resolvedOptions.sendOfferNotifications());
       } catch (Exception e) {
