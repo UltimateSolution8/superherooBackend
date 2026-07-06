@@ -214,7 +214,7 @@ public class KycService {
                 .orElseThrow(() -> new NotFoundException("Admin not found"));
 
         KycRequestEntity entity = kycRequestRepository.findActiveLiveSessions(helperId,
-                java.util.List.of(KycRequestStatus.SUBMITTED, KycRequestStatus.REVIEW))
+                java.util.Arrays.asList(KycRequestStatus.values()))
                 .stream()
                 .findFirst()
                 .orElse(null);
@@ -261,7 +261,7 @@ public class KycService {
         UserEntity helper = userRepository.findById(helperId)
                 .orElseThrow(() -> new NotFoundException("Helper not found"));
         var sessions = kycRequestRepository.findActiveLiveSessions(helperId,
-                java.util.List.of(KycRequestStatus.SUBMITTED, KycRequestStatus.REVIEW));
+                java.util.Arrays.asList(KycRequestStatus.values()));
         if (sessions.isEmpty()) {
             return null;
         }

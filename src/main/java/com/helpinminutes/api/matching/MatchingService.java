@@ -87,7 +87,15 @@ public class MatchingService {
     log.debug("{} nearby H3 cells contain {} online helpers ({} eligible)",
         nearbyCells.size(), nearbyOnlineHelpers.size(), eligibleNearbyHelpers.size());
 
+    List<TaskOfferEntity> existingOffers = offers.findAllByTaskId(task.getId());
+    Set<UUID> alreadyOfferedHelperIds = existingOffers.stream()
+        .map(TaskOfferEntity::getHelperId)
+        .collect(java.util.stream.Collectors.toSet());
+
     for (UUID helperId : eligibleNearbyHelpers) {
+      if (alreadyOfferedHelperIds.contains(helperId)) {
+        continue;
+      }
       var state = presence.getHelperState(helperId);
       if (!isEligibleOnlineHelper(state)) {
         continue;
@@ -104,6 +112,9 @@ public class MatchingService {
     if (bestDistanceByHelper.isEmpty()) {
       Set<UUID> globallyEligible = eligibleHelpers(presence.getOnlineHelpers(), task.getBuyerId());
       for (UUID helperId : globallyEligible) {
+        if (alreadyOfferedHelperIds.contains(helperId)) {
+          continue;
+        }
         var state = presence.getHelperState(helperId);
         if (!isEligibleOnlineHelper(state)) continue;
         double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());

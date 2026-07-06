@@ -165,7 +165,7 @@ public class PushNotificationService {
           data.put("distanceMeters", String.valueOf(Math.round(distMeters)));
         }
 
-        sendToTokens(task.getId(), helperId, tokenList, title, body, data);
+        sendToTokens(task.getId(), helperId, tokenList, title, body, data, "tasks");
       } catch (Exception e) {
         log.warn("Failed to send push notifications for task {} to helper {}", task.getId(), helperId, e);
       }
@@ -227,7 +227,7 @@ public class PushNotificationService {
       data.put("budgetPaise", String.valueOf(budgetPaise));
       data.put("lat", String.valueOf(task.getLat()));
       data.put("lng", String.valueOf(task.getLng()));
-      sendToTokens(task.getId(), userId, tokenList, "New task created", body, data);
+      sendToTokens(task.getId(), userId, tokenList, "New task created", body, data, "tasks");
     } catch (Exception e) {
       log.warn("Failed task create monitor push for task {}", task.getId(), e);
     }
@@ -276,7 +276,7 @@ public class PushNotificationService {
     if (tokenList.isEmpty()) return;
     try {
       sendToTokens(task.getId(), buyerId, tokenList, "Task accepted", "A Superheroo is on the way.",
-          Map.of("type", "TASK_ACCEPTED", "taskId", task.getId().toString()));
+          Map.of("type", "TASK_ACCEPTED", "taskId", task.getId().toString()), "tasks");
     } catch (Exception e) {
       log.warn("Failed to send task accepted notification for task {}", task.getId(), e);
     }
@@ -295,7 +295,7 @@ public class PushNotificationService {
     if (tokenList.isEmpty()) return;
     try {
       sendToTokens(task.getId(), buyerId, tokenList, "Task completed", "Please rate your Superheroo.",
-          Map.of("type", "TASK_COMPLETED", "taskId", task.getId().toString()));
+          Map.of("type", "TASK_COMPLETED", "taskId", task.getId().toString()), "tasks");
     } catch (Exception e) {
       log.warn("Failed to send task completed notification for task {}", task.getId(), e);
     }
@@ -326,7 +326,7 @@ public class PushNotificationService {
       data.put("type", "CHAT_MESSAGE");
       if (taskId != null) data.put("taskId", taskId.toString());
       data.put("senderName", senderName != null ? senderName : "Someone");
-      sendToTokens(taskId, targetUserId, tokenList, title, preview != null ? preview : "You have a new message", data);
+      sendToTokens(taskId, targetUserId, tokenList, title, preview != null ? preview : "You have a new message", data, "chat");
     } catch (Exception e) {
       log.warn("Failed to send chat push notification to user {} task {}", targetUserId, taskId, e);
     }
@@ -353,7 +353,7 @@ public class PushNotificationService {
 
     try {
       sendToTokens(null, helperId, tokenList, "KYC approved", "You are approved and can now go online.",
-          Map.of("type", "KYC_APPROVED"));
+          Map.of("type", "KYC_APPROVED"), "default");
     } catch (Exception e) {
       log.warn("Failed to send KYC approved push notification for helper {}", helperId, e);
     }
@@ -376,7 +376,7 @@ public class PushNotificationService {
     log.info("Pruned {} invalid push token(s) for user {} task {}", deleted, userId, taskId);
   }
 
-  private void sendToTokens(UUID taskId, UUID userId, List<String> tokenList, String title, String body, Map<String, String> data) {
+  private void sendToTokens(UUID taskId, UUID userId, List<String> tokenList, String title, String body, Map<String, String> data, String channelId) {
     if (tokenList == null || tokenList.isEmpty()) return;
     List<String> expoTokens = new ArrayList<>();
     List<String> fcmTokens = new ArrayList<>();
@@ -396,12 +396,17 @@ public class PushNotificationService {
       } else {
         MulticastMessage.Builder builder = MulticastMessage.builder()
             .addAllTokens(fcmTokens)
-            .setNotification(Notification.builder().setTitle(title).setBody(body).build());
+            .setNotification(Notification.builder().setTitle(title).setBody(body).build())
+            .setAndroidConfig(com.google.firebase.messaging.AndroidConfig.builder()
+                .setNotification(com.google.firebase.messaging.AndroidNotification.builder()
+                    .setChannelId(channelId)
+                    .build())
+                .build());
         data.forEach(builder::putData);
         try {
           BatchResponse response = messaging.sendEachForMulticast(builder.build());
           log.info("FCM push sent user={} task={}: success={}, failure={}",
-              userId, taskId, response.getSuccessCount(), response.getFailureCount());
+               userId, taskId, response.getSuccessCount(), response.getFailureCount());
           pruneInvalidTokens(taskId, userId, fcmTokens, response);
         } catch (Exception e) {
           log.warn("Failed FCM push user={} task={}; falling back to Expo push API", userId, taskId, e);
@@ -411,7 +416,7 @@ public class PushNotificationService {
       }
     }
     if (!expoTokens.isEmpty()) {
-      sendExpoPush(userId, taskId, expoTokens, title, body, data);
+      sendExpoPush(userId, taskId, expoTokens, title, body, data, channelId);
     }
   }
 
@@ -419,7 +424,7 @@ public class PushNotificationService {
     return token != null && (token.startsWith("ExponentPushToken[") || token.startsWith("ExpoPushToken["));
   }
 
-  private void sendExpoPush(UUID userId, UUID taskId, List<String> tokenList, String title, String body, Map<String, String> data) {
+  private void sendExpoPush(UUID userId, UUID taskId, List<String> tokenList, String title, String body, Map<String, String> data, String channelId) {
     try {
       List<Map<String, Object>> payload = tokenList.stream()
           .map(token -> {
@@ -429,6 +434,7 @@ public class PushNotificationService {
             item.put("title", title);
             item.put("body", body);
             item.put("data", data);
+            item.put("channelId", channelId);
             return item;
           })
           .toList();
@@ -498,15 +504,15 @@ public class PushNotificationService {
       targetUserIds.addAll(userIds);
     } else {
       if ("ALL".equalsIgnoreCase(role)) {
-        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.HELPER);
-        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.BUYER);
+        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findAllByRole(UserRole.HELPER);
+        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findAllByRole(UserRole.BUYER);
         for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
         for (com.helpinminutes.api.users.model.UserEntity u : allBuyers) targetUserIds.add(u.getId());
       } else if ("CITIZEN".equalsIgnoreCase(role) || "BUYER".equalsIgnoreCase(role)) {
-        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.BUYER);
+        List<com.helpinminutes.api.users.model.UserEntity> allBuyers = users.findAllByRole(UserRole.BUYER);
         for (com.helpinminutes.api.users.model.UserEntity u : allBuyers) targetUserIds.add(u.getId());
       } else if ("PARTNER".equalsIgnoreCase(role) || "HELPER".equalsIgnoreCase(role)) {
-        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findTop200ByRoleOrderByCreatedAtDesc(UserRole.HELPER);
+        List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findAllByRole(UserRole.HELPER);
         for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
       }
     }
@@ -536,7 +542,7 @@ public class PushNotificationService {
       int sent = 0;
       for (Map.Entry<UUID, List<String>> entry : tokensByUser.entrySet()) {
         try {
-          sendToTokens(null, entry.getKey(), entry.getValue(), title, body, Map.of("type", "ADMIN_BROADCAST"));
+          sendToTokens(null, entry.getKey(), entry.getValue(), title, body, Map.of("type", "ADMIN_BROADCAST"), "default");
           sent++;
           // Throttle: 200ms between each user to avoid flooding push servers
           // and to yield CPU/network to higher-priority app notifications.

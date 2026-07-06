@@ -20,6 +20,8 @@ public interface UserRepository extends JpaRepository<UserEntity, UUID> {
 
   java.util.List<UserEntity> findTop200ByRoleOrderByCreatedAtDesc(UserRole role);
 
+  java.util.List<UserEntity> findAllByRole(UserRole role);
+
   List<UserEntity> findByIdInAndRole(List<UUID> ids, UserRole role);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)

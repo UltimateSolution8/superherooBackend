@@ -3,6 +3,7 @@ package com.helpinminutes.api.auth.service;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.config.ExotelProperties;
 import com.helpinminutes.api.config.TwilioProperties;
+import com.helpinminutes.api.errors.BadRequestException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -51,6 +52,28 @@ public class OtpService {
   }
 
   public String startOtp(String phone, String channel) {
+    if (phone == null || phone.isBlank()) {
+      throw new BadRequestException("Phone number is required");
+    }
+
+    // Redis rate limiting: Max 5 OTPs per phone number per hour
+    String rateKey = "him:otp_rate:" + phone.trim();
+    try {
+      Long currentCount = redis.opsForValue().increment(rateKey);
+      if (currentCount != null) {
+        if (currentCount == 1) {
+          redis.expire(rateKey, Duration.ofHours(1));
+        }
+        if (currentCount > 5) {
+          throw new BadRequestException("Too many OTP requests. Please try again after an hour.");
+        }
+      }
+    } catch (BadRequestException e) {
+      throw e;
+    } catch (Exception e) {
+      log.warn("Redis OTP rate limiting failed for {}: {}", phone, e.getMessage());
+    }
+
     if (exotel != null && exotel.enabled()) {
       String otp = createAndStoreLocalOtp(phone);
       if (exotel.canSendSms()) {

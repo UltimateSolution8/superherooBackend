@@ -65,10 +65,10 @@ public class KycRequestEntity {
     @Column(name = "live_ended_at")
     private Instant liveEndedAt;
 
-    @Column(name = "face_match_score")
+    @Column(name = "face_match_score", columnDefinition = "numeric")
     private Double faceMatchScore;
 
-    @Column(name = "liveness_score")
+    @Column(name = "liveness_score", columnDefinition = "numeric")
     private Double livenessScore;
 
     @Column(name = "recommended_action")

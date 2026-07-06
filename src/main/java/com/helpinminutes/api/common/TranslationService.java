@@ -26,18 +26,18 @@ public class TranslationService {
   public TranslationService(ObjectMapper objectMapper) {
     this.objectMapper = objectMapper;
     this.httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofMillis(500))
+        .connectTimeout(Duration.ofMillis(1000))
         .build();
   }
 
   public String translate(String text, String targetLang) {
-    if (text == null || text.isBlank() || targetLang == null || targetLang.isBlank() || "en".equalsIgnoreCase(targetLang)) {
+    if (text == null || text.isBlank() || targetLang == null || targetLang.isBlank()) {
       return text;
     }
     
-    // Check supported target languages
-    String lang = targetLang.toLowerCase();
-    if (!"hi".equals(lang) && !"te".equals(lang)) {
+    // Support en, hi, te as target languages
+    String lang = targetLang.toLowerCase().split("-")[0];
+    if (!"en".equals(lang) && !"hi".equals(lang) && !"te".equals(lang)) {
       return text;
     }
 
@@ -53,7 +53,7 @@ public class TranslationService {
       
       HttpRequest request = HttpRequest.newBuilder()
           .uri(URI.create(url))
-          .timeout(Duration.ofMillis(500))
+          .timeout(Duration.ofMillis(1000))
           .header("User-Agent", "Mozilla/5.0")
           .GET()
           .build();

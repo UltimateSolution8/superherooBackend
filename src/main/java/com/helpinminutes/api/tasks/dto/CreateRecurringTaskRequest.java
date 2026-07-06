@@ -19,5 +19,9 @@ public record CreateRecurringTaskRequest(
     @NotBlank String frequency,
     @NotNull LocalDate startDate,
     @NotNull LocalDate endDate,
-    @NotBlank String timeSlot
+    @NotBlank String timeSlot,
+    Integer recurrenceInterval,
+    int[] byDay,
+    Integer byMonthDay,
+    String timezone
 ) {}

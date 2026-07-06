@@ -2,6 +2,7 @@ package com.helpinminutes.api.helpers.presence;
 
 import com.helpinminutes.api.config.AppProperties;
 import com.uber.h3core.H3Core;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -39,6 +40,9 @@ public class HelperPresenceService {
     redis.opsForHash().put(stateKey, "h3", newCell);
     redis.opsForHash().put(stateKey, "online", "1");
     redis.opsForHash().put(stateKey, "lastSeenEpochMs", Long.toString(Instant.now().toEpochMilli()));
+    
+    // Set 10-minute expiry to automatically clean up Redis memory when helpers go offline/inactive
+    redis.expire(stateKey, Duration.ofMinutes(10));
 
     redis.opsForSet().add(keyOnlineH3(newCell), helperId.toString());
     redis.opsForSet().add(ONLINE_HELPERS_KEY, helperId.toString());
@@ -53,9 +57,45 @@ public class HelperPresenceService {
 
     redis.opsForHash().put(stateKey, "online", "0");
     redis.opsForHash().put(stateKey, "lastSeenEpochMs", Long.toString(Instant.now().toEpochMilli()));
+    
+    // Expire the offline state after 10 minutes to clean up Redis memory
+    redis.expire(stateKey, Duration.ofMinutes(10));
+    
     redis.opsForSet().remove(ONLINE_HELPERS_KEY, helperId.toString());
   }
 
+  private boolean isHelperActive(UUID helperId) {
+    String stateKey = keyHelperState(helperId);
+    List<Object> fields = redis.opsForHash().multiGet(stateKey, List.of("online", "lastSeenEpochMs", "h3"));
+    if (fields == null || fields.size() < 3) {
+      return false;
+    }
+    String online = fields.get(0) instanceof String s ? s : null;
+    String lastSeenStr = fields.get(1) instanceof String s ? s : null;
+    String h3Cell = fields.get(2) instanceof String s ? s : null;
+
+    if (!"1".equals(online) || lastSeenStr == null) {
+      return false;
+    }
+
+    try {
+      long lastSeen = Long.parseLong(lastSeenStr);
+      long now = Instant.now().toEpochMilli();
+      if (now - lastSeen < 300_000) { // 5 minutes activity threshold
+        return true;
+      }
+    } catch (NumberFormatException e) {
+      // ignore
+    }
+
+    // Helper is stale/inactive. Clean up from sets.
+    redis.opsForSet().remove(ONLINE_HELPERS_KEY, helperId.toString());
+    if (h3Cell != null && !h3Cell.isBlank()) {
+      redis.opsForSet().remove(keyOnlineH3(h3Cell), helperId.toString());
+    }
+    redis.opsForHash().put(stateKey, "online", "0");
+    return false;
+  }
 
   public HelperState getHelperState(UUID helperId) {
     String stateKey = keyHelperState(helperId);
@@ -83,14 +123,17 @@ public class HelperPresenceService {
   public Set<UUID> getOnlineHelpersForCells(List<Long> h3Cells) {
     Set<String> helperIds = h3Cells.stream()
         .map(Long::toUnsignedString)
-        .map(com.helpinminutes.api.helpers.presence.HelperPresenceService::keyOnlineH3)
+        .map(HelperPresenceService::keyOnlineH3)
         .flatMap(k -> {
           Set<String> members = redis.opsForSet().members(k);
           return members == null ? Set.<String>of().stream() : members.stream();
         })
         .collect(Collectors.toSet());
 
-    return helperIds.stream().map(UUID::fromString).collect(Collectors.toSet());
+    return helperIds.stream()
+        .map(UUID::fromString)
+        .filter(this::isHelperActive)
+        .collect(Collectors.toSet());
   }
 
   public Set<UUID> getOnlineHelpers() {
@@ -107,6 +150,7 @@ public class HelperPresenceService {
           }
         })
         .filter(java.util.Objects::nonNull)
+        .filter(this::isHelperActive)
         .collect(Collectors.toSet());
   }
 

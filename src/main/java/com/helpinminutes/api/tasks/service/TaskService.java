@@ -40,9 +40,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
+import com.helpinminutes.api.tasks.model.RecurringTaskStatus;
 import com.helpinminutes.api.tasks.repo.RecurringTaskRepository;
 import com.helpinminutes.api.tasks.dto.CreateRecurringTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateRecurringTaskResponse;
+import com.helpinminutes.api.tasks.dto.RecurringTaskResponse;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
@@ -120,6 +122,13 @@ public class TaskService {
       throw new BadRequestException("Start date cannot be after end date");
     }
 
+    String tz = req.timezone() != null ? req.timezone().trim() : "Asia/Kolkata";
+    try {
+      ZoneId.of(tz);
+    } catch (Exception e) {
+      throw new BadRequestException("Invalid timezone string: " + tz);
+    }
+
     RecurringTaskEntity rec = new RecurringTaskEntity();
     rec.setBuyerId(buyerId);
     rec.setTitle(req.title().trim());
@@ -134,46 +143,42 @@ public class TaskService {
     rec.setStartDate(req.startDate());
     rec.setEndDate(req.endDate());
     rec.setTimeSlot(req.timeSlot().trim());
+    rec.setRecurrenceInterval(req.recurrenceInterval() != null ? req.recurrenceInterval() : 1);
+    rec.setByDay(req.byDay());
+    rec.setByMonthDay(req.byMonthDay());
+    rec.setTimezone(tz);
     rec.setCreatedAt(Instant.now());
     recurringTasks.save(rec);
 
-    ZoneId zone = ZoneId.of("Asia/Kolkata");
-    LocalDate current = req.startDate();
-    LocalDate end = req.endDate();
+    Instant now = Instant.now();
+    Instant lookaheadHorizon = now.plus(7, java.time.temporal.ChronoUnit.DAYS);
     List<UUID> createdTaskIds = new ArrayList<>();
 
-    while (!current.isAfter(end)) {
-      boolean matches = false;
-      String freq = req.frequency().trim().toUpperCase();
-      if ("EVERYDAY".equals(freq) || "DAILY".equals(freq)) {
-        matches = true;
-      } else {
-        String dayOfWeek = current.getDayOfWeek().name();
-        if (dayOfWeek.equals(freq)) {
-          matches = true;
-        }
+    List<ZonedDateTime> occurrences = RecurrenceCalculator.nextNOccurrences(rec, now, 20);
+    for (ZonedDateTime zdt : occurrences) {
+      Instant scheduledAt = zdt.toInstant();
+      if (scheduledAt.isAfter(lookaheadHorizon)) {
+        break;
       }
 
-      if (matches) {
-        ZonedDateTime zdt = ZonedDateTime.of(current, time, zone);
-        Instant scheduledAt = zdt.toInstant();
-        if (scheduledAt.isAfter(Instant.now())) {
-          var single = createTask(buyerId, new CreateTaskRequest(
-              req.title(),
-              req.description(),
-              req.urgency(),
-              req.timeMinutes(),
-              req.budgetPaise(),
-              req.lat(),
-              req.lng(),
-              req.addressText(),
-              scheduledAt,
-              null
-          ), TaskCreateOptions.defaultOptions());
-          createdTaskIds.add(single.taskId());
-        }
-      }
-      current = current.plusDays(1);
+      var single = createTask(buyerId, new CreateTaskRequest(
+          req.title(),
+          req.description(),
+          req.urgency(),
+          req.timeMinutes(),
+          req.budgetPaise(),
+          req.lat(),
+          req.lng(),
+          req.addressText(),
+          scheduledAt,
+          null
+      ), TaskCreateOptions.defaultOptions());
+      createdTaskIds.add(single.taskId());
+
+      tasks.findById(single.taskId()).ifPresent(t -> {
+        t.setRecurringTaskId(rec.getId());
+        tasks.save(t);
+      });
     }
 
     return new CreateRecurringTaskResponse(rec.getId(), createdTaskIds);
@@ -202,11 +207,14 @@ public class TaskService {
       buyer.setDemoBalancePaise(current);
       users.save(buyer);
     }
+    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block task booking
+    /*
     if (cost > current) {
       throw new BadRequestException("Insufficient demo balance for escrow");
     }
     buyer.setDemoBalancePaise(current - cost);
     users.save(buyer);
+    */
 
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
@@ -748,12 +756,15 @@ public class TaskService {
 
     Long balance = buyer.getDemoBalancePaise();
     long current = balance == null ? 1_000_000L : balance;
+    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block extensions
+    /*
     if (additionalBudgetPaise > current) {
       throw new BadRequestException("Insufficient demo balance for extension");
     }
     
     buyer.setDemoBalancePaise(current - additionalBudgetPaise);
     users.save(buyer);
+    */
 
     task.setTimeMinutes(task.getTimeMinutes() + additionalTimeMinutes);
     task.setBudgetPaise(task.getBudgetPaise() + additionalBudgetPaise);
@@ -785,4 +796,178 @@ public class TaskService {
       return new TaskCreateOptions(false);
     }
   }
+
+  @Transactional(readOnly = true)
+  public java.util.List<RecurringTaskResponse> getMyRecurringTasks(UUID buyerId) {
+    return recurringTasks.findAllByBuyerIdOrderByCreatedAtDesc(buyerId).stream()
+        .map(rec -> new RecurringTaskResponse(
+            rec.getId(),
+            rec.getBuyerId(),
+            rec.getTitle(),
+            rec.getDescription(),
+            rec.getUrgency(),
+            rec.getTimeMinutes(),
+            rec.getBudgetPaise(),
+            rec.getLat(),
+            rec.getLng(),
+            rec.getAddressText(),
+            rec.getFrequency(),
+            rec.getStartDate(),
+            rec.getEndDate(),
+            rec.getTimeSlot(),
+            rec.getCreatedAt(),
+            rec.getStatus(),
+            rec.getRecurrenceInterval(),
+            rec.getByDay(),
+            rec.getByMonthDay(),
+            rec.getTimezone()
+        ))
+        .collect(java.util.stream.Collectors.toList());
+  }
+
+  @Transactional
+  public void deleteRecurringTask(UUID buyerId, UUID recurringTaskId) {
+    RecurringTaskEntity rec = recurringTasks.findById(recurringTaskId)
+        .orElseThrow(() -> new NotFoundException("Recurring task not found"));
+
+    if (!rec.getBuyerId().equals(buyerId)) {
+      throw new ForbiddenException("Only the owner can delete this recurring task");
+    }
+
+    // Delete the configuration
+    recurringTasks.delete(rec);
+
+    // Cancel all future tasks associated with this recurring task that are not started (SEARCHING and ASSIGNED)
+    java.util.List<TaskEntity> searchingTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.SEARCHING);
+    java.util.List<TaskEntity> assignedTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.ASSIGNED);
+
+    java.util.List<TaskEntity> associatedTasks = new java.util.ArrayList<>();
+    associatedTasks.addAll(searchingTasks);
+    associatedTasks.addAll(assignedTasks);
+
+    for (TaskEntity task : associatedTasks) {
+      task.setStatus(TaskStatus.CANCELLED);
+      task.setCancelReason("Recurring task configuration was deleted");
+      task.setCancelledByRole(UserRole.BUYER.name());
+      task.setCancelledByUserId(buyerId);
+      task.setCancelledAt(Instant.now());
+
+      if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
+        if (task.getEscrowStatus() == TaskEscrowStatus.HELD
+            || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
+          UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
+          if (buyer != null) {
+            long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
+            buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
+            users.save(buyer);
+          }
+          task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
+          task.setEscrowReleaseAt(null);
+          task.setEscrowReleasedAt(Instant.now());
+          task.setEscrowReleasedToHelperId(null);
+        }
+      }
+      tasks.save(task);
+    }
+  }
+
+  @Transactional
+  public void pauseRecurringTask(UUID buyerId, UUID recurringTaskId) {
+    RecurringTaskEntity rec = recurringTasks.findById(recurringTaskId)
+        .orElseThrow(() -> new NotFoundException("Recurring task not found"));
+
+    if (!rec.getBuyerId().equals(buyerId)) {
+      throw new ForbiddenException("Only the owner can pause this recurring task");
+    }
+
+    if (rec.getStatus() == RecurringTaskStatus.PAUSED) {
+      return;
+    }
+
+    rec.setStatus(RecurringTaskStatus.PAUSED);
+    recurringTasks.save(rec);
+
+    // Cancel all future tasks associated with this recurring task that are SEARCHING
+    java.util.List<TaskEntity> futureTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.SEARCHING);
+    for (TaskEntity task : futureTasks) {
+      task.setStatus(TaskStatus.CANCELLED);
+      task.setCancelReason("Recurring task configuration was paused");
+      task.setCancelledByRole(UserRole.BUYER.name());
+      task.setCancelledByUserId(buyerId);
+      task.setCancelledAt(Instant.now());
+
+      if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
+        if (task.getEscrowStatus() == TaskEscrowStatus.HELD
+            || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
+          UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
+          if (buyer != null) {
+            long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
+            buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
+            users.save(buyer);
+          }
+          task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
+          task.setEscrowReleaseAt(null);
+          task.setEscrowReleasedAt(Instant.now());
+          task.setEscrowReleasedToHelperId(null);
+        }
+      }
+      tasks.save(task);
+    }
+  }
+
+  @Transactional
+  public void resumeRecurringTask(UUID buyerId, UUID recurringTaskId) {
+    RecurringTaskEntity rec = recurringTasks.findById(recurringTaskId)
+        .orElseThrow(() -> new NotFoundException("Recurring task not found"));
+
+    if (!rec.getBuyerId().equals(buyerId)) {
+      throw new ForbiddenException("Only the owner can resume this recurring task");
+    }
+
+    if (rec.getStatus() == RecurringTaskStatus.ACTIVE) {
+      return;
+    }
+
+    rec.setStatus(RecurringTaskStatus.ACTIVE);
+    recurringTasks.save(rec);
+
+    // Re-generate future tasks starting from max(now, startDate) to min(now + 7 days, endDate)
+    Instant now = Instant.now();
+    Instant lookaheadHorizon = now.plus(7, java.time.temporal.ChronoUnit.DAYS);
+    List<ZonedDateTime> occurrences = RecurrenceCalculator.nextNOccurrences(rec, now, 20);
+
+    for (ZonedDateTime zdt : occurrences) {
+      Instant scheduledAt = zdt.toInstant();
+      if (scheduledAt.isAfter(lookaheadHorizon)) {
+        break; // stop at horizon
+      }
+
+      // Check if an active (non-cancelled) task already exists for this scheduledAt
+      boolean exists = tasks.findByRecurringTaskId(recurringTaskId).stream()
+          .anyMatch(t -> t.getScheduledAt() != null
+              && Math.abs(t.getScheduledAt().toEpochMilli() - scheduledAt.toEpochMilli()) < 1000
+              && t.getStatus() != TaskStatus.CANCELLED);
+
+      if (!exists) {
+        var single = createTask(buyerId, new CreateTaskRequest(
+            rec.getTitle(),
+            rec.getDescription(),
+            rec.getUrgency(),
+            rec.getTimeMinutes(),
+            rec.getBudgetPaise(),
+            rec.getLat(),
+            rec.getLng(),
+            rec.getAddressText(),
+            scheduledAt,
+            null
+        ), TaskCreateOptions.defaultOptions());
+
+        tasks.findById(single.taskId()).ifPresent(t -> {
+          t.setRecurringTaskId(rec.getId());
+          tasks.save(t);
+        });
+      }
+    }
+  }
 }
+

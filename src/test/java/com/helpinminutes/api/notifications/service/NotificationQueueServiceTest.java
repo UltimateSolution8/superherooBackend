@@ -20,12 +20,16 @@ import static org.mockito.Mockito.verify;
 
 class NotificationQueueServiceTest {
     private RabbitTemplate rabbitTemplate;
+    private PushNotificationService pushNotificationService;
+    private com.helpinminutes.api.tasks.repo.TaskRepository taskRepository;
     private NotificationQueueService queueService;
 
     @BeforeEach
     void setUp() {
         rabbitTemplate = mock(RabbitTemplate.class);
-        queueService = new NotificationQueueService(rabbitTemplate);
+        pushNotificationService = mock(PushNotificationService.class);
+        taskRepository = mock(com.helpinminutes.api.tasks.repo.TaskRepository.class);
+        queueService = new NotificationQueueService(rabbitTemplate, pushNotificationService, taskRepository);
     }
 
     @Test

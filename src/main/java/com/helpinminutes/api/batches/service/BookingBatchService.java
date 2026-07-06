@@ -106,9 +106,12 @@ public class BookingBatchService {
     UserEntity buyer = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
     long totalBudget = req.items().stream().mapToLong(i -> Math.max(0L, i.budgetPaise())).sum();
     long balance = buyer.getDemoBalancePaise() == null ? 1_000_000L : buyer.getDemoBalancePaise();
+    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block batch booking
+    /*
     if (totalBudget > balance) {
       throw new BadRequestException("Insufficient buyer balance for batch escrow");
     }
+    */
 
     BookingBatchEntity batch = new BookingBatchEntity();
     batch.setCreatedByUserId(buyerId);
