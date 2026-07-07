@@ -72,24 +72,8 @@ public class RecurringTaskLookaheadJob {
               && t.getStatus() != TaskStatus.CANCELLED);
 
       if (!exists) {
-        var result = taskService.createTask(rec.getBuyerId(), new CreateTaskRequest(
-            rec.getTitle(),
-            rec.getDescription(),
-            rec.getUrgency(),
-            rec.getTimeMinutes(),
-            rec.getBudgetPaise(),
-            rec.getLat(),
-            rec.getLng(),
-            rec.getAddressText(),
-            scheduledAt,
-            null
-        ), TaskService.TaskCreateOptions.defaultOptions());
-
-        tasks.findById(result.taskId()).ifPresent(t -> {
-          t.setRecurringTaskId(rec.getId());
-          tasks.save(t);
-        });
-        count++;
+        var createdIds = taskService.spawnOccurrence(rec.getId(), scheduledAt);
+        count += createdIds.size();
       }
     }
     return count;

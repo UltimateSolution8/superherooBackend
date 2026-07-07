@@ -56,7 +56,9 @@ public class TaskRescheduleTest {
         mock(PushNotificationService.class),
         taskMapper,
         mock(RecurringTaskRepository.class),
-        mock(TaskModerationService.class)
+        mock(TaskModerationService.class),
+        mock(com.helpinminutes.api.batches.repo.BookingBatchRepository.class),
+        mock(com.helpinminutes.api.batches.repo.BookingBatchItemRepository.class)
     );
   }
 

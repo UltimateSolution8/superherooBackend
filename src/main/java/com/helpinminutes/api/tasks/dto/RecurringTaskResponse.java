@@ -26,5 +26,6 @@ public record RecurringTaskResponse(
     Integer recurrenceInterval,
     int[] byDay,
     Integer byMonthDay,
-    String timezone
+    String timezone,
+    Integer helperCount
 ) {}

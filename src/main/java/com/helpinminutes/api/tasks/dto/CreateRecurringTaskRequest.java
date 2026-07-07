@@ -23,5 +23,6 @@ public record CreateRecurringTaskRequest(
     Integer recurrenceInterval,
     int[] byDay,
     Integer byMonthDay,
-    String timezone
+    String timezone,
+    Integer helperCount
 ) {}

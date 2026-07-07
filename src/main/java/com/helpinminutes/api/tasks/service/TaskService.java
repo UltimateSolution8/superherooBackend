@@ -49,6 +49,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import com.helpinminutes.api.batches.repo.BookingBatchRepository;
+import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
 
 @Service
 public class TaskService {
@@ -71,6 +73,8 @@ public class TaskService {
   private final TaskMapper taskMapper;
   private final RecurringTaskRepository recurringTasks;
   private final TaskModerationService taskModerationService;
+  private final BookingBatchRepository bookingBatches;
+  private final BookingBatchItemRepository bookingBatchItems;
 
   public TaskService(
       TaskRepository tasks,
@@ -86,7 +90,9 @@ public class TaskService {
       PushNotificationService pushNotifications,
       TaskMapper taskMapper,
       RecurringTaskRepository recurringTasks,
-      TaskModerationService taskModerationService) {
+      TaskModerationService taskModerationService,
+      BookingBatchRepository bookingBatches,
+      BookingBatchItemRepository bookingBatchItems) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -101,6 +107,8 @@ public class TaskService {
     this.taskMapper = taskMapper;
     this.recurringTasks = recurringTasks;
     this.taskModerationService = taskModerationService;
+    this.bookingBatches = bookingBatches;
+    this.bookingBatchItems = bookingBatchItems;
   }
 
   @Transactional
@@ -147,6 +155,7 @@ public class TaskService {
     rec.setByDay(req.byDay());
     rec.setByMonthDay(req.byMonthDay());
     rec.setTimezone(tz);
+    rec.setHelperCount(req.helperCount() != null ? req.helperCount() : 1);
     rec.setCreatedAt(Instant.now());
     recurringTasks.save(rec);
 
@@ -160,16 +169,32 @@ public class TaskService {
       if (scheduledAt.isAfter(lookaheadHorizon)) {
         break;
       }
+      spawnOccurrence(rec, scheduledAt, createdTaskIds);
+    }
 
-      var single = createTask(buyerId, new CreateTaskRequest(
-          req.title(),
-          req.description(),
-          req.urgency(),
-          req.timeMinutes(),
-          req.budgetPaise(),
-          req.lat(),
-          req.lng(),
-          req.addressText(),
+    return new CreateRecurringTaskResponse(rec.getId(), createdTaskIds);
+  }
+
+  @Transactional
+  public List<UUID> spawnOccurrence(UUID recurringTaskId, Instant scheduledAt) {
+    RecurringTaskEntity rec = recurringTasks.findById(recurringTaskId)
+        .orElseThrow(() -> new NotFoundException("Recurring task config not found"));
+    List<UUID> created = new ArrayList<>();
+    spawnOccurrence(rec, scheduledAt, created);
+    return created;
+  }
+
+  private void spawnOccurrence(RecurringTaskEntity rec, Instant scheduledAt, List<UUID> createdTaskIds) {
+    if (rec.getHelperCount() == null || rec.getHelperCount() <= 1) {
+      var single = createTask(rec.getBuyerId(), new CreateTaskRequest(
+          rec.getTitle(),
+          rec.getDescription(),
+          rec.getUrgency(),
+          rec.getTimeMinutes(),
+          rec.getBudgetPaise(),
+          rec.getLat(),
+          rec.getLng(),
+          rec.getAddressText(),
           scheduledAt,
           null
       ), TaskCreateOptions.defaultOptions());
@@ -179,9 +204,48 @@ public class TaskService {
         t.setRecurringTaskId(rec.getId());
         tasks.save(t);
       });
-    }
+    } else {
+      // Bulk Crew Booking occurrence
+      com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
+      batch.setId(UUID.randomUUID());
+      batch.setCreatedByUserId(rec.getBuyerId());
+      batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
+      batch.setNotes("Created from recurring bulk task config: " + rec.getId());
+      batch.setScheduledWindowStart(scheduledAt);
+      batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
+      batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.COMPLETED);
+      bookingBatches.save(batch);
 
-    return new CreateRecurringTaskResponse(rec.getId(), createdTaskIds);
+      for (int i = 0; i < rec.getHelperCount(); i++) {
+        var single = createTask(rec.getBuyerId(), new CreateTaskRequest(
+            rec.getTitle(),
+            rec.getDescription(),
+            rec.getUrgency(),
+            rec.getTimeMinutes(),
+            rec.getBudgetPaise(),
+            rec.getLat(),
+            rec.getLng(),
+            rec.getAddressText(),
+            scheduledAt,
+            null
+        ), TaskCreateOptions.defaultOptions());
+        createdTaskIds.add(single.taskId());
+
+        tasks.findById(single.taskId()).ifPresent(t -> {
+          t.setRecurringTaskId(rec.getId());
+          tasks.save(t);
+        });
+
+        com.helpinminutes.api.batches.model.BookingBatchItemEntity item = new com.helpinminutes.api.batches.model.BookingBatchItemEntity();
+        item.setId(UUID.randomUUID());
+        item.setBatchId(batch.getId());
+        item.setTaskId(single.taskId());
+        item.setLineNo(i + 1);
+        item.setPriority(3);
+        item.setLineStatus(com.helpinminutes.api.batches.model.BookingBatchLineStatus.CREATED);
+        bookingBatchItems.save(item);
+      }
+    }
   }
 
   @Transactional
@@ -862,7 +926,8 @@ public class TaskService {
             rec.getRecurrenceInterval(),
             rec.getByDay(),
             rec.getByMonthDay(),
-            rec.getTimezone()
+            rec.getTimezone(),
+            rec.getHelperCount()
         ))
         .collect(java.util.stream.Collectors.toList());
   }

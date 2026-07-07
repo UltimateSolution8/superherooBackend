@@ -63,6 +63,10 @@ public class BookingBatchEntity {
     return id;
   }
 
+  public void setId(UUID id) {
+    this.id = id;
+  }
+
   public UUID getCreatedByUserId() {
     return createdByUserId;
   }
