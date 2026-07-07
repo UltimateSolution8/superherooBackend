@@ -469,7 +469,7 @@ public class TaskService {
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
     TaskStatus status = task.getStatus();
-    if (status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED) {
+    if (status != TaskStatus.SCHEDULED_PENDING && status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED) {
       throw new BadRequestException("Task can only be cancelled before arrival");
     }
 
@@ -513,6 +513,43 @@ public class TaskService {
     }
 
     return taskMapper.toResponse(task, role == UserRole.BUYER);
+  }
+
+  @Transactional
+  public TaskResponse rescheduleTask(UUID buyerId, UUID taskId, Instant newScheduledAt) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    if (!buyerId.equals(task.getBuyerId())) {
+      throw new ForbiddenException("Only the buyer can reschedule this task");
+    }
+
+    TaskStatus status = task.getStatus();
+    if (status != TaskStatus.SCHEDULED_PENDING && status != TaskStatus.SEARCHING) {
+      throw new BadRequestException("Task can only be rescheduled if pending or searching");
+    }
+
+    Instant now = Instant.now();
+    if (newScheduledAt.isBefore(now.plus(java.time.Duration.ofMinutes(5)))) {
+      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+    }
+
+    task.setScheduledAt(newScheduledAt);
+    task.setStatus(TaskStatus.SCHEDULED_PENDING);
+    tasks.save(task);
+
+    try {
+      realtime.publish(
+          "task_status_changed",
+          java.util.Map.of(
+              "taskId", task.getId().toString(),
+              "buyerId", task.getBuyerId().toString(),
+              "status", TaskStatus.SCHEDULED_PENDING.name()));
+    } catch (Exception re) {
+      log.warn("Failed to publish real-time status change for task {}", task.getId(), re);
+    }
+
+    return taskMapper.toResponse(task, true);
   }
 
   @Transactional
