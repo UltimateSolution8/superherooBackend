@@ -41,7 +41,7 @@ public class TaskScheduleDispatchJob {
     Instant now = Instant.now();
     List<TaskEntity> due = tasks.findTop50ByStatusAndScheduledAtBeforeAndAssignedHelperIdIsNullOrderByScheduledAtAsc(
         TaskStatus.SCHEDULED_PENDING,
-        now);
+        now.plus(java.time.Duration.ofMinutes(60)));
 
     if (due.isEmpty()) {
       return;
