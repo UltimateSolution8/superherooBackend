@@ -994,31 +994,33 @@ public class TaskService {
     rec.setStatus(RecurringTaskStatus.PAUSED);
     recurringTasks.save(rec);
 
-    // Cancel all future tasks associated with this recurring task that are SEARCHING
-    java.util.List<TaskEntity> futureTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.SEARCHING);
+    // Cancel all future tasks associated with this recurring task that are SEARCHING or SCHEDULED_PENDING
+    java.util.List<TaskEntity> futureTasks = tasks.findByRecurringTaskId(recurringTaskId);
     for (TaskEntity task : futureTasks) {
-      task.setStatus(TaskStatus.CANCELLED);
-      task.setCancelReason("Recurring task configuration was paused");
-      task.setCancelledByRole(UserRole.BUYER.name());
-      task.setCancelledByUserId(buyerId);
-      task.setCancelledAt(Instant.now());
+      if (task.getStatus() == TaskStatus.SEARCHING || task.getStatus() == TaskStatus.SCHEDULED_PENDING) {
+        task.setStatus(TaskStatus.CANCELLED);
+        task.setCancelReason("Recurring task configuration was paused");
+        task.setCancelledByRole(UserRole.BUYER.name());
+        task.setCancelledByUserId(buyerId);
+        task.setCancelledAt(Instant.now());
 
-      if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
-        if (task.getEscrowStatus() == TaskEscrowStatus.HELD
-            || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
-          UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
-          if (buyer != null) {
-            long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
-            buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
-            users.save(buyer);
+        if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
+          if (task.getEscrowStatus() == TaskEscrowStatus.HELD
+              || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
+            UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
+            if (buyer != null) {
+              long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
+              buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
+              users.save(buyer);
+            }
+            task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
+            task.setEscrowReleaseAt(null);
+            task.setEscrowReleasedAt(Instant.now());
+            task.setEscrowReleasedToHelperId(null);
           }
-          task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
-          task.setEscrowReleaseAt(null);
-          task.setEscrowReleasedAt(Instant.now());
-          task.setEscrowReleasedToHelperId(null);
         }
+        tasks.save(task);
       }
-      tasks.save(task);
     }
   }
 
@@ -1056,23 +1058,7 @@ public class TaskService {
               && t.getStatus() != TaskStatus.CANCELLED);
 
       if (!exists) {
-        var single = createTask(buyerId, new CreateTaskRequest(
-            rec.getTitle(),
-            rec.getDescription(),
-            rec.getUrgency(),
-            rec.getTimeMinutes(),
-            rec.getBudgetPaise(),
-            rec.getLat(),
-            rec.getLng(),
-            rec.getAddressText(),
-            scheduledAt,
-            null
-        ), TaskCreateOptions.defaultOptions());
-
-        tasks.findById(single.taskId()).ifPresent(t -> {
-          t.setRecurringTaskId(rec.getId());
-          tasks.save(t);
-        });
+        spawnOccurrence(rec.getId(), scheduledAt);
       }
     }
   }

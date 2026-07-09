@@ -15,16 +15,20 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 
+import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
+
 @Component
 public class TaskMapper {
     private final UserRepository users;
     private final TaskRepository tasks;
     private final com.helpinminutes.api.common.TranslationService translationService;
+    private final BookingBatchItemRepository bookingBatchItems;
 
-    public TaskMapper(UserRepository users, TaskRepository tasks, com.helpinminutes.api.common.TranslationService translationService) {
+    public TaskMapper(UserRepository users, TaskRepository tasks, com.helpinminutes.api.common.TranslationService translationService, BookingBatchItemRepository bookingBatchItems) {
         this.users = users;
         this.tasks = tasks;
         this.translationService = translationService;
+        this.bookingBatchItems = bookingBatchItems;
     }
 
     public TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
@@ -77,6 +81,10 @@ public class TaskMapper {
         String translatedTitle = translationService.translate(t.getTitle(), acceptLanguage);
         String translatedDescription = translationService.translate(t.getDescription(), acceptLanguage);
 
+        UUID batchId = bookingBatchItems.findByTaskId(t.getId())
+                .map(com.helpinminutes.api.batches.model.BookingBatchItemEntity::getBatchId)
+                .orElse(null);
+
         return new TaskResponse(
                 t.getId(),
                 t.getBuyerId(),
@@ -123,7 +131,8 @@ public class TaskMapper {
                 t.getCancelledAt(),
                 t.getCreatedAt(),
                 t.getLandmark(),
-                t.getRecurringTaskId());
+                t.getRecurringTaskId(),
+                batchId);
     }
 
     private String getAcceptLanguageHeader() {
