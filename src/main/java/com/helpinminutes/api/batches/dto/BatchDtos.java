@@ -86,6 +86,9 @@ public class BatchDtos {
       Instant scheduledWindowStart,
       Instant scheduledWindowEnd,
       int total,
+      Integer requestedHelperCount,
+      Integer addedWorkerCount,
+      UUID mediatorId,
       Map<String, Long> byTaskStatus
   ) {}
 

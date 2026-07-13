@@ -1,5 +1,6 @@
 package com.helpinminutes.api.tasks.controller;
 
+import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.service.HelperService;
@@ -59,6 +60,9 @@ public class TaskController {
       @Valid @RequestBody CreateTaskRequest req) {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create tasks");
+    }
+    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
     }
     var result = tasks.createTask(principal.userId(), req);
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
@@ -120,6 +124,9 @@ public class TaskController {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create bulk tasks");
     }
+    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+    }
     int helperCount = req.helperCount() == null ? 1 : req.helperCount();
     if (helperCount <= 1) {
       var single = tasks.createTask(
@@ -141,6 +148,17 @@ public class TaskController {
           1,
           0,
           java.util.List.of(single.taskId()));
+    }
+
+    if (helperCount > 9) {
+      var pendingBatch = batches.createPendingMediatorBatch(principal.userId(), req);
+      return new CreateBulkTaskResponse(
+          pendingBatch.getId(),
+          helperCount,
+          0,
+          0,
+          java.util.List.of()
+      );
     }
 
     java.util.List<BatchDtos.CreateItem> lines = new java.util.ArrayList<>();

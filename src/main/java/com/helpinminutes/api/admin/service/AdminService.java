@@ -245,6 +245,9 @@ public class AdminService {
     String displayName = trimOrNull(req.displayName());
     String password = trimOrNull(req.password());
 
+    if (role == UserRole.MEDIATOR && phone == null) {
+      throw new BadRequestException("Mediator phone number is required");
+    }
     if (phone == null && email == null) {
       throw new BadRequestException("phone or email required");
     }

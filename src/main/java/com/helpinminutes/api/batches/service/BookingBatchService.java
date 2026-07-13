@@ -15,6 +15,8 @@ import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
+import com.helpinminutes.api.tasks.dto.CreateBulkTaskRequest;
+import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
@@ -48,6 +50,7 @@ public class BookingBatchService {
   private final UserRepository users;
   private final ObjectMapper objectMapper;
   private final TaskModerationService taskModerationService;
+  private final RealtimePublisher realtime;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -58,7 +61,8 @@ public class BookingBatchService {
       TaskRepository taskRepo,
       UserRepository users,
       ObjectMapper objectMapper,
-      TaskModerationService taskModerationService) {
+      TaskModerationService taskModerationService,
+      RealtimePublisher realtime) {
     this.batches = batches;
     this.items = items;
     this.events = events;
@@ -68,6 +72,7 @@ public class BookingBatchService {
     this.users = users;
     this.objectMapper = objectMapper;
     this.taskModerationService = taskModerationService;
+    this.realtime = realtime;
   }
 
   public BatchDtos.PreviewResponse preview(BatchDtos.PreviewRequest req) {
@@ -264,6 +269,9 @@ public class BookingBatchService {
         batch.getScheduledWindowStart(),
         batch.getScheduledWindowEnd(),
         batchItems.size(),
+        batch.getRequestedHelperCount(),
+        batchItems.size(),
+        batch.getMediatorId(),
         byStatus);
   }
 
@@ -339,8 +347,10 @@ public class BookingBatchService {
     if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
       errors.add("location outside service area (Hyderabad only)");
     }
-    if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().minusSeconds(60))) errors.add("scheduledAt is in the past");
-    
+    if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+      errors.add("scheduledAt must be at least 5 minutes in the future");
+    }
+
     if (line.title() != null && line.description() != null && line.title().trim().length() >= 3 && line.description().trim().length() >= 10) {
       try {
         taskModerationService.validateTask(line.title(), line.description());
@@ -373,6 +383,7 @@ public class BookingBatchService {
 
   private void ensureAccess(UUID actorUserId, UserRole actorRole, BookingBatchEntity batch) {
     if (actorRole == UserRole.ADMIN) return;
+    if (actorRole == UserRole.MEDIATOR && actorUserId.equals(batch.getMediatorId())) return;
     if (actorRole != UserRole.BUYER || !actorUserId.equals(batch.getCreatedByUserId())) {
       throw new ForbiddenException("Not allowed");
     }
@@ -413,5 +424,48 @@ public class BookingBatchService {
     } catch (Exception ignored) {
       return null;
     }
+  }
+
+  @Transactional
+  public BookingBatchEntity createPendingMediatorBatch(UUID buyerId, CreateBulkTaskRequest req) {
+    BookingBatchEntity batch = new BookingBatchEntity();
+    batch.setCreatedByUserId(buyerId);
+    String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
+    batch.setTitle(safeTitle + " (Bulk x" + req.helperCount() + ")");
+    batch.setNotes("Created from buyer app bulk request (Mediator Routed)");
+    batch.setStatus(BookingBatchStatus.PENDING_MEDIATOR);
+    batch.setRequestedHelperCount(req.helperCount());
+    batch.setScheduledWindowStart(req.scheduledAt());
+
+    try {
+      CreateTaskRequest template = new CreateTaskRequest(
+          req.title(),
+          req.description(),
+          req.urgency(),
+          req.timeMinutes(),
+          req.budgetPaise(),
+          req.lat(),
+          req.lng(),
+          req.addressText(),
+          req.scheduledAt(),
+          req.landmark()
+      );
+      batch.setTaskTemplateJson(objectMapper.writeValueAsString(template));
+    } catch (Exception e) {
+      throw new BadRequestException("Failed to serialize task template metadata");
+    }
+
+    BookingBatchEntity saved = batches.save(batch);
+    writeEvent(saved.getId(), "BATCH_CREATED", "{\"status\":\"PENDING_MEDIATOR\",\"requested\":" + req.helperCount() + "}");
+
+    try {
+      realtime.publish("mediator.job_available", Map.of(
+          "batchId", saved.getId().toString(),
+          "buyerId", buyerId.toString(),
+          "helperCount", req.helperCount()
+      ));
+    } catch (Exception ignored) {}
+
+    return saved;
   }
 }

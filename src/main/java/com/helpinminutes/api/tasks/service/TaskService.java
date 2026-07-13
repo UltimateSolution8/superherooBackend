@@ -49,8 +49,10 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import com.helpinminutes.api.batches.model.BookingBatchStatus;
 import com.helpinminutes.api.batches.repo.BookingBatchRepository;
 import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Service
 public class TaskService {
@@ -75,6 +77,7 @@ public class TaskService {
   private final TaskModerationService taskModerationService;
   private final BookingBatchRepository bookingBatches;
   private final BookingBatchItemRepository bookingBatchItems;
+  private final ObjectMapper objectMapper;
 
   public TaskService(
       TaskRepository tasks,
@@ -92,7 +95,8 @@ public class TaskService {
       RecurringTaskRepository recurringTasks,
       TaskModerationService taskModerationService,
       BookingBatchRepository bookingBatches,
-      BookingBatchItemRepository bookingBatchItems) {
+      BookingBatchItemRepository bookingBatchItems,
+      ObjectMapper objectMapper) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -109,6 +113,7 @@ public class TaskService {
     this.taskModerationService = taskModerationService;
     this.bookingBatches = bookingBatches;
     this.bookingBatchItems = bookingBatchItems;
+    this.objectMapper = objectMapper;
   }
 
   @Transactional
@@ -137,6 +142,8 @@ public class TaskService {
       throw new BadRequestException("Invalid timezone string: " + tz);
     }
 
+    validateRecurringRequest(req);
+
     RecurringTaskEntity rec = new RecurringTaskEntity();
     rec.setBuyerId(buyerId);
     rec.setTitle(req.title().trim());
@@ -157,6 +164,15 @@ public class TaskService {
     rec.setTimezone(tz);
     rec.setHelperCount(req.helperCount() != null ? req.helperCount() : 1);
     rec.setCreatedAt(Instant.now());
+
+    var firstOccurrence = RecurrenceCalculator.nextOccurrence(rec, Instant.now());
+    if (firstOccurrence.isEmpty()) {
+      throw new BadRequestException("Recurring schedule does not create any future occurrence");
+    }
+    if (firstOccurrence.get().toInstant().isBefore(Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+      throw new BadRequestException("First recurring occurrence must be at least 5 minutes in the future");
+    }
+
     recurringTasks.save(rec);
 
     Instant now = Instant.now();
@@ -206,44 +222,92 @@ public class TaskService {
       });
     } else {
       // Bulk Crew Booking occurrence
-      com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
-      batch.setId(UUID.randomUUID());
-      batch.setCreatedByUserId(rec.getBuyerId());
-      batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
-      batch.setNotes("Created from recurring bulk task config: " + rec.getId());
-      batch.setScheduledWindowStart(scheduledAt);
-      batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
-      batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.COMPLETED);
-      bookingBatches.save(batch);
+      if (rec.getHelperCount() > 9) {
+        if (bookingBatches.existsBySourceRecurringTaskIdAndScheduledWindowStartAndStatusNot(
+            rec.getId(), scheduledAt, BookingBatchStatus.CANCELLED)) {
+          return;
+        }
+        // Route to Mediator
+        com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
+        batch.setId(UUID.randomUUID());
+        batch.setCreatedByUserId(rec.getBuyerId());
+        batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
+        batch.setNotes("Created from recurring bulk task config (Mediator Routed): " + rec.getId());
+        batch.setSourceRecurringTaskId(rec.getId());
+        batch.setScheduledWindowStart(scheduledAt);
+        batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
+        batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.PENDING_MEDIATOR);
+        batch.setRequestedHelperCount(rec.getHelperCount());
 
-      for (int i = 0; i < rec.getHelperCount(); i++) {
-        var single = createTask(rec.getBuyerId(), new CreateTaskRequest(
-            rec.getTitle(),
-            rec.getDescription(),
-            rec.getUrgency(),
-            rec.getTimeMinutes(),
-            rec.getBudgetPaise(),
-            rec.getLat(),
-            rec.getLng(),
-            rec.getAddressText(),
-            scheduledAt,
-            null
-        ), TaskCreateOptions.defaultOptions());
-        createdTaskIds.add(single.taskId());
+        try {
+          com.helpinminutes.api.tasks.dto.CreateTaskRequest template = new com.helpinminutes.api.tasks.dto.CreateTaskRequest(
+              rec.getTitle(),
+              rec.getDescription(),
+              rec.getUrgency(),
+              rec.getTimeMinutes(),
+              rec.getBudgetPaise(),
+              rec.getLat(),
+              rec.getLng(),
+              rec.getAddressText(),
+              scheduledAt,
+              null
+          );
+          batch.setTaskTemplateJson(objectMapper.writeValueAsString(template));
+        } catch (Exception e) {
+          throw new RuntimeException("Failed to serialize task template metadata", e);
+        }
 
-        tasks.findById(single.taskId()).ifPresent(t -> {
-          t.setRecurringTaskId(rec.getId());
-          tasks.save(t);
-        });
+        bookingBatches.save(batch);
 
-        com.helpinminutes.api.batches.model.BookingBatchItemEntity item = new com.helpinminutes.api.batches.model.BookingBatchItemEntity();
-        item.setId(UUID.randomUUID());
-        item.setBatchId(batch.getId());
-        item.setTaskId(single.taskId());
-        item.setLineNo(i + 1);
-        item.setPriority(3);
-        item.setLineStatus(com.helpinminutes.api.batches.model.BookingBatchLineStatus.CREATED);
-        bookingBatchItems.save(item);
+        try {
+          realtime.publish("mediator.job_available", java.util.Map.of(
+              "batchId", batch.getId().toString(),
+              "buyerId", rec.getBuyerId().toString(),
+              "helperCount", rec.getHelperCount()
+          ));
+        } catch (Exception ignored) {}
+      } else {
+        // Standard bulk booking (<= 9 helpers) which is marked COMPLETED immediately and creates individual tasks.
+        com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
+        batch.setId(UUID.randomUUID());
+        batch.setCreatedByUserId(rec.getBuyerId());
+        batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
+        batch.setNotes("Created from recurring bulk task config: " + rec.getId());
+        batch.setSourceRecurringTaskId(rec.getId());
+        batch.setScheduledWindowStart(scheduledAt);
+        batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
+        batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.COMPLETED);
+        bookingBatches.save(batch);
+
+        for (int i = 0; i < rec.getHelperCount(); i++) {
+          var single = createTask(rec.getBuyerId(), new CreateTaskRequest(
+              rec.getTitle(),
+              rec.getDescription(),
+              rec.getUrgency(),
+              rec.getTimeMinutes(),
+              rec.getBudgetPaise(),
+              rec.getLat(),
+              rec.getLng(),
+              rec.getAddressText(),
+              scheduledAt,
+              null
+          ), TaskCreateOptions.defaultOptions());
+          createdTaskIds.add(single.taskId());
+
+          tasks.findById(single.taskId()).ifPresent(t -> {
+            t.setRecurringTaskId(rec.getId());
+            tasks.save(t);
+          });
+
+          com.helpinminutes.api.batches.model.BookingBatchItemEntity item = new com.helpinminutes.api.batches.model.BookingBatchItemEntity();
+          item.setId(UUID.randomUUID());
+          item.setBatchId(batch.getId());
+          item.setTaskId(single.taskId());
+          item.setLineNo(i + 1);
+          item.setPriority(3);
+          item.setLineStatus(com.helpinminutes.api.batches.model.BookingBatchLineStatus.CREATED);
+          bookingBatchItems.save(item);
+        }
       }
     }
   }
@@ -343,6 +407,78 @@ public class TaskService {
     }
 
     return new CreateResult(task.getId(), offeredTo);
+  }
+
+  @Transactional
+  public TaskEntity createTaskForHelper(UUID buyerId, UUID helperId, CreateTaskRequest req) {
+    taskModerationService.validateTask(req.title(), req.description());
+
+    UserEntity helper = users.findById(helperId)
+        .orElseThrow(() -> new BadRequestException("Helper not found"));
+    if (helper.getRole() != UserRole.HELPER) {
+      throw new BadRequestException("User is not a helper");
+    }
+    var profile = helperProfiles.findById(helperId)
+        .orElseThrow(() -> new BadRequestException("Helper profile not found"));
+    if (profile.getKycStatus() != HelperKycStatus.APPROVED) {
+      throw new BadRequestException("Helper KYC is not approved");
+    }
+
+    if (tasks.existsByAssignedHelperIdAndStatusIn(helperId, HELPER_ACTIVE_TASK_STATUSES)) {
+      throw new ConflictException("Helper already has an active task");
+    }
+
+    UserEntity buyer = users.findById(buyerId)
+        .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+
+    long cost = req.budgetPaise() == null ? 0L : Math.max(0L, req.budgetPaise());
+
+    TaskEntity task = new TaskEntity();
+    task.setBuyerId(buyerId);
+    task.setAssignedHelperId(helperId);
+    task.setTitle(req.title().trim());
+    task.setDescription(req.description().trim());
+    task.setUrgency(req.urgency());
+    task.setTimeMinutes(req.timeMinutes());
+    task.setBudgetPaise(req.budgetPaise());
+    task.setLat(req.lat());
+    task.setLng(req.lng());
+    task.setAddressText(req.addressText());
+    task.setLandmark(req.landmark());
+    Instant now = Instant.now();
+    task.setScheduledAt(req.scheduledAt() != null ? req.scheduledAt() : now);
+    task.setStatus(TaskStatus.ASSIGNED);
+    task.setEscrowStatus(TaskEscrowStatus.HELD);
+    task.setEscrowAmountPaise(cost);
+    task.setEscrowHeldAt(now);
+    task.setArrivalOtp(generateOtp());
+    task.setCompletionOtp(generateOtp());
+
+    tasks.save(task);
+
+    // Publish realtime event
+    try {
+      java.util.concurrent.CompletableFuture.runAsync(() -> {
+        try {
+          realtime.publish(
+              "task_assigned",
+              java.util.Map.of(
+                  "taskId", task.getId().toString(),
+                  "buyerId", buyerId.toString(),
+                  "helperId", helperId.toString(),
+                  "title", task.getTitle(),
+                  "status", task.getStatus().name()));
+        } catch (Exception ignored) {
+        }
+        try {
+          pushNotifications.notifyTaskOffered(java.util.List.of(helperId), task);
+        } catch (Exception ignored) {
+        }
+      });
+    } catch (Exception ignored) {
+    }
+
+    return task;
   }
 
   @Transactional
@@ -867,7 +1003,7 @@ public class TaskService {
     if (additionalBudgetPaise > current) {
       throw new BadRequestException("Insufficient demo balance for extension");
     }
-    
+
     buyer.setDemoBalancePaise(current - additionalBudgetPaise);
     users.save(buyer);
     */
@@ -888,6 +1024,41 @@ public class TaskService {
     }
 
     return taskMapper.toResponse(task, true);
+  }
+
+  private void validateRecurringRequest(CreateRecurringTaskRequest req) {
+    String frequency = req.frequency() == null ? "" : req.frequency().trim().toUpperCase();
+    java.util.Set<String> allowed = java.util.Set.of(
+        "DAILY", "EVERYDAY", "WEEKLY", "MONTHLY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY");
+    if (!allowed.contains(frequency)) {
+      throw new BadRequestException("Invalid recurring frequency");
+    }
+    if (req.byDay() != null) {
+      if (req.byDay().length > 7) {
+        throw new BadRequestException("Recurring weekly days cannot exceed 7 values");
+      }
+      java.util.Set<Integer> seen = new java.util.HashSet<>();
+      for (int day : req.byDay()) {
+        if (day < 1 || day > 7 || !seen.add(day)) {
+          throw new BadRequestException("Recurring day values must be unique and between 1 and 7");
+        }
+      }
+    }
+    if (req.helperCount() != null && req.helperCount() > 500) {
+      throw new BadRequestException("Recurring bulk bookings support up to 500 helpers");
+    }
+  }
+
+  private void cancelPendingMediatorBatchesForRecurring(UUID recurringTaskId, String reason) {
+    java.util.List<BookingBatchStatus> cancellable = java.util.List.of(
+        BookingBatchStatus.PENDING_MEDIATOR,
+        BookingBatchStatus.MEDIATOR_ACCEPTED,
+        BookingBatchStatus.MEDIATOR_DISPATCHING);
+    for (var batch : bookingBatches.findBySourceRecurringTaskIdAndStatusIn(recurringTaskId, cancellable)) {
+      batch.setStatus(BookingBatchStatus.CANCELLED);
+      batch.setNotes(((batch.getNotes() == null || batch.getNotes().isBlank()) ? "" : batch.getNotes() + " | ") + reason);
+      bookingBatches.save(batch);
+    }
   }
 
   public record CreateResult(UUID taskId, List<UUID> offeredTo) {
@@ -944,13 +1115,15 @@ public class TaskService {
     // Delete the configuration
     recurringTasks.delete(rec);
 
-    // Cancel all future tasks associated with this recurring task that are not started (SEARCHING and ASSIGNED)
+    // Cancel all future tasks associated with this recurring task that are not started (SEARCHING, ASSIGNED, and SCHEDULED_PENDING)
     java.util.List<TaskEntity> searchingTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.SEARCHING);
     java.util.List<TaskEntity> assignedTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.ASSIGNED);
+    java.util.List<TaskEntity> scheduledPendingTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.SCHEDULED_PENDING);
 
     java.util.List<TaskEntity> associatedTasks = new java.util.ArrayList<>();
     associatedTasks.addAll(searchingTasks);
     associatedTasks.addAll(assignedTasks);
+    associatedTasks.addAll(scheduledPendingTasks);
 
     for (TaskEntity task : associatedTasks) {
       task.setStatus(TaskStatus.CANCELLED);
@@ -976,6 +1149,8 @@ public class TaskService {
       }
       tasks.save(task);
     }
+
+    cancelPendingMediatorBatchesForRecurring(recurringTaskId, "Recurring task configuration was deleted");
   }
 
   @Transactional
@@ -1022,6 +1197,8 @@ public class TaskService {
         tasks.save(task);
       }
     }
+
+    cancelPendingMediatorBatchesForRecurring(recurringTaskId, "Recurring task configuration was paused");
   }
 
   @Transactional
@@ -1055,7 +1232,9 @@ public class TaskService {
       boolean exists = tasks.findByRecurringTaskId(recurringTaskId).stream()
           .anyMatch(t -> t.getScheduledAt() != null
               && Math.abs(t.getScheduledAt().toEpochMilli() - scheduledAt.toEpochMilli()) < 1000
-              && t.getStatus() != TaskStatus.CANCELLED);
+              && t.getStatus() != TaskStatus.CANCELLED)
+          || bookingBatches.existsBySourceRecurringTaskIdAndScheduledWindowStartAndStatusNot(
+              recurringTaskId, scheduledAt, BookingBatchStatus.CANCELLED);
 
       if (!exists) {
         spawnOccurrence(rec.getId(), scheduledAt);

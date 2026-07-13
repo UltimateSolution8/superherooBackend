@@ -62,6 +62,12 @@ public class AdminController {
     }
   }
 
+  private static void requireFullAdmin(UserPrincipal principal) {
+    if (principal.role() != UserRole.ADMIN) {
+      throw new ForbiddenException("Super admin only");
+    }
+  }
+
   @GetMapping("/helpers/pending")
   public List<PendingHelperResponse> pendingHelpers(@AuthenticationPrincipal UserPrincipal principal) {
     requireAdmin(principal);
@@ -189,6 +195,43 @@ public class AdminController {
   public void deleteBuyer(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID buyerId) {
     requireAdmin(principal);
     admin.deleteUser(buyerId, UserRole.BUYER);
+  }
+
+  @GetMapping("/mediators")
+  public List<AdminManagedUserResponse> listMediators(@AuthenticationPrincipal UserPrincipal principal) {
+    requireFullAdmin(principal);
+    return admin.listUsersByRole(UserRole.MEDIATOR);
+  }
+
+  @PostMapping("/mediators")
+  public AdminManagedUserResponse createMediator(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminCreateUserRequest req) {
+    requireFullAdmin(principal);
+    return admin.createUser(UserRole.MEDIATOR, req);
+  }
+
+  @PostMapping("/mediators/{mediatorId}/update")
+  public AdminManagedUserResponse updateMediator(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID mediatorId,
+      @Valid @RequestBody AdminUpdateUserRequest req) {
+    requireFullAdmin(principal);
+    return admin.updateUser(mediatorId, UserRole.MEDIATOR, req);
+  }
+
+  @PostMapping("/mediators/bulk-update")
+  public AdminBulkOperationResponse bulkUpdateMediators(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody AdminBulkUserUpdateRequest req) {
+    requireFullAdmin(principal);
+    return admin.bulkUpdateUsers(UserRole.MEDIATOR, req.userIds(), req.status());
+  }
+
+  @PostMapping("/mediators/{mediatorId}/delete")
+  public void deleteMediator(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID mediatorId) {
+    requireFullAdmin(principal);
+    admin.deleteUser(mediatorId, UserRole.MEDIATOR);
   }
 
   @GetMapping("/tasks")

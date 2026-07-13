@@ -1,5 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
+import com.helpinminutes.api.batches.model.BookingBatchStatus;
+import com.helpinminutes.api.batches.repo.BookingBatchRepository;
 import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
 import com.helpinminutes.api.tasks.model.RecurringTaskStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -23,14 +25,17 @@ public class RecurringTaskLookaheadJob {
 
   private final RecurringTaskRepository recurringTasks;
   private final TaskRepository tasks;
+  private final BookingBatchRepository bookingBatches;
   private final TaskService taskService;
 
   public RecurringTaskLookaheadJob(
       RecurringTaskRepository recurringTasks,
       TaskRepository tasks,
+      BookingBatchRepository bookingBatches,
       TaskService taskService) {
     this.recurringTasks = recurringTasks;
     this.tasks = tasks;
+    this.bookingBatches = bookingBatches;
     this.taskService = taskService;
   }
 
@@ -69,7 +74,9 @@ public class RecurringTaskLookaheadJob {
       boolean exists = existingTasks.stream()
           .anyMatch(t -> t.getScheduledAt() != null
               && Math.abs(t.getScheduledAt().toEpochMilli() - scheduledAt.toEpochMilli()) < 1000
-              && t.getStatus() != TaskStatus.CANCELLED);
+              && t.getStatus() != TaskStatus.CANCELLED)
+          || bookingBatches.existsBySourceRecurringTaskIdAndScheduledWindowStartAndStatusNot(
+              rec.getId(), scheduledAt, BookingBatchStatus.CANCELLED);
 
       if (!exists) {
         var createdIds = taskService.spawnOccurrence(rec.getId(), scheduledAt);
