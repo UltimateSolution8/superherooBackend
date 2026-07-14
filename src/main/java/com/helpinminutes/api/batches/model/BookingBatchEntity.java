@@ -39,6 +39,45 @@ public class BookingBatchEntity {
   @Column(name = "idempotency_key")
   private String idempotencyKey;
 
+  @Column(name = "source_recurring_task_id")
+  private UUID sourceRecurringTaskId;
+
+  @Column(name = "mediator_id")
+  private UUID mediatorId;
+
+  @Column(name = "requested_helper_count")
+  private Integer requestedHelperCount;
+
+  @Column(name = "mediator_accepted_at")
+  private Instant mediatorAcceptedAt;
+
+  @Column(name = "scheduled_dispatch_at")
+  private Instant scheduledDispatchAt;
+
+  @Column(name = "mediator_notes")
+  private String mediatorNotes;
+
+  @Column(name = "mediator_commission_paise")
+  private Long mediatorCommissionPaise;
+
+  @Column(name = "task_template_json")
+  private String taskTemplateJson;
+
+  @Column(name = "audit_notes")
+  private String auditNotes;
+
+  @Column(name = "audited_by_user_id")
+  private UUID auditedByUserId;
+
+  @Column(name = "audited_at")
+  private Instant auditedAt;
+
+  @Column(name = "batch_start_otp")
+  private String batchStartOtp;
+
+  @Column(name = "batch_completion_otp")
+  private String batchCompletionOtp;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -61,6 +100,10 @@ public class BookingBatchEntity {
 
   public UUID getId() {
     return id;
+  }
+
+  public void setId(UUID id) {
+    this.id = id;
   }
 
   public UUID getCreatedByUserId() {
@@ -119,6 +162,14 @@ public class BookingBatchEntity {
     this.idempotencyKey = idempotencyKey;
   }
 
+  public UUID getSourceRecurringTaskId() {
+    return sourceRecurringTaskId;
+  }
+
+  public void setSourceRecurringTaskId(UUID sourceRecurringTaskId) {
+    this.sourceRecurringTaskId = sourceRecurringTaskId;
+  }
+
   public Instant getCreatedAt() {
     return createdAt;
   }
@@ -126,5 +177,100 @@ public class BookingBatchEntity {
   public Instant getUpdatedAt() {
     return updatedAt;
   }
-}
 
+  public UUID getMediatorId() {
+    return mediatorId;
+  }
+
+  public void setMediatorId(UUID mediatorId) {
+    this.mediatorId = mediatorId;
+  }
+
+  public Integer getRequestedHelperCount() {
+    return requestedHelperCount;
+  }
+
+  public void setRequestedHelperCount(Integer requestedHelperCount) {
+    this.requestedHelperCount = requestedHelperCount;
+  }
+
+  public Instant getMediatorAcceptedAt() {
+    return mediatorAcceptedAt;
+  }
+
+  public void setMediatorAcceptedAt(Instant mediatorAcceptedAt) {
+    this.mediatorAcceptedAt = mediatorAcceptedAt;
+  }
+
+  public Instant getScheduledDispatchAt() {
+    return scheduledDispatchAt;
+  }
+
+  public void setScheduledDispatchAt(Instant scheduledDispatchAt) {
+    this.scheduledDispatchAt = scheduledDispatchAt;
+  }
+
+  public String getMediatorNotes() {
+    return mediatorNotes;
+  }
+
+  public void setMediatorNotes(String mediatorNotes) {
+    this.mediatorNotes = mediatorNotes;
+  }
+
+  public Long getMediatorCommissionPaise() {
+    return mediatorCommissionPaise;
+  }
+
+  public void setMediatorCommissionPaise(Long mediatorCommissionPaise) {
+    this.mediatorCommissionPaise = mediatorCommissionPaise;
+  }
+
+  public String getTaskTemplateJson() {
+    return taskTemplateJson;
+  }
+
+  public void setTaskTemplateJson(String taskTemplateJson) {
+    this.taskTemplateJson = taskTemplateJson;
+  }
+
+  public String getAuditNotes() {
+    return auditNotes;
+  }
+
+  public void setAuditNotes(String auditNotes) {
+    this.auditNotes = auditNotes;
+  }
+
+  public UUID getAuditedByUserId() {
+    return auditedByUserId;
+  }
+
+  public void setAuditedByUserId(UUID auditedByUserId) {
+    this.auditedByUserId = auditedByUserId;
+  }
+
+  public Instant getAuditedAt() {
+    return auditedAt;
+  }
+
+  public void setAuditedAt(Instant auditedAt) {
+    this.auditedAt = auditedAt;
+  }
+
+  public String getBatchStartOtp() {
+    return batchStartOtp;
+  }
+
+  public void setBatchStartOtp(String batchStartOtp) {
+    this.batchStartOtp = batchStartOtp;
+  }
+
+  public String getBatchCompletionOtp() {
+    return batchCompletionOtp;
+  }
+
+  public void setBatchCompletionOtp(String batchCompletionOtp) {
+    this.batchCompletionOtp = batchCompletionOtp;
+  }
+}

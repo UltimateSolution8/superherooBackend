@@ -75,6 +75,9 @@ public class AuthService {
           throw new BadRequestException("Admin signup is disabled");
         }
       }
+      if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
+        throw new BadRequestException("This account must be created by an admin before login");
+      }
 
       UserEntity u = new UserEntity();
       u.setPhone(phone);
@@ -133,8 +136,8 @@ public class AuthService {
 
   @Transactional
   public AuthResponse signupWithPassword(String email, String password, String phone, String displayName, UserRole role) {
-    if (role == UserRole.ADMIN) {
-      throw new BadRequestException("Admin signup is disabled");
+    if (role == UserRole.ADMIN || role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
+      throw new BadRequestException("This account must be created by an admin");
     }
     String em = InputValidators.requireEmail(email);
     if (users.findByEmail(em).isPresent()) {

@@ -5,5 +5,6 @@ public enum UserRole {
   HELPER,
   ADMIN,
   KYC,
-  SUPPORT
+  SUPPORT,
+  MEDIATOR
 }

@@ -1,5 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
+import com.helpinminutes.api.batches.model.BookingBatchStatus;
+import com.helpinminutes.api.batches.repo.BookingBatchRepository;
 import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
 import com.helpinminutes.api.tasks.model.RecurringTaskStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -23,14 +25,17 @@ public class RecurringTaskLookaheadJob {
 
   private final RecurringTaskRepository recurringTasks;
   private final TaskRepository tasks;
+  private final BookingBatchRepository bookingBatches;
   private final TaskService taskService;
 
   public RecurringTaskLookaheadJob(
       RecurringTaskRepository recurringTasks,
       TaskRepository tasks,
+      BookingBatchRepository bookingBatches,
       TaskService taskService) {
     this.recurringTasks = recurringTasks;
     this.tasks = tasks;
+    this.bookingBatches = bookingBatches;
     this.taskService = taskService;
   }
 
@@ -69,27 +74,13 @@ public class RecurringTaskLookaheadJob {
       boolean exists = existingTasks.stream()
           .anyMatch(t -> t.getScheduledAt() != null
               && Math.abs(t.getScheduledAt().toEpochMilli() - scheduledAt.toEpochMilli()) < 1000
-              && t.getStatus() != TaskStatus.CANCELLED);
+              && t.getStatus() != TaskStatus.CANCELLED)
+          || bookingBatches.existsBySourceRecurringTaskIdAndScheduledWindowStartAndStatusNot(
+              rec.getId(), scheduledAt, BookingBatchStatus.CANCELLED);
 
       if (!exists) {
-        var result = taskService.createTask(rec.getBuyerId(), new CreateTaskRequest(
-            rec.getTitle(),
-            rec.getDescription(),
-            rec.getUrgency(),
-            rec.getTimeMinutes(),
-            rec.getBudgetPaise(),
-            rec.getLat(),
-            rec.getLng(),
-            rec.getAddressText(),
-            scheduledAt,
-            null
-        ), TaskService.TaskCreateOptions.defaultOptions());
-
-        tasks.findById(result.taskId()).ifPresent(t -> {
-          t.setRecurringTaskId(rec.getId());
-          tasks.save(t);
-        });
-        count++;
+        var createdIds = taskService.spawnOccurrence(rec.getId(), scheduledAt);
+        count += createdIds.size();
       }
     }
     return count;

@@ -7,10 +7,12 @@ import com.helpinminutes.api.config.ZegoProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
+@EnableAsync
 @EnableConfigurationProperties({AppProperties.class, TwilioProperties.class, ExotelProperties.class, ZegoProperties.class})
 public class HelpInMinutesApiApplication {
   public static void main(String[] args) {

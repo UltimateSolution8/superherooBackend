@@ -51,5 +51,6 @@ public record TaskResponse(
     Instant cancelledAt,
     Instant createdAt,
     String landmark,
-    UUID recurringTaskId
+    UUID recurringTaskId,
+    UUID batchId
 ) {}

@@ -1,5 +1,6 @@
 package com.helpinminutes.api.tasks.controller;
 
+import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.service.HelperService;
@@ -17,6 +18,7 @@ import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
 import com.helpinminutes.api.tasks.dto.ExtendTaskRequest;
+import com.helpinminutes.api.tasks.dto.RescheduleTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.service.TaskMapper;
@@ -58,6 +60,9 @@ public class TaskController {
       @Valid @RequestBody CreateTaskRequest req) {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create tasks");
+    }
+    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
     }
     var result = tasks.createTask(principal.userId(), req);
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
@@ -119,6 +124,9 @@ public class TaskController {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create bulk tasks");
     }
+    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+    }
     int helperCount = req.helperCount() == null ? 1 : req.helperCount();
     if (helperCount <= 1) {
       var single = tasks.createTask(
@@ -139,7 +147,22 @@ public class TaskController {
           1,
           1,
           0,
-          java.util.List.of(single.taskId()));
+          java.util.List.of(single.taskId()),
+          null,
+          null);
+    }
+
+    if (helperCount > 9) {
+      var pendingBatch = batches.createPendingMediatorBatch(principal.userId(), req);
+      return new CreateBulkTaskResponse(
+          pendingBatch.getId(),
+          helperCount,
+          0,
+          0,
+          java.util.List.of(),
+          pendingBatch.getBatchStartOtp(),
+          pendingBatch.getBatchCompletionOtp()
+      );
     }
 
     java.util.List<BatchDtos.CreateItem> lines = new java.util.ArrayList<>();
@@ -181,7 +204,9 @@ public class TaskController {
         helperCount,
         created.createdCount(),
         created.failedCount(),
-        taskIds);
+        taskIds,
+        null,
+        null);
   }
 
   @PostMapping("/{taskId}/accept")
@@ -308,5 +333,16 @@ public class TaskController {
       throw new ForbiddenException("Only buyers can extend tasks");
     }
     return tasks.extendTask(principal.userId(), taskId, req.additionalTimeMinutes(), req.additionalBudgetPaise());
+  }
+
+  @PostMapping("/{taskId}/reschedule")
+  public TaskResponse rescheduleTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody RescheduleTaskRequest req) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new ForbiddenException("Only buyers can reschedule tasks");
+    }
+    return tasks.rescheduleTask(principal.userId(), taskId, req.scheduledAt());
   }
 }

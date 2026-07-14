@@ -20,8 +20,9 @@ public record CreateRecurringTaskRequest(
     @NotNull LocalDate startDate,
     @NotNull LocalDate endDate,
     @NotBlank String timeSlot,
-    Integer recurrenceInterval,
+    @Min(1) @Max(12) Integer recurrenceInterval,
     int[] byDay,
-    Integer byMonthDay,
-    String timezone
+    @Min(1) @Max(31) Integer byMonthDay,
+    String timezone,
+    @Min(1) @Max(500) Integer helperCount
 ) {}

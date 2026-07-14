@@ -20,7 +20,7 @@ public record CreateBulkTaskRequest(
     @DecimalMin("-180.0") @DecimalMax("180.0") double lng,
     @Size(max = 500) String addressText,
     Instant scheduledAt,
-    @NotNull @Min(1) @Max(25) Integer helperCount,
+    @NotNull @Min(1) @Max(500) Integer helperCount,
     String landmark
 ) {
 }

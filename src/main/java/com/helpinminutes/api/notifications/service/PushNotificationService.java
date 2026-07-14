@@ -11,10 +11,12 @@ import com.google.firebase.messaging.MulticastMessage;
 import com.google.firebase.messaging.Notification;
 import com.google.firebase.messaging.SendResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helpinminutes.api.batches.model.BookingBatchEntity;
 import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
 import com.helpinminutes.api.notifications.model.PushTokenEntity;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.users.model.UserRole;
+import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
@@ -359,6 +361,38 @@ public class PushNotificationService {
     }
   }
 
+  public void notifyMediatorBulkJobAvailable(BookingBatchEntity batch, List<UUID> mediatorIds) {
+    if (batch == null || mediatorIds == null || mediatorIds.isEmpty()) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(mediatorIds);
+    if (tokenEntities.isEmpty()) {
+      log.info("No active mediator push tokens for bulk batch {}", batch.getId());
+      return;
+    }
+
+    Map<UUID, List<String>> tokensByUser = new HashMap<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() == null || t.getToken().isBlank()) continue;
+      tokensByUser.computeIfAbsent(t.getUserId(), k -> new ArrayList<>()).add(t.getToken());
+    }
+
+    String title = "New bulk workforce request";
+    String body = (batch.getTitle() == null ? "Bulk request" : batch.getTitle())
+        + " • " + Math.max(1, batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount())
+        + " helpers needed";
+    Map<String, String> data = Map.of(
+        "type", "MEDIATOR_BULK_JOB",
+        "batchId", batch.getId().toString(),
+        "helpersNeeded", String.valueOf(batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount())
+    );
+    for (Map.Entry<UUID, List<String>> entry : tokensByUser.entrySet()) {
+      try {
+        sendToTokens(null, entry.getKey(), entry.getValue(), title, body, data, "tasks");
+      } catch (Exception e) {
+        log.warn("Failed mediator bulk push user={} batch={}", entry.getKey(), batch.getId(), e);
+      }
+    }
+  }
+
   private void pruneInvalidTokens(UUID taskId, UUID userId, List<String> tokenList, BatchResponse response) {
     if (response == null || tokenList == null || tokenList.isEmpty()) return;
     List<String> invalidTokens = new ArrayList<>();
@@ -514,6 +548,11 @@ public class PushNotificationService {
       } else if ("PARTNER".equalsIgnoreCase(role) || "HELPER".equalsIgnoreCase(role)) {
         List<com.helpinminutes.api.users.model.UserEntity> allHelpers = users.findAllByRole(UserRole.HELPER);
         for (com.helpinminutes.api.users.model.UserEntity u : allHelpers) targetUserIds.add(u.getId());
+      } else if ("MEDIATOR".equalsIgnoreCase(role)) {
+        List<com.helpinminutes.api.users.model.UserEntity> allMediators = users.findAllByRole(UserRole.MEDIATOR);
+        for (com.helpinminutes.api.users.model.UserEntity u : allMediators) {
+          if (u.getStatus() == UserStatus.ACTIVE) targetUserIds.add(u.getId());
+        }
       }
     }
 
@@ -564,4 +603,3 @@ public class PushNotificationService {
   private record BulkMeta(UUID batchId, int totalCount) {
   }
 }
-

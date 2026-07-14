@@ -77,6 +77,9 @@ public class RecurringTaskEntity {
   @Column(nullable = false)
   private String timezone = "Asia/Kolkata";
 
+  @Column(name = "helper_count", nullable = false)
+  private Integer helperCount = 1;
+
   @Version
   @Column(nullable = false)
   private Long version = 0L;
@@ -260,5 +263,13 @@ public class RecurringTaskEntity {
 
   public void setVersion(Long version) {
     this.version = version;
+  }
+
+  public Integer getHelperCount() {
+    return helperCount;
+  }
+
+  public void setHelperCount(Integer helperCount) {
+    this.helperCount = helperCount;
   }
 }
