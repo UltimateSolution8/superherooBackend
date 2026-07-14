@@ -24,9 +24,13 @@ import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
 import com.helpinminutes.api.tasks.service.TaskModerationService;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
+import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -41,6 +45,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class BookingBatchService {
+  private static final SecureRandom OTP_RANDOM = new SecureRandom();
   private final BookingBatchRepository batches;
   private final BookingBatchItemRepository items;
   private final BookingBatchEventRepository events;
@@ -51,6 +56,8 @@ public class BookingBatchService {
   private final ObjectMapper objectMapper;
   private final TaskModerationService taskModerationService;
   private final RealtimePublisher realtime;
+  private final PushNotificationService pushNotifications;
+  private final MediatorJobWorkerRepository mediatorWorkers;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -62,7 +69,9 @@ public class BookingBatchService {
       UserRepository users,
       ObjectMapper objectMapper,
       TaskModerationService taskModerationService,
-      RealtimePublisher realtime) {
+      RealtimePublisher realtime,
+      PushNotificationService pushNotifications,
+      MediatorJobWorkerRepository mediatorWorkers) {
     this.batches = batches;
     this.items = items;
     this.events = events;
@@ -73,6 +82,8 @@ public class BookingBatchService {
     this.objectMapper = objectMapper;
     this.taskModerationService = taskModerationService;
     this.realtime = realtime;
+    this.pushNotifications = pushNotifications;
+    this.mediatorWorkers = mediatorWorkers;
   }
 
   public BatchDtos.PreviewResponse preview(BatchDtos.PreviewRequest req) {
@@ -260,6 +271,10 @@ public class BookingBatchService {
       byStatus.put(key, byStatus.getOrDefault(key, 0L) + 1L);
     }
 
+    int addedWorkerCount = batch.getStatus().name().contains("MEDIATOR") || batch.getStatus() == BookingBatchStatus.PENDING_AUDIT || batch.getStatus() == BookingBatchStatus.ON_HOLD
+        ? mediatorWorkers.findByBatchId(batch.getId()).size()
+        : batchItems.size();
+
     return new BatchDtos.BatchSummaryResponse(
         batch.getId(),
         batch.getTitle(),
@@ -270,9 +285,56 @@ public class BookingBatchService {
         batch.getScheduledWindowEnd(),
         batchItems.size(),
         batch.getRequestedHelperCount(),
-        batchItems.size(),
+        addedWorkerCount,
         batch.getMediatorId(),
+        batch.getAuditNotes(),
+        batch.getBatchStartOtp(),
+        batch.getBatchCompletionOtp(),
         byStatus);
+  }
+
+  @Transactional(readOnly = true)
+  public List<BatchDtos.BatchSummaryResponse> listMediatorAuditQueue(String statusRaw) {
+    BookingBatchStatus status = parseAuditStatus(statusRaw);
+    return batches.findByStatus(status).stream()
+        .sorted(Comparator.comparing(BookingBatchEntity::getCreatedAt).reversed())
+        .map(batch -> getSummaryForAdmin(batch))
+        .toList();
+  }
+
+  @Transactional
+  public BatchDtos.BatchSummaryResponse approveMediatorBatch(UUID adminId, UUID batchId, String notes) {
+    BookingBatchEntity batch = batches.findById(batchId).orElseThrow(() -> new NotFoundException("Batch not found"));
+    if (batch.getStatus() != BookingBatchStatus.PENDING_AUDIT && batch.getStatus() != BookingBatchStatus.ON_HOLD) {
+      throw new BadRequestException("Only pending audit or on-hold mediator batches can be approved");
+    }
+    if (batch.getTaskTemplateJson() == null || batch.getTaskTemplateJson().isBlank()) {
+      throw new BadRequestException("Task details are incomplete. Put this request on hold and collect missing information.");
+    }
+    ensureBatchOtp(batch);
+    batch.setStatus(BookingBatchStatus.PENDING_MEDIATOR);
+    batch.setAuditNotes(blankToNull(notes));
+    batch.setAuditedByUserId(adminId);
+    batch.setAuditedAt(Instant.now());
+    batches.save(batch);
+    writeEvent(batch.getId(), "MEDIATOR_AUDIT_APPROVED", "{\"status\":\"PENDING_MEDIATOR\"}");
+    publishMediatorJobAvailable(batch);
+    return getSummaryForAdmin(batch);
+  }
+
+  @Transactional
+  public BatchDtos.BatchSummaryResponse holdMediatorBatch(UUID adminId, UUID batchId, String notes) {
+    BookingBatchEntity batch = batches.findById(batchId).orElseThrow(() -> new NotFoundException("Batch not found"));
+    if (batch.getStatus() != BookingBatchStatus.PENDING_AUDIT && batch.getStatus() != BookingBatchStatus.PENDING_MEDIATOR) {
+      throw new BadRequestException("Only pending audit or unreleased mediator batches can be put on hold");
+    }
+    batch.setStatus(BookingBatchStatus.ON_HOLD);
+    batch.setAuditNotes(blankToNull(notes) == null ? "More details required" : notes.trim());
+    batch.setAuditedByUserId(adminId);
+    batch.setAuditedAt(Instant.now());
+    batches.save(batch);
+    writeEvent(batch.getId(), "MEDIATOR_AUDIT_HOLD", "{\"status\":\"ON_HOLD\"}");
+    return getSummaryForAdmin(batch);
   }
 
   @Transactional(readOnly = true)
@@ -389,6 +451,40 @@ public class BookingBatchService {
     }
   }
 
+  private BatchDtos.BatchSummaryResponse getSummaryForAdmin(BookingBatchEntity batch) {
+    List<BookingBatchItemEntity> batchItems = items.findByBatchIdOrderByLineNoAsc(batch.getId());
+    Map<String, Long> byStatus = new LinkedHashMap<>();
+    byStatus.put("FAILED", batchItems.stream().filter(i -> i.getLineStatus() == BookingBatchLineStatus.FAILED).count());
+    int addedWorkerCount = mediatorWorkers.findByBatchId(batch.getId()).size();
+    return new BatchDtos.BatchSummaryResponse(
+        batch.getId(),
+        batch.getTitle(),
+        batch.getNotes(),
+        batch.getStatus().name(),
+        batch.getCreatedAt(),
+        batch.getScheduledWindowStart(),
+        batch.getScheduledWindowEnd(),
+        batchItems.size(),
+        batch.getRequestedHelperCount(),
+        addedWorkerCount,
+        batch.getMediatorId(),
+        batch.getAuditNotes(),
+        batch.getBatchStartOtp(),
+        batch.getBatchCompletionOtp(),
+        byStatus);
+  }
+
+  private BookingBatchStatus parseAuditStatus(String raw) {
+    if (raw == null || raw.isBlank()) return BookingBatchStatus.PENDING_AUDIT;
+    try {
+      BookingBatchStatus status = BookingBatchStatus.valueOf(raw.trim().toUpperCase());
+      if (status == BookingBatchStatus.PENDING_AUDIT || status == BookingBatchStatus.ON_HOLD || status == BookingBatchStatus.PENDING_MEDIATOR) {
+        return status;
+      }
+    } catch (IllegalArgumentException ignored) {}
+    throw new BadRequestException("Unsupported audit status");
+  }
+
   private UUID resolveBuyer(UUID actorUserId, UserRole actorRole, UUID buyerIdFromReq) {
     if (actorRole == UserRole.BUYER) return actorUserId;
     if (actorRole == UserRole.ADMIN) {
@@ -433,9 +529,10 @@ public class BookingBatchService {
     String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
     batch.setTitle(safeTitle + " (Bulk x" + req.helperCount() + ")");
     batch.setNotes("Created from buyer app bulk request (Mediator Routed)");
-    batch.setStatus(BookingBatchStatus.PENDING_MEDIATOR);
+    batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
     batch.setRequestedHelperCount(req.helperCount());
     batch.setScheduledWindowStart(req.scheduledAt());
+    ensureBatchOtp(batch);
 
     try {
       CreateTaskRequest template = new CreateTaskRequest(
@@ -456,16 +553,38 @@ public class BookingBatchService {
     }
 
     BookingBatchEntity saved = batches.save(batch);
-    writeEvent(saved.getId(), "BATCH_CREATED", "{\"status\":\"PENDING_MEDIATOR\",\"requested\":" + req.helperCount() + "}");
-
-    try {
-      realtime.publish("mediator.job_available", Map.of(
-          "batchId", saved.getId().toString(),
-          "buyerId", buyerId.toString(),
-          "helperCount", req.helperCount()
-      ));
-    } catch (Exception ignored) {}
+    writeEvent(saved.getId(), "BATCH_CREATED", "{\"status\":\"PENDING_AUDIT\",\"requested\":" + req.helperCount() + "}");
 
     return saved;
+  }
+
+  private void publishMediatorJobAvailable(BookingBatchEntity batch) {
+    List<UUID> mediatorIds = users.findAllByRole(UserRole.MEDIATOR).stream()
+        .filter(u -> u.getStatus() == UserStatus.ACTIVE)
+        .map(UserEntity::getId)
+        .toList();
+    try {
+      realtime.publish("mediator.job_available", Map.of(
+          "batchId", batch.getId().toString(),
+          "buyerId", batch.getCreatedByUserId().toString(),
+          "helperCount", batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount()
+      ));
+    } catch (Exception ignored) {}
+    try {
+      pushNotifications.notifyMediatorBulkJobAvailable(batch, mediatorIds);
+    } catch (Exception ignored) {}
+  }
+
+  private void ensureBatchOtp(BookingBatchEntity batch) {
+    if (batch.getBatchStartOtp() == null || batch.getBatchStartOtp().isBlank()) {
+      batch.setBatchStartOtp(generateOtp());
+    }
+    if (batch.getBatchCompletionOtp() == null || batch.getBatchCompletionOtp().isBlank()) {
+      batch.setBatchCompletionOtp(generateOtp());
+    }
+  }
+
+  private String generateOtp() {
+    return String.format("%06d", OTP_RANDOM.nextInt(1_000_000));
   }
 }

@@ -78,6 +78,7 @@ public class TaskService {
   private final BookingBatchRepository bookingBatches;
   private final BookingBatchItemRepository bookingBatchItems;
   private final ObjectMapper objectMapper;
+  private final InvoiceEmailService invoiceEmail;
 
   public TaskService(
       TaskRepository tasks,
@@ -96,7 +97,8 @@ public class TaskService {
       TaskModerationService taskModerationService,
       BookingBatchRepository bookingBatches,
       BookingBatchItemRepository bookingBatchItems,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      InvoiceEmailService invoiceEmail) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -114,6 +116,7 @@ public class TaskService {
     this.bookingBatches = bookingBatches;
     this.bookingBatchItems = bookingBatchItems;
     this.objectMapper = objectMapper;
+    this.invoiceEmail = invoiceEmail;
   }
 
   @Transactional
@@ -236,8 +239,10 @@ public class TaskService {
         batch.setSourceRecurringTaskId(rec.getId());
         batch.setScheduledWindowStart(scheduledAt);
         batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
-        batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.PENDING_MEDIATOR);
+        batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.PENDING_AUDIT);
         batch.setRequestedHelperCount(rec.getHelperCount());
+        batch.setBatchStartOtp(generateOtp());
+        batch.setBatchCompletionOtp(generateOtp());
 
         try {
           com.helpinminutes.api.tasks.dto.CreateTaskRequest template = new com.helpinminutes.api.tasks.dto.CreateTaskRequest(
@@ -260,7 +265,7 @@ public class TaskService {
         bookingBatches.save(batch);
 
         try {
-          realtime.publish("mediator.job_available", java.util.Map.of(
+          realtime.publish("mediator.job_pending_audit", java.util.Map.of(
               "batchId", batch.getId().toString(),
               "buyerId", rec.getBuyerId().toString(),
               "helperCount", rec.getHelperCount()
@@ -627,6 +632,7 @@ public class TaskService {
 
     if (newStatus == TaskStatus.COMPLETED) {
       notificationQueue.enqueueTaskCompleted(task.getBuyerId(), task);
+      invoiceEmail.sendInvoiceEmailAsync(task);
     }
 
     return taskMapper.toResponse(task, false);
@@ -919,6 +925,9 @@ public class TaskService {
       payload.put("helperId", task.getAssignedHelperId().toString());
     }
     realtime.publish("task_status_changed", payload);
+    if (newStatus == TaskStatus.COMPLETED) {
+      invoiceEmail.sendInvoiceEmailAsync(task);
+    }
     return task;
   }
 
@@ -1051,6 +1060,8 @@ public class TaskService {
 
   private void cancelPendingMediatorBatchesForRecurring(UUID recurringTaskId, String reason) {
     java.util.List<BookingBatchStatus> cancellable = java.util.List.of(
+        BookingBatchStatus.PENDING_AUDIT,
+        BookingBatchStatus.ON_HOLD,
         BookingBatchStatus.PENDING_MEDIATOR,
         BookingBatchStatus.MEDIATOR_ACCEPTED,
         BookingBatchStatus.MEDIATOR_DISPATCHING);
@@ -1242,4 +1253,3 @@ public class TaskService {
     }
   }
 }
-

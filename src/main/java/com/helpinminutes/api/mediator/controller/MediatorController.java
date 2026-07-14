@@ -66,6 +66,15 @@ public class MediatorController {
     return mediatorService.addWorkers(principal.userId(), principal.role(), batchId, req);
   }
 
+  @GetMapping("/jobs/{batchId}/workers/lookup")
+  public WorkerLookupResponse lookupWorker(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @RequestParam String query) {
+    checkRole(principal);
+    return mediatorService.lookupWorker(principal.userId(), principal.role(), batchId, query);
+  }
+
   @DeleteMapping("/jobs/{batchId}/workers/{helperId}")
   public void removeWorker(
       @AuthenticationPrincipal UserPrincipal principal,
@@ -91,6 +100,15 @@ public class MediatorController {
     mediatorService.dispatchJob(principal.userId(), principal.role(), batchId);
   }
 
+  @PostMapping("/jobs/{batchId}/start")
+  public void startJob(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @Valid @RequestBody BatchOtpRequest req) {
+    checkRole(principal);
+    mediatorService.startJob(principal.userId(), principal.role(), batchId, req.otp());
+  }
+
   @PostMapping("/jobs/{batchId}/attendance")
   public void submitAttendance(
       @AuthenticationPrincipal UserPrincipal principal,
@@ -103,9 +121,10 @@ public class MediatorController {
   @PostMapping("/jobs/{batchId}/complete")
   public void completeJob(
       @AuthenticationPrincipal UserPrincipal principal,
-      @PathVariable UUID batchId) {
+      @PathVariable UUID batchId,
+      @Valid @RequestBody(required = false) BatchOtpRequest req) {
     checkRole(principal);
-    mediatorService.completeJob(principal.userId(), principal.role(), batchId);
+    mediatorService.completeJob(principal.userId(), principal.role(), batchId, req == null ? null : req.otp());
   }
 
   @GetMapping("/jobs/{batchId}/payments")

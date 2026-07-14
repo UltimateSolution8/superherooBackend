@@ -8,6 +8,8 @@ public record CreateBulkTaskResponse(
     int helperCountRequested,
     int createdCount,
     int failedCount,
-    List<UUID> taskIds
+    List<UUID> taskIds,
+    String batchStartOtp,
+    String batchCompletionOtp
 ) {
 }

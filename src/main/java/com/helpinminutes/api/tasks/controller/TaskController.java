@@ -147,7 +147,9 @@ public class TaskController {
           1,
           1,
           0,
-          java.util.List.of(single.taskId()));
+          java.util.List.of(single.taskId()),
+          null,
+          null);
     }
 
     if (helperCount > 9) {
@@ -157,7 +159,9 @@ public class TaskController {
           helperCount,
           0,
           0,
-          java.util.List.of()
+          java.util.List.of(),
+          pendingBatch.getBatchStartOtp(),
+          pendingBatch.getBatchCompletionOtp()
       );
     }
 
@@ -200,7 +204,9 @@ public class TaskController {
         helperCount,
         created.createdCount(),
         created.failedCount(),
-        taskIds);
+        taskIds,
+        null,
+        null);
   }
 
   @PostMapping("/{taskId}/accept")

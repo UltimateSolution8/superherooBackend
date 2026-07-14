@@ -63,6 +63,21 @@ public class BookingBatchEntity {
   @Column(name = "task_template_json")
   private String taskTemplateJson;
 
+  @Column(name = "audit_notes")
+  private String auditNotes;
+
+  @Column(name = "audited_by_user_id")
+  private UUID auditedByUserId;
+
+  @Column(name = "audited_at")
+  private Instant auditedAt;
+
+  @Column(name = "batch_start_otp")
+  private String batchStartOtp;
+
+  @Column(name = "batch_completion_otp")
+  private String batchCompletionOtp;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -218,5 +233,44 @@ public class BookingBatchEntity {
   public void setTaskTemplateJson(String taskTemplateJson) {
     this.taskTemplateJson = taskTemplateJson;
   }
-}
 
+  public String getAuditNotes() {
+    return auditNotes;
+  }
+
+  public void setAuditNotes(String auditNotes) {
+    this.auditNotes = auditNotes;
+  }
+
+  public UUID getAuditedByUserId() {
+    return auditedByUserId;
+  }
+
+  public void setAuditedByUserId(UUID auditedByUserId) {
+    this.auditedByUserId = auditedByUserId;
+  }
+
+  public Instant getAuditedAt() {
+    return auditedAt;
+  }
+
+  public void setAuditedAt(Instant auditedAt) {
+    this.auditedAt = auditedAt;
+  }
+
+  public String getBatchStartOtp() {
+    return batchStartOtp;
+  }
+
+  public void setBatchStartOtp(String batchStartOtp) {
+    this.batchStartOtp = batchStartOtp;
+  }
+
+  public String getBatchCompletionOtp() {
+    return batchCompletionOtp;
+  }
+
+  public void setBatchCompletionOtp(String batchCompletionOtp) {
+    this.batchCompletionOtp = batchCompletionOtp;
+  }
+}

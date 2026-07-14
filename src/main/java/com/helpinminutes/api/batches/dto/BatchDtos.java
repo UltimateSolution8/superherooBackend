@@ -89,7 +89,14 @@ public class BatchDtos {
       Integer requestedHelperCount,
       Integer addedWorkerCount,
       UUID mediatorId,
+      String auditNotes,
+      String batchStartOtp,
+      String batchCompletionOtp,
       Map<String, Long> byTaskStatus
+  ) {}
+
+  public record BatchAuditActionRequest(
+      @Size(max = 500) String notes
   ) {}
 
   public record BatchItemResponse(

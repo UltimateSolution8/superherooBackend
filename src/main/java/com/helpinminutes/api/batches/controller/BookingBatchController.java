@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -82,5 +83,37 @@ public class BookingBatchController {
         batchId,
         itemId,
         req == null ? null : req.reason());
+  }
+
+  @GetMapping("/mediator-audit")
+  public List<BatchDtos.BatchSummaryResponse> mediatorAuditQueue(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestParam(required = false) String status) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
+    }
+    return service.listMediatorAuditQueue(status);
+  }
+
+  @PostMapping("/{batchId}/mediator-audit/approve")
+  public BatchDtos.BatchSummaryResponse approveMediatorBatch(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @Valid @RequestBody(required = false) BatchDtos.BatchAuditActionRequest req) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
+    }
+    return service.approveMediatorBatch(principal.userId(), batchId, req == null ? null : req.notes());
+  }
+
+  @PostMapping("/{batchId}/mediator-audit/hold")
+  public BatchDtos.BatchSummaryResponse holdMediatorBatch(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @Valid @RequestBody(required = false) BatchDtos.BatchAuditActionRequest req) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
+    }
+    return service.holdMediatorBatch(principal.userId(), batchId, req == null ? null : req.notes());
   }
 }

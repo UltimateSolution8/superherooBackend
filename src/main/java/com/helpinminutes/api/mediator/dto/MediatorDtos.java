@@ -23,7 +23,9 @@ public class MediatorDtos {
       Instant scheduledDispatchAt,
       Instant mediatorAcceptedAt,
       String mediatorNotes,
-      Long mediatorCommissionPaise
+      Long mediatorCommissionPaise,
+      String batchStartOtp,
+      String batchCompletionOtp
   ) {}
 
   public record AcceptJobRequest(
@@ -32,13 +34,34 @@ public class MediatorDtos {
   ) {}
 
   public record AddWorkersRequest(
-      @NotEmpty @Size(max = 500) List<@Pattern(regexp = "^(?:\\+91|91|0)?[6-9]\\d{9}$", message = "Invalid Indian mobile number") String> phones
+      @Size(max = 500) List<@Pattern(regexp = "^(?:\\+91|91|0)?[6-9]\\d{9}$", message = "Invalid Indian mobile number") String> phones,
+      @Size(max = 500) List<UUID> workerIds
+  ) {}
+
+  public record WorkerLookupResponse(
+      UUID helperId,
+      String name,
+      String phone,
+      String photoUrl,
+      String kycStatus,
+      String rating,
+      boolean eligible,
+      String message
   ) {}
 
   public record WorkerResult(
       String phone,
+      UUID helperId,
+      String name,
+      String photoUrl,
+      String kycStatus,
+      String rating,
       boolean success,
       String error
+  ) {}
+
+  public record BatchOtpRequest(
+      @NotEmpty String otp
   ) {}
 
   public record AddWorkersResponse(
@@ -83,6 +106,9 @@ public class MediatorDtos {
       String phone,
       String attendanceStatus,
       UUID taskId,
-      String taskStatus
+      String taskStatus,
+      String photoUrl,
+      String kycStatus,
+      String rating
   ) {}
 }

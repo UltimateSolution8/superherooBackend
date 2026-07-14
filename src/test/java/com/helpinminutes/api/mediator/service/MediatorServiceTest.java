@@ -145,11 +145,45 @@ public class MediatorServiceTest {
     when(batches.findById(batchId)).thenReturn(Optional.of(batch));
     when(workers.findByBatchId(batchId)).thenReturn(List.of(existing));
 
-    AddWorkersResponse res = service.addWorkers(mediatorId, UserRole.MEDIATOR, batchId, new AddWorkersRequest(List.of("9876543210")));
+    AddWorkersResponse res = service.addWorkers(mediatorId, UserRole.MEDIATOR, batchId, new AddWorkersRequest(List.of("9876543210"), List.of()));
 
     assertEquals(1, res.failureCount());
     assertEquals(0, res.successCount());
     verify(workers, never()).save(any(MediatorJobWorkerEntity.class));
+  }
+
+  @Test
+  public void testStartJobRequiresCorrectOtp() throws Exception {
+    UUID batchId = UUID.randomUUID();
+    UUID mediatorId = UUID.randomUUID();
+    BookingBatchEntity batch = acceptedBatch(batchId, mediatorId, 1);
+    batch.setStatus(BookingBatchStatus.MEDIATOR_IN_PROGRESS);
+    batch.setBatchStartOtp("123456");
+
+    when(batches.findById(batchId)).thenReturn(Optional.of(batch));
+
+    assertThrows(Exception.class, () -> service.startJob(mediatorId, UserRole.MEDIATOR, batchId, "000000"));
+    service.startJob(mediatorId, UserRole.MEDIATOR, batchId, "123456");
+
+    assertEquals(BookingBatchStatus.MEDIATOR_STARTED, batch.getStatus());
+    verify(batches).save(batch);
+  }
+
+  @Test
+  public void testCompleteJobRequiresCorrectOtp() throws Exception {
+    UUID batchId = UUID.randomUUID();
+    UUID mediatorId = UUID.randomUUID();
+    BookingBatchEntity batch = acceptedBatch(batchId, mediatorId, 1);
+    batch.setStatus(BookingBatchStatus.MEDIATOR_STARTED);
+    batch.setBatchCompletionOtp("654321");
+
+    when(batches.findById(batchId)).thenReturn(Optional.of(batch));
+    when(workers.findByBatchId(batchId)).thenReturn(List.of());
+
+    assertThrows(Exception.class, () -> service.completeJob(mediatorId, UserRole.MEDIATOR, batchId, "111111"));
+    service.completeJob(mediatorId, UserRole.MEDIATOR, batchId, "654321");
+
+    assertEquals(BookingBatchStatus.MEDIATOR_COMPLETED, batch.getStatus());
   }
 
 }

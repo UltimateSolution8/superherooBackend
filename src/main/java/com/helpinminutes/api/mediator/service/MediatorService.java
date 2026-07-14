@@ -147,8 +147,9 @@ public class MediatorService {
     }
 
     List<String> requestedPhones = req == null || req.phones() == null ? List.of() : req.phones();
-    if (requestedPhones.isEmpty()) {
-      throw new BadRequestException("At least one helper phone is required");
+    List<UUID> requestedIds = req == null || req.workerIds() == null ? List.of() : req.workerIds();
+    if (requestedPhones.isEmpty() && requestedIds.isEmpty()) {
+      throw new BadRequestException("At least one helper phone or worker ID is required");
     }
 
     List<WorkerResult> results = new ArrayList<>();
@@ -162,19 +163,19 @@ public class MediatorService {
       try {
         String normalized = InputValidators.normalizeIndianPhoneOrNull(phone);
         if (!seenPhones.add(normalized)) {
-          results.add(new WorkerResult(phone, false, "Duplicate helper phone in this request"));
+          results.add(workerFailure(phone, null, "Duplicate helper phone in this request"));
           failureCount++;
           continue;
         }
         if (existingWorkerCount >= requestedCount) {
-          results.add(new WorkerResult(phone, false, "Requested helper count is already full"));
+          results.add(workerFailure(phone, null, "Requested helper count is already full"));
           failureCount++;
           continue;
         }
 
         Optional<UserEntity> helperOpt = users.findByPhoneAndRole(normalized, UserRole.HELPER);
         if (helperOpt.isEmpty()) {
-          results.add(new WorkerResult(phone, false, "Helper not found"));
+          results.add(workerFailure(phone, null, "Helper not found"));
           failureCount++;
           continue;
         }
@@ -182,21 +183,21 @@ public class MediatorService {
 
         Optional<HelperProfileEntity> profileOpt = helperProfiles.findById(helper.getId());
         if (profileOpt.isEmpty()) {
-          results.add(new WorkerResult(phone, false, "Helper profile not found"));
+          results.add(workerFailure(phone, helper.getId(), "Helper profile not found"));
           failureCount++;
           continue;
         }
         HelperProfileEntity profile = profileOpt.get();
 
         if (profile.getKycStatus() != HelperKycStatus.APPROVED) {
-          results.add(new WorkerResult(phone, false, "Helper KYC is not approved"));
+          results.add(workerFailure(phone, helper.getId(), "Helper KYC is not approved"));
           failureCount++;
           continue;
         }
 
         var existing = workers.findByBatchIdAndHelperId(batchId, helper.getId());
         if (existing.isPresent()) {
-          results.add(new WorkerResult(phone, true, "Helper already added to this job"));
+          results.add(workerSuccess(phone, helper, profile, "Helper already added to this job"));
           successCount++;
           continue;
         }
@@ -207,18 +208,101 @@ public class MediatorService {
         workers.save(worker);
         existingWorkerCount++;
 
-        results.add(new WorkerResult(phone, true, null));
+        results.add(workerSuccess(phone, helper, profile, null));
         successCount++;
       } catch (BadRequestException e) {
-        results.add(new WorkerResult(phone, false, e.getMessage()));
+        results.add(workerFailure(phone, null, e.getMessage()));
         failureCount++;
       } catch (Exception e) {
-        results.add(new WorkerResult(phone, false, "Could not add helper"));
+        results.add(workerFailure(phone, null, "Could not add helper"));
         failureCount++;
       }
     }
 
-    return new AddWorkersResponse(requestedPhones.size(), successCount, failureCount, results);
+    java.util.Set<UUID> seenIds = new java.util.HashSet<>();
+    for (UUID helperId : requestedIds) {
+      try {
+        if (helperId == null || !seenIds.add(helperId)) {
+          results.add(workerFailure(null, helperId, "Duplicate helper ID in this request"));
+          failureCount++;
+          continue;
+        }
+        if (existingWorkerCount >= requestedCount) {
+          results.add(workerFailure(null, helperId, "Requested helper count is already full"));
+          failureCount++;
+          continue;
+        }
+        UserEntity helper = users.findById(helperId).orElse(null);
+        if (helper == null || helper.getRole() != UserRole.HELPER) {
+          results.add(workerFailure(null, helperId, "Helper not found"));
+          failureCount++;
+          continue;
+        }
+        Optional<HelperProfileEntity> profileOpt = helperProfiles.findById(helper.getId());
+        if (profileOpt.isEmpty()) {
+          results.add(workerFailure(helper.getPhone(), helper.getId(), "Helper profile not found"));
+          failureCount++;
+          continue;
+        }
+        HelperProfileEntity profile = profileOpt.get();
+        if (profile.getKycStatus() != HelperKycStatus.APPROVED) {
+          results.add(workerFailure(helper.getPhone(), helper.getId(), "Helper KYC is not approved"));
+          failureCount++;
+          continue;
+        }
+        if (workers.findByBatchIdAndHelperId(batchId, helper.getId()).isPresent()) {
+          results.add(workerSuccess(helper.getPhone(), helper, profile, "Helper already added to this job"));
+          successCount++;
+          continue;
+        }
+        MediatorJobWorkerEntity worker = new MediatorJobWorkerEntity();
+        worker.setBatchId(batchId);
+        worker.setHelperId(helper.getId());
+        workers.save(worker);
+        existingWorkerCount++;
+        results.add(workerSuccess(helper.getPhone(), helper, profile, null));
+        successCount++;
+      } catch (Exception e) {
+        results.add(workerFailure(null, helperId, "Could not add helper"));
+        failureCount++;
+      }
+    }
+
+    return new AddWorkersResponse(requestedPhones.size() + requestedIds.size(), successCount, failureCount, results);
+  }
+
+  @Transactional(readOnly = true)
+  public WorkerLookupResponse lookupWorker(UUID userId, UserRole role, UUID batchId, String query) {
+    BookingBatchEntity batch = batches.findById(batchId)
+        .orElseThrow(() -> new NotFoundException("Job not found"));
+    validateOwnership(batch, userId, role);
+    if (query == null || query.isBlank()) {
+      throw new BadRequestException("Enter helper phone or worker ID");
+    }
+    UserEntity helper = null;
+    String trimmed = query.trim();
+    try {
+      UUID helperId = UUID.fromString(trimmed);
+      helper = users.findById(helperId).filter(u -> u.getRole() == UserRole.HELPER).orElse(null);
+    } catch (IllegalArgumentException ignored) {
+      String phone = InputValidators.normalizeIndianPhoneOrNull(trimmed);
+      helper = users.findByPhoneAndRole(phone, UserRole.HELPER).orElse(null);
+    }
+    if (helper == null) {
+      return new WorkerLookupResponse(null, null, null, null, null, null, false, "Helper not found");
+    }
+    HelperProfileEntity profile = helperProfiles.findById(helper.getId()).orElse(null);
+    boolean eligible = profile != null && profile.getKycStatus() == HelperKycStatus.APPROVED;
+    String message = eligible ? "Verified helper" : profile == null ? "Helper profile not found" : "Helper KYC is not approved";
+    return new WorkerLookupResponse(
+        helper.getId(),
+        displayName(helper),
+        helper.getPhone(),
+        profile == null ? null : profile.getKycSelfieUrl(),
+        profile == null || profile.getKycStatus() == null ? null : profile.getKycStatus().name(),
+        profile == null || profile.getRating() == null ? null : profile.getRating().toPlainString(),
+        eligible,
+        message);
   }
 
   @Transactional
@@ -249,11 +333,14 @@ public class MediatorService {
       }
       res.add(new MediatorWorkerDetail(
           item.getHelperId(),
-          name,
+          name == null || name.isBlank() ? phone : name,
           phone,
           item.getAttendanceStatus().name(),
           item.getTaskId(),
-          taskStatus
+          taskStatus,
+          helperProfilePhoto(helper),
+          helperKycStatus(helper),
+          helperRating(helper)
       ));
     }
     return res;
@@ -326,11 +413,31 @@ public class MediatorService {
   }
 
   @Transactional
-  public void submitAttendance(UUID userId, UserRole role, UUID batchId, AttendanceRequest req) {
+  public void startJob(UUID userId, UserRole role, UUID batchId, String otp) {
     BookingBatchEntity batch = batches.findById(batchId)
         .orElseThrow(() -> new NotFoundException("Job not found"));
     validateOwnership(batch, userId, role);
     if (batch.getStatus() != BookingBatchStatus.MEDIATOR_IN_PROGRESS) {
+      throw new ConflictException("Cannot start job in status: " + batch.getStatus());
+    }
+    verifyOtp(batch.getBatchStartOtp(), otp, "Start OTP is required");
+    batch.setStatus(BookingBatchStatus.MEDIATOR_STARTED);
+    batches.save(batch);
+    try {
+      realtime.publish("mediator.job_started", Map.of(
+          "batchId", batchId.toString(),
+          "mediatorId", batch.getMediatorId().toString(),
+          "buyerId", batch.getCreatedByUserId().toString()
+      ));
+    } catch (Exception ignored) {}
+  }
+
+  @Transactional
+  public void submitAttendance(UUID userId, UserRole role, UUID batchId, AttendanceRequest req) {
+    BookingBatchEntity batch = batches.findById(batchId)
+        .orElseThrow(() -> new NotFoundException("Job not found"));
+    validateOwnership(batch, userId, role);
+    if (batch.getStatus() != BookingBatchStatus.MEDIATOR_IN_PROGRESS && batch.getStatus() != BookingBatchStatus.MEDIATOR_STARTED) {
       throw new ConflictException("Cannot submit attendance in status: " + batch.getStatus());
     }
 
@@ -352,12 +459,18 @@ public class MediatorService {
 
   @Transactional
   public void completeJob(UUID userId, UserRole role, UUID batchId) {
+    completeJob(userId, role, batchId, null);
+  }
+
+  @Transactional
+  public void completeJob(UUID userId, UserRole role, UUID batchId, String otp) {
     BookingBatchEntity batch = batches.findById(batchId)
         .orElseThrow(() -> new NotFoundException("Job not found"));
     validateOwnership(batch, userId, role);
-    if (batch.getStatus() != BookingBatchStatus.MEDIATOR_IN_PROGRESS) {
+    if (batch.getStatus() != BookingBatchStatus.MEDIATOR_STARTED) {
       throw new ConflictException("Cannot complete job in status: " + batch.getStatus());
     }
+    verifyOtp(batch.getBatchCompletionOtp(), otp, "Completion OTP is required");
 
     List<MediatorJobWorkerEntity> jobWorkers = workers.findByBatchId(batchId);
     CreateTaskRequest template;
@@ -469,7 +582,8 @@ public class MediatorService {
   public MediatorDashboardResponse getDashboard(UUID mediatorId) {
     long pending = batches.countByStatus(BookingBatchStatus.PENDING_MEDIATOR);
     long accepted = batches.countByMediatorIdAndStatus(mediatorId, BookingBatchStatus.MEDIATOR_ACCEPTED);
-    long inProgress = batches.countByMediatorIdAndStatus(mediatorId, BookingBatchStatus.MEDIATOR_IN_PROGRESS);
+    long inProgress = batches.countByMediatorIdAndStatus(mediatorId, BookingBatchStatus.MEDIATOR_IN_PROGRESS)
+        + batches.countByMediatorIdAndStatus(mediatorId, BookingBatchStatus.MEDIATOR_STARTED);
     long completed = batches.countByMediatorIdAndStatus(mediatorId, BookingBatchStatus.MEDIATOR_COMPLETED);
 
     List<BookingBatchEntity> completedBatches = batches.findByMediatorIdAndStatus(mediatorId, BookingBatchStatus.MEDIATOR_COMPLETED);
@@ -503,7 +617,9 @@ public class MediatorService {
         batch.getScheduledDispatchAt(),
         batch.getMediatorAcceptedAt(),
         batch.getMediatorNotes(),
-        batch.getMediatorCommissionPaise()
+        batch.getMediatorCommissionPaise(),
+        batch.getBatchStartOtp(),
+        batch.getBatchCompletionOtp()
     );
   }
 
@@ -517,6 +633,49 @@ public class MediatorService {
       }
     } else if (!batch.getMediatorId().equals(userId)) {
       throw new ForbiddenException("This job is assigned to another mediator");
+    }
+  }
+
+  private WorkerResult workerSuccess(String input, UserEntity helper, HelperProfileEntity profile, String message) {
+    return new WorkerResult(
+        input,
+        helper.getId(),
+        displayName(helper),
+        profile == null ? null : profile.getKycSelfieUrl(),
+        profile == null || profile.getKycStatus() == null ? null : profile.getKycStatus().name(),
+        profile == null || profile.getRating() == null ? null : profile.getRating().toPlainString(),
+        true,
+        message);
+  }
+
+  private WorkerResult workerFailure(String input, UUID helperId, String error) {
+    return new WorkerResult(input, helperId, null, null, null, null, false, error);
+  }
+
+  private String displayName(UserEntity user) {
+    if (user == null) return "Unknown";
+    return user.getDisplayName() != null && !user.getDisplayName().isBlank() ? user.getDisplayName() : user.getPhone();
+  }
+
+  private String helperProfilePhoto(UserEntity helper) {
+    if (helper == null) return null;
+    return helperProfiles.findById(helper.getId()).map(HelperProfileEntity::getKycSelfieUrl).orElse(null);
+  }
+
+  private String helperKycStatus(UserEntity helper) {
+    if (helper == null) return null;
+    return helperProfiles.findById(helper.getId()).map(h -> h.getKycStatus() == null ? null : h.getKycStatus().name()).orElse(null);
+  }
+
+  private String helperRating(UserEntity helper) {
+    if (helper == null) return null;
+    return helperProfiles.findById(helper.getId()).map(h -> h.getRating() == null ? null : h.getRating().toPlainString()).orElse(null);
+  }
+
+  private void verifyOtp(String expected, String provided, String message) {
+    if (expected == null || expected.isBlank()) return;
+    if (provided == null || provided.isBlank() || !expected.equals(provided.trim())) {
+      throw new BadRequestException(message);
     }
   }
 }
