@@ -124,10 +124,19 @@ public class TaskController {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create bulk tasks");
     }
-    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
-    }
     int helperCount = req.helperCount() == null ? 1 : req.helperCount();
+    if (helperCount > 9) {
+      if (req.scheduledAt() == null) {
+        throw new BadRequestException("Bulk tasks with more than 9 helpers cannot be instant; they must be scheduled at least 1 hour in the future");
+      }
+      if (req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(59)))) {
+        throw new BadRequestException("Bulk tasks with more than 9 helpers must be scheduled at least 1 hour in the future");
+      }
+    } else {
+      if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
+        throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+      }
+    }
     if (helperCount <= 1) {
       var single = tasks.createTask(
           principal.userId(),

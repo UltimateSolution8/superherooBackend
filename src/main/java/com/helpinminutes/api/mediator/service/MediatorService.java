@@ -363,13 +363,7 @@ public class MediatorService {
     if (jobWorkers.size() < requestedCount) {
       throw new BadRequestException("Add all requested helpers before dispatching");
     }
-    Instant earliestDispatchAt = batch.getScheduledDispatchAt();
-    if (earliestDispatchAt == null && batch.getScheduledWindowStart() != null) {
-      earliestDispatchAt = batch.getScheduledWindowStart().minus(Duration.ofMinutes(15));
-    }
-    if (earliestDispatchAt != null && earliestDispatchAt.isAfter(Instant.now())) {
-      throw new BadRequestException("This scheduled job can be dispatched closer to the service time");
-    }
+
 
     CreateTaskRequest template;
     try {

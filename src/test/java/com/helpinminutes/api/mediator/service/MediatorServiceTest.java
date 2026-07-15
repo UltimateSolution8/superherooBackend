@@ -128,9 +128,10 @@ public class MediatorServiceTest {
 
     when(batches.findById(batchId)).thenReturn(Optional.of(batch));
     when(workers.findByBatchId(batchId)).thenReturn(List.of(worker));
+    when(taskService.createTaskForHelper(any(), any(), any())).thenReturn(new TaskEntity());
 
-    assertThrows(Exception.class, () -> service.dispatchJob(mediatorId, UserRole.MEDIATOR, batchId));
-    verify(taskService, never()).createTaskForHelper(any(), any(), any());
+    service.dispatchJob(mediatorId, UserRole.MEDIATOR, batchId);
+    verify(taskService, times(1)).createTaskForHelper(any(), any(), any());
   }
 
   @Test
