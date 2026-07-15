@@ -174,48 +174,15 @@ public class TaskController {
       );
     }
 
-    java.util.List<BatchDtos.CreateItem> lines = new java.util.ArrayList<>();
-    for (int i = 0; i < helperCount; i++) {
-      lines.add(new BatchDtos.CreateItem(
-          req.title(),
-          req.description(),
-          req.urgency(),
-          req.timeMinutes(),
-          req.budgetPaise(),
-          req.lat(),
-          req.lng(),
-          req.addressText(),
-          req.scheduledAt(),
-          "bulk-" + (i + 1),
-          3));
-    }
-
-    String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
-    BatchDtos.CreateResponse created = batches.create(
-        principal.userId(),
-        UserRole.BUYER,
-        new BatchDtos.CreateRequest(
-            safeTitle + " (Bulk x" + helperCount + ")",
-            "Created from buyer app bulk request",
-            req.scheduledAt(),
-            null,
-            null,
-            "buyer-bulk-" + principal.userId() + "-" + System.currentTimeMillis(),
-            lines));
-
-    java.util.List<UUID> taskIds = batches.getItems(principal.userId(), UserRole.BUYER, created.batchId()).stream()
-        .map(BatchDtos.BatchItemResponse::taskId)
-        .filter(java.util.Objects::nonNull)
-        .toList();
-
+    var pendingBatch = batches.createPendingMediatorBatch(principal.userId(), req);
     return new CreateBulkTaskResponse(
-        created.batchId(),
+        pendingBatch.getId(),
         helperCount,
-        created.createdCount(),
-        created.failedCount(),
-        taskIds,
-        null,
-        null);
+        0,
+        0,
+        java.util.List.of(),
+        pendingBatch.getBatchStartOtp(),
+        pendingBatch.getBatchCompletionOtp());
   }
 
   @PostMapping("/{taskId}/accept")

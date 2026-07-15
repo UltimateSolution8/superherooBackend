@@ -275,6 +275,11 @@ public class BookingBatchService {
         ? mediatorWorkers.findByBatchId(batch.getId()).size()
         : batchItems.size();
 
+    UserEntity buyer = users.findById(batch.getCreatedByUserId()).orElse(null);
+    String buyerName = buyer != null ? buyer.getDisplayName() : null;
+    String buyerPhone = buyer != null ? buyer.getPhone() : null;
+    String buyerEmail = buyer != null ? buyer.getEmail() : null;
+
     return new BatchDtos.BatchSummaryResponse(
         batch.getId(),
         batch.getTitle(),
@@ -290,7 +295,12 @@ public class BookingBatchService {
         batch.getAuditNotes(),
         batch.getBatchStartOtp(),
         batch.getBatchCompletionOtp(),
-        byStatus);
+        byStatus,
+        batch.getCreatedByUserId(),
+        buyerName,
+        buyerPhone,
+        buyerEmail,
+        batch.getTaskTemplateJson());
   }
 
   @Transactional(readOnly = true)
@@ -334,6 +344,36 @@ public class BookingBatchService {
     batch.setAuditedAt(Instant.now());
     batches.save(batch);
     writeEvent(batch.getId(), "MEDIATOR_AUDIT_HOLD", "{\"status\":\"ON_HOLD\"}");
+    return getSummaryForAdmin(batch);
+  }
+
+  @Transactional
+  public BatchDtos.BatchSummaryResponse rejectMediatorBatch(UUID adminId, UUID batchId, String notes) {
+    BookingBatchEntity batch = batches.findById(batchId).orElseThrow(() -> new NotFoundException("Batch not found"));
+    if (batch.getStatus() != BookingBatchStatus.PENDING_AUDIT && batch.getStatus() != BookingBatchStatus.ON_HOLD) {
+      throw new BadRequestException("Only pending audit or on-hold mediator batches can be rejected");
+    }
+    batch.setStatus(BookingBatchStatus.CANCELLED);
+    batch.setAuditNotes(blankToNull(notes) == null ? "Rejected by Customer Care" : notes.trim());
+    batch.setAuditedByUserId(adminId);
+    batch.setAuditedAt(Instant.now());
+    batches.save(batch);
+    
+    List<BookingBatchItemEntity> batchItems = items.findByBatchIdOrderByLineNoAsc(batchId);
+    for (BookingBatchItemEntity item : batchItems) {
+      if (item.getTaskId() != null) {
+        try {
+          TaskEntity task = taskRepo.findById(item.getTaskId()).orElse(null);
+          if (task != null && canCancel(task)) {
+            tasks.cancelTask(adminId, UserRole.ADMIN, task.getId(), "Bulk request rejected during audit: " + batch.getAuditNotes());
+          }
+        } catch (Exception e) {
+          // ignore or log
+        }
+      }
+    }
+    
+    writeEvent(batch.getId(), "MEDIATOR_AUDIT_REJECTED", "{\"status\":\"CANCELLED\"}");
     return getSummaryForAdmin(batch);
   }
 
@@ -456,6 +496,12 @@ public class BookingBatchService {
     Map<String, Long> byStatus = new LinkedHashMap<>();
     byStatus.put("FAILED", batchItems.stream().filter(i -> i.getLineStatus() == BookingBatchLineStatus.FAILED).count());
     int addedWorkerCount = mediatorWorkers.findByBatchId(batch.getId()).size();
+
+    UserEntity buyer = users.findById(batch.getCreatedByUserId()).orElse(null);
+    String buyerName = buyer != null ? buyer.getDisplayName() : null;
+    String buyerPhone = buyer != null ? buyer.getPhone() : null;
+    String buyerEmail = buyer != null ? buyer.getEmail() : null;
+
     return new BatchDtos.BatchSummaryResponse(
         batch.getId(),
         batch.getTitle(),
@@ -471,7 +517,12 @@ public class BookingBatchService {
         batch.getAuditNotes(),
         batch.getBatchStartOtp(),
         batch.getBatchCompletionOtp(),
-        byStatus);
+        byStatus,
+        batch.getCreatedByUserId(),
+        buyerName,
+        buyerPhone,
+        buyerEmail,
+        batch.getTaskTemplateJson());
   }
 
   private BookingBatchStatus parseAuditStatus(String raw) {

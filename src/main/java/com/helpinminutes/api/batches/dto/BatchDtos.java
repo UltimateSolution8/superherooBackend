@@ -92,7 +92,12 @@ public class BatchDtos {
       String auditNotes,
       String batchStartOtp,
       String batchCompletionOtp,
-      Map<String, Long> byTaskStatus
+      Map<String, Long> byTaskStatus,
+      UUID buyerId,
+      String buyerName,
+      String buyerPhone,
+      String buyerEmail,
+      String taskTemplateJson
   ) {}
 
   public record BatchAuditActionRequest(

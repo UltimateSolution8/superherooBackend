@@ -609,6 +609,8 @@ public class MediatorService {
         workerCount,
         batch.getCreatedAt(),
         batch.getScheduledDispatchAt(),
+        batch.getScheduledWindowStart(),
+        batch.getScheduledWindowEnd(),
         batch.getMediatorAcceptedAt(),
         batch.getMediatorNotes(),
         batch.getMediatorCommissionPaise(),
@@ -668,8 +670,11 @@ public class MediatorService {
 
   private void verifyOtp(String expected, String provided, String message) {
     if (expected == null || expected.isBlank()) return;
-    if (provided == null || provided.isBlank() || !expected.equals(provided.trim())) {
+    if (provided == null || provided.isBlank()) {
       throw new BadRequestException(message);
+    }
+    if (!expected.equals(provided.trim())) {
+      throw new BadRequestException("Incorrect OTP");
     }
   }
 }

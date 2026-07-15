@@ -21,6 +21,8 @@ public class MediatorDtos {
       int addedWorkerCount,
       Instant createdAt,
       Instant scheduledDispatchAt,
+      Instant scheduledWindowStart,
+      Instant scheduledWindowEnd,
       Instant mediatorAcceptedAt,
       String mediatorNotes,
       Long mediatorCommissionPaise,

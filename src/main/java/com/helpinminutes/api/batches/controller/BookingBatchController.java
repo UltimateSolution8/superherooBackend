@@ -116,4 +116,15 @@ public class BookingBatchController {
     }
     return service.holdMediatorBatch(principal.userId(), batchId, req == null ? null : req.notes());
   }
+
+  @PostMapping("/{batchId}/mediator-audit/reject")
+  public BatchDtos.BatchSummaryResponse rejectMediatorBatch(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @Valid @RequestBody(required = false) BatchDtos.BatchAuditActionRequest req) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
+    }
+    return service.rejectMediatorBatch(principal.userId(), batchId, req == null ? null : req.notes());
+  }
 }

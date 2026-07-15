@@ -224,96 +224,52 @@ public class TaskService {
         tasks.save(t);
       });
     } else {
-      // Bulk Crew Booking occurrence
-      if (rec.getHelperCount() > 9) {
-        if (bookingBatches.existsBySourceRecurringTaskIdAndScheduledWindowStartAndStatusNot(
-            rec.getId(), scheduledAt, BookingBatchStatus.CANCELLED)) {
-          return;
-        }
-        // Route to Mediator
-        com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
-        batch.setId(UUID.randomUUID());
-        batch.setCreatedByUserId(rec.getBuyerId());
-        batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
-        batch.setNotes("Created from recurring bulk task config (Mediator Routed): " + rec.getId());
-        batch.setSourceRecurringTaskId(rec.getId());
-        batch.setScheduledWindowStart(scheduledAt);
-        batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
-        batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.PENDING_AUDIT);
-        batch.setRequestedHelperCount(rec.getHelperCount());
-        batch.setBatchStartOtp(generateOtp());
-        batch.setBatchCompletionOtp(generateOtp());
-
-        try {
-          com.helpinminutes.api.tasks.dto.CreateTaskRequest template = new com.helpinminutes.api.tasks.dto.CreateTaskRequest(
-              rec.getTitle(),
-              rec.getDescription(),
-              rec.getUrgency(),
-              rec.getTimeMinutes(),
-              rec.getBudgetPaise(),
-              rec.getLat(),
-              rec.getLng(),
-              rec.getAddressText(),
-              scheduledAt,
-              null
-          );
-          batch.setTaskTemplateJson(objectMapper.writeValueAsString(template));
-        } catch (Exception e) {
-          throw new RuntimeException("Failed to serialize task template metadata", e);
-        }
-
-        bookingBatches.save(batch);
-
-        try {
-          realtime.publish("mediator.job_pending_audit", java.util.Map.of(
-              "batchId", batch.getId().toString(),
-              "buyerId", rec.getBuyerId().toString(),
-              "helperCount", rec.getHelperCount()
-          ));
-        } catch (Exception ignored) {}
-      } else {
-        // Standard bulk booking (<= 9 helpers) which is marked COMPLETED immediately and creates individual tasks.
-        com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
-        batch.setId(UUID.randomUUID());
-        batch.setCreatedByUserId(rec.getBuyerId());
-        batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
-        batch.setNotes("Created from recurring bulk task config: " + rec.getId());
-        batch.setSourceRecurringTaskId(rec.getId());
-        batch.setScheduledWindowStart(scheduledAt);
-        batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
-        batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.COMPLETED);
-        bookingBatches.save(batch);
-
-        for (int i = 0; i < rec.getHelperCount(); i++) {
-          var single = createTask(rec.getBuyerId(), new CreateTaskRequest(
-              rec.getTitle(),
-              rec.getDescription(),
-              rec.getUrgency(),
-              rec.getTimeMinutes(),
-              rec.getBudgetPaise(),
-              rec.getLat(),
-              rec.getLng(),
-              rec.getAddressText(),
-              scheduledAt,
-              null
-          ), TaskCreateOptions.defaultOptions());
-          createdTaskIds.add(single.taskId());
-
-          tasks.findById(single.taskId()).ifPresent(t -> {
-            t.setRecurringTaskId(rec.getId());
-            tasks.save(t);
-          });
-
-          com.helpinminutes.api.batches.model.BookingBatchItemEntity item = new com.helpinminutes.api.batches.model.BookingBatchItemEntity();
-          item.setId(UUID.randomUUID());
-          item.setBatchId(batch.getId());
-          item.setTaskId(single.taskId());
-          item.setLineNo(i + 1);
-          item.setPriority(3);
-          item.setLineStatus(com.helpinminutes.api.batches.model.BookingBatchLineStatus.CREATED);
-          bookingBatchItems.save(item);
-        }
+      // Bulk crew occurrences are represented as one mediator-managed batch.
+      // This avoids showing duplicate copies of the same request to partners.
+      if (bookingBatches.existsBySourceRecurringTaskIdAndScheduledWindowStartAndStatusNot(
+          rec.getId(), scheduledAt, BookingBatchStatus.CANCELLED)) {
+        return;
       }
+      com.helpinminutes.api.batches.model.BookingBatchEntity batch = new com.helpinminutes.api.batches.model.BookingBatchEntity();
+      batch.setId(UUID.randomUUID());
+      batch.setCreatedByUserId(rec.getBuyerId());
+      batch.setTitle(rec.getTitle() + " (Bulk x" + rec.getHelperCount() + ")");
+      batch.setNotes("Created from recurring bulk task config (Mediator Routed): " + rec.getId());
+      batch.setSourceRecurringTaskId(rec.getId());
+      batch.setScheduledWindowStart(scheduledAt);
+      batch.setScheduledWindowEnd(scheduledAt.plus(java.time.Duration.ofMinutes(rec.getTimeMinutes())));
+      batch.setStatus(com.helpinminutes.api.batches.model.BookingBatchStatus.PENDING_AUDIT);
+      batch.setRequestedHelperCount(rec.getHelperCount());
+      batch.setBatchStartOtp(generateOtp());
+      batch.setBatchCompletionOtp(generateOtp());
+
+      try {
+        com.helpinminutes.api.tasks.dto.CreateTaskRequest template = new com.helpinminutes.api.tasks.dto.CreateTaskRequest(
+            rec.getTitle(),
+            rec.getDescription(),
+            rec.getUrgency(),
+            rec.getTimeMinutes(),
+            rec.getBudgetPaise(),
+            rec.getLat(),
+            rec.getLng(),
+            rec.getAddressText(),
+            scheduledAt,
+            null
+        );
+        batch.setTaskTemplateJson(objectMapper.writeValueAsString(template));
+      } catch (Exception e) {
+        throw new RuntimeException("Failed to serialize task template metadata", e);
+      }
+
+      bookingBatches.save(batch);
+
+      try {
+        realtime.publish("mediator.job_pending_audit", java.util.Map.of(
+            "batchId", batch.getId().toString(),
+            "buyerId", rec.getBuyerId().toString(),
+            "helperCount", rec.getHelperCount()
+        ));
+      } catch (Exception ignored) {}
     }
   }
 
@@ -587,8 +543,11 @@ public class TaskService {
     if (newStatus == TaskStatus.STARTED) {
       String expected = task.getArrivalOtp();
       if (expected != null && !expected.isBlank()) {
-        if (otp == null || otp.isBlank() || !expected.equals(otp.trim())) {
+        if (otp == null || otp.isBlank()) {
           throw new BadRequestException("Arrival OTP is required to start work");
+        }
+        if (!expected.equals(otp.trim())) {
+          throw new BadRequestException("Incorrect OTP");
         }
       }
     }
@@ -598,8 +557,11 @@ public class TaskService {
     if (newStatus == TaskStatus.COMPLETED) {
       String expected = task.getCompletionOtp();
       if (expected != null && !expected.isBlank()) {
-        if (otp == null || otp.isBlank() || !expected.equals(otp.trim())) {
+        if (otp == null || otp.isBlank()) {
           throw new BadRequestException("Completion OTP is required to finish work");
+        }
+        if (!expected.equals(otp.trim())) {
+          throw new BadRequestException("Incorrect OTP");
         }
       }
     }
