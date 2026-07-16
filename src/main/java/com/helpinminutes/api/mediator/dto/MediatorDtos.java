@@ -12,6 +12,7 @@ public class MediatorDtos {
   public record MediatorJobResponse(
       UUID batchId,
       UUID buyerId,
+      UUID mediatorId,
       String buyerName,
       String buyerPhone,
       String title,

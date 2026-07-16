@@ -600,6 +600,7 @@ public class MediatorService {
     return new MediatorJobResponse(
         batch.getId(),
         batch.getCreatedByUserId(),
+        batch.getMediatorId(),
         buyerName,
         buyerPhone,
         batch.getTitle(),
