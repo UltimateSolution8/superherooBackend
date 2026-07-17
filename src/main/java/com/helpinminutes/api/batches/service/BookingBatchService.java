@@ -23,6 +23,7 @@ import com.helpinminutes.api.tasks.model.TaskUrgency;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
 import com.helpinminutes.api.tasks.service.TaskModerationService;
+import com.helpinminutes.api.tasks.service.CrewSchedulingPolicy;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
@@ -457,8 +458,8 @@ public class BookingBatchService {
     if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
       errors.add("location outside service area (Hyderabad only)");
     }
-    if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-      errors.add("scheduledAt must be at least 5 minutes in the future");
+    if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofHours(1)))) {
+      errors.add("scheduledAt must be at least 1 hour in the future");
     }
 
     if (line.title() != null && line.description() != null && line.title().trim().length() >= 3 && line.description().trim().length() >= 10) {
@@ -583,6 +584,7 @@ public class BookingBatchService {
 
   @Transactional
   public BookingBatchEntity createPendingMediatorBatch(UUID buyerId, CreateBulkTaskRequest req) {
+    CrewSchedulingPolicy.validate(req.helperCount(), req.scheduledAt(), Instant.now());
     BookingBatchEntity batch = new BookingBatchEntity();
     batch.setCreatedByUserId(buyerId);
     String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
@@ -591,6 +593,9 @@ public class BookingBatchService {
     batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
     batch.setRequestedHelperCount(req.helperCount());
     batch.setScheduledWindowStart(req.scheduledAt());
+    if (req.scheduledAt() != null) {
+      batch.setScheduledWindowEnd(req.scheduledAt().plus(java.time.Duration.ofMinutes(req.timeMinutes())));
+    }
     ensureBatchOtp(batch);
 
     try {

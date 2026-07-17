@@ -70,21 +70,21 @@ class BookingBatchServiceTest {
     }
 
     @Test
-    void validateLine_scheduledAtTwoMinutesAhead_returnsError() {
-        Instant soon = Instant.now().plus(2, ChronoUnit.MINUTES);
+    void validateLine_scheduledAtThirtyMinutesAhead_returnsError() {
+        Instant soon = Instant.now().plus(30, ChronoUnit.MINUTES);
         var errors = validate("Valid title here", "Valid description long enough",
                 "NORMAL", 30, 10000L, 17.3850, 78.4867, null, soon);
-        assertTrue(errors.stream().anyMatch(e -> e.contains("5 minutes")),
-                "scheduledAt < 5 min ahead should fail");
+        assertTrue(errors.stream().anyMatch(e -> e.contains("1 hour")),
+                "scheduledAt < 1 hour ahead should fail");
     }
 
     @Test
-    void validateLine_scheduledAtTenMinutesAhead_noScheduleError() {
-        Instant future = Instant.now().plus(10, ChronoUnit.MINUTES);
+    void validateLine_scheduledAtTwoHoursAhead_noScheduleError() {
+        Instant future = Instant.now().plus(2, ChronoUnit.HOURS);
         var errors = validate("Valid title here", "Valid description long enough",
                 "NORMAL", 30, 10000L, 17.3850, 78.4867, null, future);
         assertFalse(errors.stream().anyMatch(e -> e.contains("scheduledAt")),
-                "10-minute future scheduledAt should pass");
+                "2-hour future scheduledAt should pass");
     }
 
     @Test
@@ -136,8 +136,8 @@ class BookingBatchServiceTest {
                 boolean inHyd = lat >= 17.15 && lat <= 17.65 && lng >= 78.15 && lng <= 79.00;
                 if (!inHyd) errors.add("location outside service area (Hyderabad only)");
             }
-            if (scheduledAt != null && scheduledAt.isBefore(Instant.now().plus(5, ChronoUnit.MINUTES))) {
-                errors.add("scheduledAt must be at least 5 minutes in the future");
+            if (scheduledAt != null && scheduledAt.isBefore(Instant.now().plus(1, ChronoUnit.HOURS))) {
+                errors.add("scheduledAt must be at least 1 hour in the future");
             }
             return errors;
         } catch (Exception e) {

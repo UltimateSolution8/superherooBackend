@@ -2,6 +2,7 @@ package com.helpinminutes.api.mediator.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import com.helpinminutes.api.config.AppProperties;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.batches.model.BookingBatchEntity;
@@ -61,7 +62,7 @@ public class MediatorServiceTest {
 
     service = new MediatorService(
         batches, workers, helperMediatorLinks, users, helperProfiles, taskService, taskRepo,
-        objectMapper, realtime, pushNotifications, mock(PaymentRepository.class));
+        objectMapper, realtime, pushNotifications, mock(PaymentRepository.class), mock(AppProperties.class));
   }
 
   @Test

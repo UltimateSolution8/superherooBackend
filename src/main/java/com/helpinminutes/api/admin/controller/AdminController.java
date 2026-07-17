@@ -14,6 +14,10 @@ import com.helpinminutes.api.admin.dto.PendingHelperResponse;
 import com.helpinminutes.api.admin.dto.RejectHelperRequest;
 import com.helpinminutes.api.admin.service.AdminService;
 import com.helpinminutes.api.admin.dto.AdminSendNotificationRequest;
+import com.helpinminutes.api.admin.dto.AdminSendNotificationResponse;
+import com.helpinminutes.api.admin.dto.AdminActionCenterResponse;
+import com.helpinminutes.api.admin.dto.AdminNotificationStatusResponse;
+import com.helpinminutes.api.admin.service.AdminActionCenterService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.security.UserPrincipal;
@@ -48,12 +52,19 @@ public class AdminController {
   private final TaskService tasks;
   private final UserRepository users;
   private final PushNotificationService pushNotifications;
+  private final AdminActionCenterService actionCenter;
 
-  public AdminController(AdminService admin, TaskService tasks, UserRepository users, PushNotificationService pushNotifications) {
+  public AdminController(
+      AdminService admin,
+      TaskService tasks,
+      UserRepository users,
+      PushNotificationService pushNotifications,
+      AdminActionCenterService actionCenter) {
     this.admin = admin;
     this.tasks = tasks;
     this.users = users;
     this.pushNotifications = pushNotifications;
+    this.actionCenter = actionCenter;
   }
 
   private static void requireAdmin(UserPrincipal principal) {
@@ -367,10 +378,28 @@ public class AdminController {
   }
 
   @PostMapping("/notifications/send")
-  public void sendPushNotification(
+  public AdminSendNotificationResponse sendPushNotification(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminSendNotificationRequest req) {
+    requireFullAdmin(principal);
+    return pushNotifications.sendAdminNotification(req.role(), req.userIds(), req.title(), req.body());
+  }
+
+  @GetMapping("/notifications/action-center")
+  public AdminActionCenterResponse notificationActionCenter(
+      @AuthenticationPrincipal UserPrincipal principal) {
     requireAdmin(principal);
-    pushNotifications.sendAdminNotification(req.role(), req.userIds(), req.title(), req.body());
+    return actionCenter.get(principal.role());
+  }
+
+  @GetMapping("/notifications/status")
+  public AdminNotificationStatusResponse notificationStatus(
+      @AuthenticationPrincipal UserPrincipal principal) {
+    requireFullAdmin(principal);
+    boolean firebaseReady = pushNotifications.isReady();
+    return new AdminNotificationStatusResponse(
+        firebaseReady,
+        pushNotifications.registeredTokenCount(),
+        firebaseReady ? "FCM" : "EXPO_ONLY");
   }
 }

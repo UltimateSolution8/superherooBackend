@@ -22,6 +22,7 @@ import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.service.TaskMapper;
 import com.helpinminutes.api.tasks.service.TaskService;
+import com.helpinminutes.api.tasks.service.CrewSchedulingPolicy;
 import com.helpinminutes.api.users.model.UserRole;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -60,9 +61,7 @@ public class TaskController {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create tasks");
     }
-    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
-    }
+    CrewSchedulingPolicy.validate(1, req.scheduledAt(), java.time.Instant.now());
     if (req.scheduledAt() != null && req.scheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofDays(7)))) {
       throw new BadRequestException("Tasks can be scheduled at most 7 days in advance");
     }
@@ -130,19 +129,8 @@ public class TaskController {
       throw new BadRequestException("Tasks can be scheduled at most 7 days in advance");
     }
     int helperCount = req.helperCount() == null ? 1 : req.helperCount();
-    if (helperCount > 9) {
-      if (req.scheduledAt() == null) {
-        throw new BadRequestException("Bulk tasks with more than 9 helpers cannot be instant; they must be scheduled at least 1 hour in the future");
-      }
-      if (req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(59)))) {
-        throw new BadRequestException("Bulk tasks with more than 9 helpers must be scheduled at least 1 hour in the future");
-      }
-    } else {
-      if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-        throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
-      }
-    }
     if (helperCount <= 1) {
+      CrewSchedulingPolicy.validate(helperCount, req.scheduledAt(), java.time.Instant.now());
       var single = tasks.createTask(
           principal.userId(),
           new CreateTaskRequest(
@@ -166,7 +154,7 @@ public class TaskController {
           null);
     }
 
-    if (helperCount > 9) {
+    if (CrewSchedulingPolicy.isLargeCrew(helperCount)) {
       var pendingBatch = batches.createPendingMediatorBatch(principal.userId(), req);
       return new CreateBulkTaskResponse(
           pendingBatch.getId(),

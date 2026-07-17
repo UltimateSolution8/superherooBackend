@@ -12,5 +12,6 @@ public interface SupportTicketRepository extends JpaRepository<SupportTicketEnti
   List<SupportTicketEntity> findTop50ByStatusOrderByLastMessageAtDesc(SupportTicketStatus status);
 
   List<SupportTicketEntity> findTop50ByOrderByLastMessageAtDesc();
-}
 
+  long countByStatus(SupportTicketStatus status);
+}

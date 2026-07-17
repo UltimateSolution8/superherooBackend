@@ -46,6 +46,10 @@ public class PushTokenService {
     return tokens.findAllByUserIdIn(userIds);
   }
 
+  public long countRegisteredTokens() {
+    return tokens.count();
+  }
+
   @Transactional
   public long removeTokens(List<String> tokenValues) {
     if (tokenValues == null || tokenValues.isEmpty()) return 0L;
