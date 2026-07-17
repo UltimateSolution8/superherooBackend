@@ -16,7 +16,7 @@ public final class InputValidators {
   private InputValidators() {}
 
   public static String requireEmail(String email) {
-    return requireEmail(email, true);
+    return requireEmail(email, false);
   }
 
   public static String requireEmail(String email, boolean enforceProviderLimit) {
@@ -28,7 +28,7 @@ public final class InputValidators {
   }
 
   public static String normalizeEmailOrNull(String email) {
-    return normalizeEmailOrNull(email, true);
+    return normalizeEmailOrNull(email, false);
   }
 
   public static String normalizeEmailOrNull(String email, boolean enforceProviderLimit) {
