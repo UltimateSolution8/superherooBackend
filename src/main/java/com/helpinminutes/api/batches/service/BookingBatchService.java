@@ -304,6 +304,13 @@ public class BookingBatchService {
   }
 
   @Transactional(readOnly = true)
+  public List<BatchDtos.BatchSummaryResponse> listMyBatches(UUID buyerId) {
+    return batches.findByCreatedByUserIdOrderByCreatedAtDesc(buyerId).stream()
+        .map(batch -> getSummaryForAdmin(batch))
+        .toList();
+  }
+
+  @Transactional(readOnly = true)
   public List<BatchDtos.BatchSummaryResponse> listMediatorAuditQueue(String statusRaw) {
     BookingBatchStatus status = parseAuditStatus(statusRaw);
     return batches.findByStatus(status).stream()
@@ -329,6 +336,9 @@ public class BookingBatchService {
     batches.save(batch);
     writeEvent(batch.getId(), "MEDIATOR_AUDIT_APPROVED", "{\"status\":\"PENDING_MEDIATOR\"}");
     publishMediatorJobAvailable(batch);
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Bulk request approved", "Your bulk request has been verified. A mediator is being assigned.", batch.getId());
+    } catch (Exception ignored) {}
     return getSummaryForAdmin(batch);
   }
 
@@ -344,6 +354,9 @@ public class BookingBatchService {
     batch.setAuditedAt(Instant.now());
     batches.save(batch);
     writeEvent(batch.getId(), "MEDIATOR_AUDIT_HOLD", "{\"status\":\"ON_HOLD\"}");
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "More details needed", "Customer care needs more details for your bulk request.", batch.getId());
+    } catch (Exception ignored) {}
     return getSummaryForAdmin(batch);
   }
 
@@ -374,6 +387,9 @@ public class BookingBatchService {
     }
     
     writeEvent(batch.getId(), "MEDIATOR_AUDIT_REJECTED", "{\"status\":\"CANCELLED\"}");
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Bulk request update", "Your bulk request could not be processed. Please contact support.", batch.getId());
+    } catch (Exception ignored) {}
     return getSummaryForAdmin(batch);
   }
 

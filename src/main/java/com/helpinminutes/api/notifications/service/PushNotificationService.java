@@ -57,9 +57,9 @@ public class PushNotificationService {
       BookingBatchItemRepository batchItems,
       StringRedisTemplate redis,
       ObjectMapper mapper,
-      @Value("${FIREBASE_SERVICE_ACCOUNT_JSON:}") String serviceAccountJson,
-      @Value("${FIREBASE_SERVICE_ACCOUNT_BASE64:}") String serviceAccountBase64,
-      @Value("${FIREBASE_SERVICE_ACCOUNT_PATH:}") String serviceAccountPath) {
+      @Value("${firebase.service-account-json:${FIREBASE_SERVICE_ACCOUNT_JSON:}}") String serviceAccountJson,
+      @Value("${firebase.service-account-base64:${FIREBASE_SERVICE_ACCOUNT_BASE64:}}") String serviceAccountBase64,
+      @Value("${firebase.service-account-path:${FIREBASE_SERVICE_ACCOUNT_PATH:firebase-service-account.json}}") String serviceAccountPath) {
     this.tokens = tokens;
     this.users = users;
     this.batchItems = batchItems;
@@ -300,6 +300,44 @@ public class PushNotificationService {
           Map.of("type", "TASK_COMPLETED", "taskId", task.getId().toString()), "tasks");
     } catch (Exception e) {
       log.warn("Failed to send task completed notification for task {}", task.getId(), e);
+    }
+  }
+
+  public void notifyBuyerHelperArrived(UUID buyerId, TaskEntity task) {
+    if (buyerId == null || task == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      sendToTokens(task.getId(), buyerId, tokenList, "Superheroo arrived", "Your Superheroo has arrived at the task location.",
+          Map.of("type", "TASK_ARRIVED", "taskId", task.getId().toString()), "tasks");
+    } catch (Exception e) {
+      log.warn("Failed to send helper arrived notification for task {}", task.getId(), e);
+    }
+  }
+
+  public void notifyBuyerScheduledTaskActivated(UUID buyerId, TaskEntity task) {
+    if (buyerId == null || task == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      sendToTokens(task.getId(), buyerId, tokenList, "Scheduled booking started", "We are now searching for a Superheroo for your scheduled task.",
+          Map.of("type", "SCHEDULED_TASK_ACTIVATED", "taskId", task.getId().toString()), "tasks");
+    } catch (Exception e) {
+      log.warn("Failed to send scheduled activation notification for task {}", task.getId(), e);
     }
   }
 
@@ -598,6 +636,65 @@ public class PushNotificationService {
       }
       log.info("Admin notification completed: {}/{} users sent", sent, totalUsers);
     });
+  }
+
+  public void notifyBuyerBatchUpdate(UUID buyerId, String title, String body, UUID batchId) {
+    if (buyerId == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      sendToTokens(null, buyerId, tokenList, title, body,
+          Map.of("type", "BATCH_UPDATE", "batchId", batchId.toString()), "tasks");
+    } catch (Exception e) {
+      log.warn("Failed to send batch update notification for batch {}", batchId, e);
+    }
+  }
+
+  public void notifyBuyerScheduleSearchStarted(UUID buyerId, TaskEntity task) {
+    if (buyerId == null || task == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      sendToTokens(task.getId(), buyerId, tokenList, "Searching for your scheduled task",
+          "We are now looking for a Superheroo for \"" + (task.getTitle() == null ? "your task" : task.getTitle()) + "\".",
+          Map.of("type", "SCHEDULE_SEARCH_STARTED", "taskId", task.getId().toString()), "tasks");
+    } catch (Exception e) {
+      log.warn("Failed to send schedule search started notification for task {}", task.getId(), e);
+    }
+  }
+
+  public void notifyBuyerScheduleReminder(UUID buyerId, TaskEntity task, int minutesBefore) {
+    if (buyerId == null || task == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      sendToTokens(task.getId(), buyerId, tokenList, "Upcoming scheduled task",
+          "Your task \"" + (task.getTitle() == null ? "Scheduled task" : task.getTitle()) + "\" starts in " + minutesBefore + " minutes.",
+          Map.of("type", "SCHEDULE_REMINDER", "taskId", task.getId().toString()), "tasks");
+    } catch (Exception e) {
+      log.warn("Failed to send schedule reminder notification for task {}", task.getId(), e);
+    }
   }
 
   private record BulkMeta(UUID batchId, int totalCount) {

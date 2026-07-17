@@ -114,4 +114,26 @@ public class MediatorDtos {
       String kycStatus,
       String rating
   ) {}
+
+  public record LinkedHelperResponse(
+      UUID helperId,
+      String name,
+      String phoneMasked,
+      String photoUrl,
+      String kycStatus,
+      String rating,
+      boolean eligible,
+      boolean alreadyAdded
+  ) {}
+
+  public record LinkedMediatorResponse(
+      UUID mediatorId,
+      String name,
+      String phoneMasked,
+      Instant linkedAt
+  ) {}
+
+  public record LinkMediatorRequest(
+      @NotEmpty String phone
+  ) {}
 }

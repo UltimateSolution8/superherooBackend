@@ -92,6 +92,15 @@ public class MediatorController {
     return mediatorService.getWorkers(principal.userId(), principal.role(), batchId);
   }
 
+  @GetMapping("/jobs/{batchId}/linked-helpers")
+  public List<LinkedHelperResponse> linkedHelpers(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @RequestParam(required = false) String query) {
+    checkRole(principal);
+    return mediatorService.listLinkedHelpers(principal.userId(), principal.role(), batchId, query);
+  }
+
   @PostMapping("/jobs/{batchId}/dispatch")
   public void dispatchJob(
       @AuthenticationPrincipal UserPrincipal principal,

@@ -1,6 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
 import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
@@ -23,16 +24,19 @@ public class TaskScheduleDispatchJob {
   private final TaskOfferRepository offers;
   private final MatchingService matching;
   private final RealtimePublisher realtime;
+  private final PushNotificationService pushNotifications;
 
   public TaskScheduleDispatchJob(
       TaskRepository tasks,
       TaskOfferRepository offers,
       MatchingService matching,
-      RealtimePublisher realtime) {
+      RealtimePublisher realtime,
+      PushNotificationService pushNotifications) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
     this.realtime = realtime;
+    this.pushNotifications = pushNotifications;
   }
 
   @Scheduled(fixedDelayString = "${TASK_SCHEDULE_DISPATCH_MS:60000}")
@@ -66,9 +70,17 @@ public class TaskScheduleDispatchJob {
         } catch (Exception re) {
           log.warn("Failed to publish real-time status change for task {}", task.getId(), re);
         }
+        try {
+          pushNotifications.notifyBuyerScheduledTaskActivated(task.getBuyerId(), task);
+        } catch (Exception pe) {
+          log.warn("Failed to notify buyer for scheduled task activation {}", task.getId(), pe);
+        }
 
         matching.dispatchOffers(task);
         dispatched++;
+        try {
+          pushNotifications.notifyBuyerScheduleSearchStarted(task.getBuyerId(), task);
+        } catch (Exception ignored) {}
       } catch (Exception e) {
         log.error("Failed to dispatch scheduled task {}", task.getId(), e);
       }

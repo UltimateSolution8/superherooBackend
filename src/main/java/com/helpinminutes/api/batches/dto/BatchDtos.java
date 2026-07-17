@@ -1,5 +1,6 @@
 package com.helpinminutes.api.batches.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
 import jakarta.validation.Valid;
@@ -75,7 +76,17 @@ public class BatchDtos {
       int createdCount,
       int failedCount,
       String status
-  ) {}
+  ) {
+    @JsonProperty("created")
+    public int created() {
+      return createdCount;
+    }
+
+    @JsonProperty("failed")
+    public int failed() {
+      return failedCount;
+    }
+  }
 
   public record BatchSummaryResponse(
       UUID id,
@@ -130,5 +141,10 @@ public class BatchDtos {
       String room,
       Map<String, Long> counters,
       List<BatchItemResponse> items
-  ) {}
+  ) {
+    @JsonProperty("socketRoom")
+    public String socketRoom() {
+      return room;
+    }
+  }
 }

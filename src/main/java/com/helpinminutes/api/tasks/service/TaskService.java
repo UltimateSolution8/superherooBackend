@@ -148,6 +148,7 @@ public class TaskService {
     validateRecurringRequest(req);
 
     RecurringTaskEntity rec = new RecurringTaskEntity();
+    rec.setId(UUID.randomUUID());
     rec.setBuyerId(buyerId);
     rec.setTitle(req.title().trim());
     rec.setDescription(req.description().trim());
@@ -592,6 +593,14 @@ public class TaskService {
             "helperId", helperId.toString(),
             "status", newStatus.name()));
 
+    if (newStatus == TaskStatus.ARRIVED) {
+      try {
+        pushNotifications.notifyBuyerHelperArrived(task.getBuyerId(), task);
+      } catch (Exception e) {
+        log.warn("Failed to send helper arrived notification for task {}", task.getId(), e);
+      }
+    }
+
     if (newStatus == TaskStatus.COMPLETED) {
       notificationQueue.enqueueTaskCompleted(task.getBuyerId(), task);
       invoiceEmail.sendInvoiceEmailAsync(task);
@@ -1021,15 +1030,27 @@ public class TaskService {
   }
 
   private void cancelPendingMediatorBatchesForRecurring(UUID recurringTaskId, String reason) {
+    cancelPendingMediatorBatchesForRecurring(recurringTaskId, reason, false);
+  }
+
+  private void cancelPendingMediatorBatchesForRecurring(UUID recurringTaskId, String reason, boolean detachFromRecurring) {
     java.util.List<BookingBatchStatus> cancellable = java.util.List.of(
         BookingBatchStatus.PENDING_AUDIT,
         BookingBatchStatus.ON_HOLD,
         BookingBatchStatus.PENDING_MEDIATOR,
         BookingBatchStatus.MEDIATOR_ACCEPTED,
         BookingBatchStatus.MEDIATOR_DISPATCHING);
-    for (var batch : bookingBatches.findBySourceRecurringTaskIdAndStatusIn(recurringTaskId, cancellable)) {
-      batch.setStatus(BookingBatchStatus.CANCELLED);
-      batch.setNotes(((batch.getNotes() == null || batch.getNotes().isBlank()) ? "" : batch.getNotes() + " | ") + reason);
+    var batchesToUpdate = detachFromRecurring
+        ? bookingBatches.findBySourceRecurringTaskId(recurringTaskId)
+        : bookingBatches.findBySourceRecurringTaskIdAndStatusIn(recurringTaskId, cancellable);
+    for (var batch : batchesToUpdate) {
+      if (cancellable.contains(batch.getStatus())) {
+        batch.setStatus(BookingBatchStatus.CANCELLED);
+        batch.setNotes(((batch.getNotes() == null || batch.getNotes().isBlank()) ? "" : batch.getNotes() + " | ") + reason);
+      }
+      if (detachFromRecurring) {
+        batch.setSourceRecurringTaskId(null);
+      }
       bookingBatches.save(batch);
     }
   }
@@ -1085,9 +1106,6 @@ public class TaskService {
       throw new ForbiddenException("Only the owner can delete this recurring task");
     }
 
-    // Delete the configuration
-    recurringTasks.delete(rec);
-
     // Cancel all future tasks associated with this recurring task that are not started (SEARCHING, ASSIGNED, and SCHEDULED_PENDING)
     java.util.List<TaskEntity> searchingTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.SEARCHING);
     java.util.List<TaskEntity> assignedTasks = tasks.findByRecurringTaskIdAndStatus(recurringTaskId, TaskStatus.ASSIGNED);
@@ -1123,7 +1141,8 @@ public class TaskService {
       tasks.save(task);
     }
 
-    cancelPendingMediatorBatchesForRecurring(recurringTaskId, "Recurring task configuration was deleted");
+    cancelPendingMediatorBatchesForRecurring(recurringTaskId, "Recurring task configuration was deleted", true);
+    recurringTasks.delete(rec);
   }
 
   @Transactional

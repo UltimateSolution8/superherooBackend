@@ -5,7 +5,6 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.service.HelperService;
 import com.helpinminutes.api.security.UserPrincipal;
-import com.helpinminutes.api.batches.dto.BatchDtos;
 import com.helpinminutes.api.batches.service.BookingBatchService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
@@ -63,6 +62,9 @@ public class TaskController {
     }
     if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
       throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+    }
+    if (req.scheduledAt() != null && req.scheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofDays(7)))) {
+      throw new BadRequestException("Tasks can be scheduled at most 7 days in advance");
     }
     var result = tasks.createTask(principal.userId(), req);
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
@@ -123,6 +125,9 @@ public class TaskController {
       @Valid @RequestBody CreateBulkTaskRequest req) {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create bulk tasks");
+    }
+    if (req.scheduledAt() != null && req.scheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofDays(7)))) {
+      throw new BadRequestException("Tasks can be scheduled at most 7 days in advance");
     }
     int helperCount = req.helperCount() == null ? 1 : req.helperCount();
     if (helperCount > 9) {

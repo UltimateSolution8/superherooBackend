@@ -14,9 +14,12 @@ import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import java.util.Optional;
 import com.helpinminutes.api.mediator.dto.MediatorDtos.*;
+import com.helpinminutes.api.mediator.model.HelperMediatorLinkEntity;
 import com.helpinminutes.api.mediator.model.MediatorAttendanceStatus;
 import com.helpinminutes.api.mediator.model.MediatorJobWorkerEntity;
+import com.helpinminutes.api.mediator.repo.HelperMediatorLinkRepository;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
+import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -25,6 +28,7 @@ import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
+import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Duration;
 import java.time.Instant;
@@ -40,30 +44,36 @@ import org.springframework.transaction.annotation.Transactional;
 public class MediatorService {
   private final BookingBatchRepository batches;
   private final MediatorJobWorkerRepository workers;
+  private final HelperMediatorLinkRepository helperMediatorLinks;
   private final UserRepository users;
   private final HelperProfileRepository helperProfiles;
   private final TaskService taskService;
   private final TaskRepository taskRepo;
   private final ObjectMapper objectMapper;
   private final RealtimePublisher realtime;
+  private final PushNotificationService pushNotifications;
 
   public MediatorService(
       BookingBatchRepository batches,
       MediatorJobWorkerRepository workers,
+      HelperMediatorLinkRepository helperMediatorLinks,
       UserRepository users,
       HelperProfileRepository helperProfiles,
       TaskService taskService,
       TaskRepository taskRepo,
       ObjectMapper objectMapper,
-      RealtimePublisher realtime) {
+      RealtimePublisher realtime,
+      PushNotificationService pushNotifications) {
     this.batches = batches;
     this.workers = workers;
+    this.helperMediatorLinks = helperMediatorLinks;
     this.users = users;
     this.helperProfiles = helperProfiles;
     this.taskService = taskService;
     this.taskRepo = taskRepo;
     this.objectMapper = objectMapper;
     this.realtime = realtime;
+    this.pushNotifications = pushNotifications;
   }
 
   @Transactional(readOnly = true)
@@ -132,6 +142,9 @@ public class MediatorService {
           "mediatorId", mediatorId.toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
+    } catch (Exception ignored) {}
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Mediator assigned", "A mediator has accepted your bulk request \"" + batch.getTitle() + "\".", batch.getId());
     } catch (Exception ignored) {}
 
     return toJobResponse(batch);
@@ -346,6 +359,101 @@ public class MediatorService {
     return res;
   }
 
+  @Transactional(readOnly = true)
+  public List<LinkedHelperResponse> listLinkedHelpers(UUID mediatorId, UserRole role, UUID batchId, String query) {
+    BookingBatchEntity batch = batches.findById(batchId)
+        .orElseThrow(() -> new NotFoundException("Job not found"));
+    validateOwnership(batch, mediatorId, role);
+
+    String q = query == null ? "" : query.trim().toLowerCase();
+    List<UUID> alreadyAdded = workers.findByBatchId(batchId).stream()
+        .map(MediatorJobWorkerEntity::getHelperId)
+        .toList();
+    List<LinkedHelperResponse> res = new ArrayList<>();
+    List<HelperMediatorLinkEntity> links = helperMediatorLinks.findByMediatorIdAndStatusOrderByCreatedAtDesc(mediatorId, "ACTIVE");
+    for (HelperMediatorLinkEntity link : links) {
+      UserEntity helper = users.findById(link.getHelperId()).orElse(null);
+      if (helper == null || helper.getRole() != UserRole.HELPER || helper.getStatus() != UserStatus.ACTIVE) {
+        continue;
+      }
+      HelperProfileEntity profile = helperProfiles.findById(helper.getId()).orElse(null);
+      String name = displayName(helper);
+      String phone = helper.getPhone();
+      if (!q.isBlank()) {
+        String haystack = ((name == null ? "" : name) + " " + (phone == null ? "" : phone)).toLowerCase();
+        if (!haystack.contains(q)) {
+          continue;
+        }
+      }
+      boolean approved = profile != null && profile.getKycStatus() == HelperKycStatus.APPROVED;
+      res.add(new LinkedHelperResponse(
+          helper.getId(),
+          name,
+          maskPhone(phone),
+          profile == null ? null : profile.getKycSelfieUrl(),
+          profile == null || profile.getKycStatus() == null ? null : profile.getKycStatus().name(),
+          profile == null || profile.getRating() == null ? null : profile.getRating().toPlainString(),
+          approved,
+          alreadyAdded.contains(helper.getId())
+      ));
+    }
+    return res;
+  }
+
+  @Transactional(readOnly = true)
+  public List<LinkedMediatorResponse> listLinkedMediators(UUID helperId) {
+    List<LinkedMediatorResponse> res = new ArrayList<>();
+    List<HelperMediatorLinkEntity> links = helperMediatorLinks.findByHelperIdAndStatusOrderByCreatedAtDesc(helperId, "ACTIVE");
+    for (HelperMediatorLinkEntity link : links) {
+      UserEntity mediator = users.findById(link.getMediatorId()).orElse(null);
+      if (mediator == null || mediator.getRole() != UserRole.MEDIATOR || mediator.getStatus() != UserStatus.ACTIVE) {
+        continue;
+      }
+      res.add(new LinkedMediatorResponse(
+          mediator.getId(),
+          displayName(mediator),
+          maskPhone(mediator.getPhone()),
+          link.getCreatedAt()
+      ));
+    }
+    return res;
+  }
+
+  @Transactional
+  public LinkedMediatorResponse linkMediatorForHelper(UUID helperId, LinkMediatorRequest req) {
+    UserEntity helper = users.findById(helperId)
+        .filter(u -> u.getRole() == UserRole.HELPER)
+        .orElseThrow(() -> new ForbiddenException("Only helpers can link mediators"));
+    if (helper.getStatus() != UserStatus.ACTIVE) {
+      throw new ForbiddenException("Helper account is not active");
+    }
+    String phone = req == null ? null : InputValidators.normalizeIndianPhoneOrNull(req.phone());
+    if (phone == null || phone.isBlank()) {
+      throw new BadRequestException("Enter a valid mediator phone number");
+    }
+    UserEntity mediator = users.findByPhoneAndRole(phone, UserRole.MEDIATOR)
+        .filter(u -> u.getStatus() == UserStatus.ACTIVE)
+        .orElseThrow(() -> new NotFoundException("No active mediator found with this phone number"));
+
+    HelperMediatorLinkEntity link = helperMediatorLinks.findByHelperIdAndMediatorId(helperId, mediator.getId())
+        .orElseGet(HelperMediatorLinkEntity::new);
+    link.setHelperId(helperId);
+    link.setMediatorId(mediator.getId());
+    link.setStatus("ACTIVE");
+    link.setCreatedBy("HELPER");
+    helperMediatorLinks.save(link);
+
+    return new LinkedMediatorResponse(mediator.getId(), displayName(mediator), maskPhone(mediator.getPhone()), link.getCreatedAt());
+  }
+
+  @Transactional
+  public void unlinkMediatorForHelper(UUID helperId, UUID mediatorId) {
+    users.findById(helperId)
+        .filter(u -> u.getRole() == UserRole.HELPER)
+        .orElseThrow(() -> new ForbiddenException("Only helpers can unlink mediators"));
+    helperMediatorLinks.deleteByHelperIdAndMediatorId(helperId, mediatorId);
+  }
+
   @Transactional
   public void dispatchJob(UUID userId, UserRole role, UUID batchId) {
     BookingBatchEntity batch = batches.findById(batchId)
@@ -404,6 +512,9 @@ public class MediatorService {
           "buyerId", batch.getCreatedByUserId().toString()
       ));
     } catch (Exception ignored) {}
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Crew dispatched", "Your helpers have been dispatched for \"" + batch.getTitle() + "\". Share the start OTP when work begins.", batch.getId());
+    } catch (Exception ignored) {}
   }
 
   @Transactional
@@ -423,6 +534,9 @@ public class MediatorService {
           "mediatorId", batch.getMediatorId().toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
+    } catch (Exception ignored) {}
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Work has started", "Your bulk request \"" + batch.getTitle() + "\" is now in progress.", batch.getId());
     } catch (Exception ignored) {}
   }
 
@@ -525,6 +639,9 @@ public class MediatorService {
           "mediatorId", batch.getMediatorId().toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
+    } catch (Exception ignored) {}
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Job completed", "Your bulk request \"" + batch.getTitle() + "\" has been completed.", batch.getId());
     } catch (Exception ignored) {}
   }
 
@@ -667,6 +784,13 @@ public class MediatorService {
   private String helperRating(UserEntity helper) {
     if (helper == null) return null;
     return helperProfiles.findById(helper.getId()).map(h -> h.getRating() == null ? null : h.getRating().toPlainString()).orElse(null);
+  }
+
+  private String maskPhone(String phone) {
+    if (phone == null || phone.isBlank()) return "";
+    String digits = phone.replaceAll("\\D", "");
+    if (digits.length() <= 4) return "••••";
+    return "••••••" + digits.substring(digits.length() - 4);
   }
 
   private void verifyOtp(String expected, String provided, String message) {
