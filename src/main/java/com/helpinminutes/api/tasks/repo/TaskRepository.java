@@ -1,7 +1,6 @@
 package com.helpinminutes.api.tasks.repo;
 
 import com.helpinminutes.api.tasks.model.TaskEntity;
-import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import java.time.Instant;
 import java.util.Collection;
@@ -12,8 +11,13 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
 
 public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select t from TaskEntity t where t.id = :taskId")
+    Optional<TaskEntity> findByIdForUpdate(@Param("taskId") UUID taskId);
     Optional<TaskEntity> findByIdAndBuyerId(UUID id, UUID buyerId);
 
     java.util.List<TaskEntity> findTop100ByOrderByCreatedAtDesc();
@@ -26,9 +30,6 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     java.util.List<TaskEntity> findTop50ByBuyerIdOrderByCreatedAtDesc(UUID buyerId);
 
     java.util.List<TaskEntity> findTop50ByAssignedHelperIdOrderByCreatedAtDesc(UUID helperId);
-
-    java.util.List<TaskEntity> findTop50ByEscrowStatusAndEscrowReleaseAtBefore(TaskEscrowStatus status,
-            Instant releaseAt);
 
     java.util.List<TaskEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
 

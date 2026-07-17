@@ -5,7 +5,6 @@ import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.service.HelperService;
 import com.helpinminutes.api.security.UserPrincipal;
-import com.helpinminutes.api.batches.dto.BatchDtos;
 import com.helpinminutes.api.batches.service.BookingBatchService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.CreateTaskResponse;
@@ -23,6 +22,7 @@ import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.service.TaskMapper;
 import com.helpinminutes.api.tasks.service.TaskService;
+import com.helpinminutes.api.tasks.service.CrewSchedulingPolicy;
 import com.helpinminutes.api.users.model.UserRole;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -61,8 +61,9 @@ public class TaskController {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create tasks");
     }
-    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+    CrewSchedulingPolicy.validate(1, req.scheduledAt(), java.time.Instant.now());
+    if (req.scheduledAt() != null && req.scheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofDays(7)))) {
+      throw new BadRequestException("Tasks can be scheduled at most 7 days in advance");
     }
     var result = tasks.createTask(principal.userId(), req);
     return new CreateTaskResponse(result.taskId(), result.offeredTo());
@@ -124,11 +125,12 @@ public class TaskController {
     if (principal.role() != UserRole.BUYER) {
       throw new ForbiddenException("Only buyers can create bulk tasks");
     }
-    if (req.scheduledAt() != null && req.scheduledAt().isBefore(java.time.Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-      throw new BadRequestException("Scheduled time must be at least 5 minutes in the future");
+    if (req.scheduledAt() != null && req.scheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofDays(7)))) {
+      throw new BadRequestException("Tasks can be scheduled at most 7 days in advance");
     }
     int helperCount = req.helperCount() == null ? 1 : req.helperCount();
     if (helperCount <= 1) {
+      CrewSchedulingPolicy.validate(helperCount, req.scheduledAt(), java.time.Instant.now());
       var single = tasks.createTask(
           principal.userId(),
           new CreateTaskRequest(
@@ -152,7 +154,7 @@ public class TaskController {
           null);
     }
 
-    if (helperCount > 9) {
+    if (CrewSchedulingPolicy.isLargeCrew(helperCount)) {
       var pendingBatch = batches.createPendingMediatorBatch(principal.userId(), req);
       return new CreateBulkTaskResponse(
           pendingBatch.getId(),
@@ -165,48 +167,15 @@ public class TaskController {
       );
     }
 
-    java.util.List<BatchDtos.CreateItem> lines = new java.util.ArrayList<>();
-    for (int i = 0; i < helperCount; i++) {
-      lines.add(new BatchDtos.CreateItem(
-          req.title(),
-          req.description(),
-          req.urgency(),
-          req.timeMinutes(),
-          req.budgetPaise(),
-          req.lat(),
-          req.lng(),
-          req.addressText(),
-          req.scheduledAt(),
-          "bulk-" + (i + 1),
-          3));
-    }
-
-    String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
-    BatchDtos.CreateResponse created = batches.create(
-        principal.userId(),
-        UserRole.BUYER,
-        new BatchDtos.CreateRequest(
-            safeTitle + " (Bulk x" + helperCount + ")",
-            "Created from buyer app bulk request",
-            req.scheduledAt(),
-            null,
-            null,
-            "buyer-bulk-" + principal.userId() + "-" + System.currentTimeMillis(),
-            lines));
-
-    java.util.List<UUID> taskIds = batches.getItems(principal.userId(), UserRole.BUYER, created.batchId()).stream()
-        .map(BatchDtos.BatchItemResponse::taskId)
-        .filter(java.util.Objects::nonNull)
-        .toList();
-
+    var pendingBatch = batches.createPendingMediatorBatch(principal.userId(), req);
     return new CreateBulkTaskResponse(
-        created.batchId(),
+        pendingBatch.getId(),
         helperCount,
-        created.createdCount(),
-        created.failedCount(),
-        taskIds,
-        null,
-        null);
+        0,
+        0,
+        java.util.List.of(),
+        pendingBatch.getBatchStartOtp(),
+        pendingBatch.getBatchCompletionOtp());
   }
 
   @PostMapping("/{taskId}/accept")

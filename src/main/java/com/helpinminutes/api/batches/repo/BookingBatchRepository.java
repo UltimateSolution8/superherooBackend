@@ -19,6 +19,8 @@ public interface BookingBatchRepository extends JpaRepository<BookingBatchEntity
   long countByStatus(com.helpinminutes.api.batches.model.BookingBatchStatus status);
   long countByMediatorIdAndStatus(UUID mediatorId, com.helpinminutes.api.batches.model.BookingBatchStatus status);
 
+  List<BookingBatchEntity> findByCreatedByUserIdOrderByCreatedAtDesc(UUID createdByUserId);
+
   @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
   @org.springframework.data.jpa.repository.Query("select b from BookingBatchEntity b where b.id = :id")
   Optional<BookingBatchEntity> findAndLockById(@org.springframework.data.repository.query.Param("id") UUID id);

@@ -24,6 +24,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
   private final int signupPerMin = intEnv("RATE_LIMIT_SIGNUP_PER_MIN", 6);
   private final int helperKycSignupPerMin = intEnv("RATE_LIMIT_HELPER_KYC_SIGNUP_PER_MIN", 4);
   private final int refreshPerMin = intEnv("RATE_LIMIT_REFRESH_PER_MIN", 30);
+  private final int paymentOrderPerMin = intEnv("RATE_LIMIT_PAYMENT_ORDER_PER_MIN", 20);
+  private final int paymentVerifyPerMin = intEnv("RATE_LIMIT_PAYMENT_VERIFY_PER_MIN", 40);
 
   @Override
   protected void doFilterInternal(
@@ -46,6 +48,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
       return false;
     }
     String path = request.getRequestURI();
+    String bucket = path;
     int limit = 0;
     if (path.endsWith("/api/v1/auth/otp/start")) {
       limit = otpStartPerMin;
@@ -59,13 +62,21 @@ public class RateLimitFilter extends OncePerRequestFilter {
       limit = signupPerMin;
     } else if (path.endsWith("/api/v1/auth/refresh")) {
       limit = refreshPerMin;
+    } else if (path.startsWith("/api/v1/payments/tasks/") && path.endsWith("/orders")) {
+      limit = paymentOrderPerMin;
+      bucket = "/api/v1/payments/tasks/*/orders";
+    } else if (path.startsWith("/api/v1/payments/batches/") && path.endsWith("/orders")) {
+      limit = paymentOrderPerMin;
+      bucket = "/api/v1/payments/batches/*/orders";
+    } else if (path.endsWith("/api/v1/payments/verify")) {
+      limit = paymentVerifyPerMin;
     } else {
       return false;
     }
     if (limit <= 0) return false;
 
     String ip = clientIp(request);
-    String key = path + ":" + ip;
+    String key = bucket + ":" + ip;
     long minute = Instant.now().getEpochSecond() / 60;
     Counter counter = counters.computeIfAbsent(key, k -> {
       Counter c = new Counter();

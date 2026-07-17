@@ -42,6 +42,15 @@ public class BookingBatchController {
     return service.create(principal.userId(), principal.role(), req);
   }
 
+  @GetMapping("/my")
+  public List<BatchDtos.BatchSummaryResponse> myBatches(
+      @AuthenticationPrincipal UserPrincipal principal) {
+    if (principal.role() != UserRole.BUYER) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Only buyers can list their batches");
+    }
+    return service.listMyBatches(principal.userId());
+  }
+
   @GetMapping("/{batchId}")
   public BatchDtos.BatchSummaryResponse summary(
       @AuthenticationPrincipal UserPrincipal principal,
@@ -115,5 +124,16 @@ public class BookingBatchController {
       throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
     }
     return service.holdMediatorBatch(principal.userId(), batchId, req == null ? null : req.notes());
+  }
+
+  @PostMapping("/{batchId}/mediator-audit/reject")
+  public BatchDtos.BatchSummaryResponse rejectMediatorBatch(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID batchId,
+      @Valid @RequestBody(required = false) BatchDtos.BatchAuditActionRequest req) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
+    }
+    return service.rejectMediatorBatch(principal.userId(), batchId, req == null ? null : req.notes());
   }
 }

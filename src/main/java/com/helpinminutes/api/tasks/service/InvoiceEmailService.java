@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -81,6 +82,15 @@ public class InvoiceEmailService {
       helperMessage.setTo(recipientEmail.trim());
       helperMessage.setSubject("Invoice for Task: " + taskTitle);
       helperMessage.setText(htmlContent, true);
+
+      try {
+        ClassPathResource logoRes = new ClassPathResource("static/finallogo.png");
+        if (logoRes.exists()) {
+          helperMessage.addInline("logoImage", logoRes, "image/png");
+        }
+      } catch (Exception e) {
+        log.warn("Failed to attach inline logo: {}", e.getMessage());
+      }
 
       log.info("Sending asynchronously completed task invoice email to: {}", recipientEmail);
       mailSender.send(mimeMessage);
@@ -294,7 +304,7 @@ public class InvoiceEmailService {
         + "<body>\n"
         + "  <div class=\"container\">\n"
         + "    <div class=\"header\">\n"
-        + "      <div class=\"logo\">SUPERHEROO<span>O</span></div>\n"
+        + "      <img src=\"cid:logoImage\" alt=\"Superherooo Logo\" style=\"max-height: 48px; margin-bottom: 8px;\" />\n"
         + "      <div class=\"subtitle\">Your Everyday Hero</div>\n"
         + "    </div>\n"
         + "    <div class=\"content\">\n"
@@ -307,7 +317,7 @@ public class InvoiceEmailService {
         + "        </div>\n"
         + "        <div class=\"info-col right\">\n"
         + "          <div class=\"label\">Payment Status</div>\n"
-        + "          <div><span class=\"badge\">Paid</span></div>\n"
+        + "          <div><span class=\"badge\">Payment due</span></div>\n"
         + "        </div>\n"
         + "      </div>\n"
         + "\n"
@@ -343,14 +353,14 @@ public class InvoiceEmailService {
         + "      </table>\n"
         + "\n"
         + "      <div class=\"total-section\">\n"
-        + "        <div class=\"total-title\">Total Paid via Cash/UPI:</div>\n"
+        + "        <div class=\"total-title\">Task Amount:</div>\n"
         + "        <div class=\"total-amount\">₹" + String.format(Locale.US, "%.2f", amountRupees) + "</div>\n"
         + "      </div>\n"
         + "    </div>\n"
         + "    <div class=\"footer\">\n"
         + "      <p>Thank you for choosing Superherooo!</p>\n"
-        + "      <p>For support or queries, contact us at <a href=\"mailto:support@helpinminutes.app\">support@helpinminutes.app</a></p>\n"
-        + "      <p style=\"margin-top: 12px; font-size: 10px;\">&copy; 2026 Help In Minutes Private Limited. All rights reserved.</p>\n"
+        + "      <p>For support or queries, contact us at <a href=\"mailto:info@superherooo.com\">info@superherooo.com</a></p>\n"
+        + "      <p style=\"margin-top: 12px; font-size: 10px;\">&copy; 2026 Superherooo Pvt Ltd. All rights reserved.</p>\n"
         + "    </div>\n"
         + "  </div>\n"
         + "</body>\n"

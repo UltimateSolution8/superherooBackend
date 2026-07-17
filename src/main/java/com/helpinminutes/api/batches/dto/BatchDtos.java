@@ -1,5 +1,6 @@
 package com.helpinminutes.api.batches.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
 import jakarta.validation.Valid;
@@ -24,7 +25,7 @@ public class BatchDtos {
       @NotBlank @Size(max = 2000) String description,
       @NotNull TaskUrgency urgency,
       @NotNull @Min(1) @Max(480) Integer timeMinutes,
-      @NotNull @Min(0) Long budgetPaise,
+      @NotNull @Min(100) Long budgetPaise,
       @NotNull Double lat,
       @NotNull Double lng,
       @Size(max = 250) String addressText,
@@ -60,7 +61,7 @@ public class BatchDtos {
       @NotBlank @Size(max = 2000) String description,
       @NotNull TaskUrgency urgency,
       @NotNull @Min(1) @Max(480) Integer timeMinutes,
-      @NotNull @Min(0) Long budgetPaise,
+      @NotNull @Min(100) Long budgetPaise,
       @NotNull Double lat,
       @NotNull Double lng,
       @Size(max = 250) String addressText,
@@ -75,7 +76,17 @@ public class BatchDtos {
       int createdCount,
       int failedCount,
       String status
-  ) {}
+  ) {
+    @JsonProperty("created")
+    public int created() {
+      return createdCount;
+    }
+
+    @JsonProperty("failed")
+    public int failed() {
+      return failedCount;
+    }
+  }
 
   public record BatchSummaryResponse(
       UUID id,
@@ -92,7 +103,12 @@ public class BatchDtos {
       String auditNotes,
       String batchStartOtp,
       String batchCompletionOtp,
-      Map<String, Long> byTaskStatus
+      Map<String, Long> byTaskStatus,
+      UUID buyerId,
+      String buyerName,
+      String buyerPhone,
+      String buyerEmail,
+      String taskTemplateJson
   ) {}
 
   public record BatchAuditActionRequest(
@@ -125,5 +141,10 @@ public class BatchDtos {
       String room,
       Map<String, Long> counters,
       List<BatchItemResponse> items
-  ) {}
+  ) {
+    @JsonProperty("socketRoom")
+    public String socketRoom() {
+      return room;
+    }
+  }
 }

@@ -8,6 +8,10 @@ public final class ServiceArea {
   public static final double HYDERABAD_RADIUS_METERS = 55_000d;
 
   public static boolean isWithinHyderabad(double lat, double lng) {
-    return true; // Bypass restriction for testing/PAN India deployment
+    String enforced = System.getenv("SERVICE_AREA_ENFORCED");
+    if ("false".equalsIgnoreCase(enforced)) {
+      return true;
+    }
+    return GeoUtils.distanceMeters(lat, lng, HYDERABAD_LAT, HYDERABAD_LNG) <= HYDERABAD_RADIUS_METERS;
   }
 }

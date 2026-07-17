@@ -12,6 +12,7 @@ public class MediatorDtos {
   public record MediatorJobResponse(
       UUID batchId,
       UUID buyerId,
+      UUID mediatorId,
       String buyerName,
       String buyerPhone,
       String title,
@@ -21,6 +22,8 @@ public class MediatorDtos {
       int addedWorkerCount,
       Instant createdAt,
       Instant scheduledDispatchAt,
+      Instant scheduledWindowStart,
+      Instant scheduledWindowEnd,
       Instant mediatorAcceptedAt,
       String mediatorNotes,
       Long mediatorCommissionPaise,
@@ -89,6 +92,8 @@ public class MediatorDtos {
       long totalHelperPayoutPaise,
       long mediatorCommissionPaise,
       long companySharePaise,
+      String collectionMode,
+      String collectionStatus,
       List<WorkerPaymentDetail> workerPayments
   ) {}
 
@@ -110,5 +115,27 @@ public class MediatorDtos {
       String photoUrl,
       String kycStatus,
       String rating
+  ) {}
+
+  public record LinkedHelperResponse(
+      UUID helperId,
+      String name,
+      String phoneMasked,
+      String photoUrl,
+      String kycStatus,
+      String rating,
+      boolean eligible,
+      boolean alreadyAdded
+  ) {}
+
+  public record LinkedMediatorResponse(
+      UUID mediatorId,
+      String name,
+      String phoneMasked,
+      Instant linkedAt
+  ) {}
+
+  public record LinkMediatorRequest(
+      @NotEmpty String phone
   ) {}
 }

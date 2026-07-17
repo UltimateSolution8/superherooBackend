@@ -73,7 +73,7 @@ public class TaskRescheduleTest {
     task.setBuyerId(buyerId);
     task.setStatus(TaskStatus.SCHEDULED_PENDING);
 
-    Instant newTime = Instant.now().plus(1, ChronoUnit.HOURS);
+    Instant newTime = Instant.now().plus(2, ChronoUnit.HOURS);
 
     when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
     TaskResponse mockResponse = mock(TaskResponse.class);
@@ -97,7 +97,7 @@ public class TaskRescheduleTest {
     task.setBuyerId(buyerId);
     task.setStatus(TaskStatus.SCHEDULED_PENDING);
 
-    Instant newTime = Instant.now().plus(1, ChronoUnit.HOURS);
+    Instant newTime = Instant.now().plus(2, ChronoUnit.HOURS);
 
     when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
 
@@ -113,7 +113,7 @@ public class TaskRescheduleTest {
     task.setBuyerId(buyerId);
     task.setStatus(TaskStatus.STARTED);
 
-    Instant newTime = Instant.now().plus(1, ChronoUnit.HOURS);
+    Instant newTime = Instant.now().plus(2, ChronoUnit.HOURS);
 
     when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
 

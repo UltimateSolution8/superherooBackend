@@ -2,6 +2,7 @@ package com.helpinminutes.api.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -24,9 +25,15 @@ public class SecurityConfig {
         .csrf(csrf -> csrf.disable())
         .cors(Customizer.withDefaults())
         .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
+          response.setStatus(401);
+          response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+          response.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"Authentication required\"}");
+        }))
         .authorizeHttpRequests(auth -> auth
             .requestMatchers("/health", "/api/v1/health", "/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
             .requestMatchers("/api/v1/auth/**").permitAll()
+            .requestMatchers("/api/v1/payments/webhooks/razorpay").permitAll()
             .requestMatchers("/api/v1/skills").permitAll()
             .requestMatchers("/api/v1/tasks/unassigned").permitAll()
             .requestMatchers("/api/v1/kyc/recording/**").permitAll()

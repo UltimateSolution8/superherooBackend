@@ -78,6 +78,10 @@ public class BookingBatchEntity {
   @Column(name = "batch_completion_otp")
   private String batchCompletionOtp;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "payment_mode", length = 30)
+  private BatchPaymentMode paymentMode;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -272,5 +276,13 @@ public class BookingBatchEntity {
 
   public void setBatchCompletionOtp(String batchCompletionOtp) {
     this.batchCompletionOtp = batchCompletionOtp;
+  }
+
+  public BatchPaymentMode getPaymentMode() {
+    return paymentMode;
+  }
+
+  public void setPaymentMode(BatchPaymentMode paymentMode) {
+    this.paymentMode = paymentMode;
   }
 }

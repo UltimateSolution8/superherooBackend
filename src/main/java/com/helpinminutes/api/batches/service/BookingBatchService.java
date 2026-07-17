@@ -23,6 +23,7 @@ import com.helpinminutes.api.tasks.model.TaskUrgency;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.service.TaskService;
 import com.helpinminutes.api.tasks.service.TaskModerationService;
+import com.helpinminutes.api.tasks.service.CrewSchedulingPolicy;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
@@ -119,15 +120,7 @@ public class BookingBatchService {
       }
     }
 
-    UserEntity buyer = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
-    long totalBudget = req.items().stream().mapToLong(i -> Math.max(0L, i.budgetPaise())).sum();
-    long balance = buyer.getDemoBalancePaise() == null ? 1_000_000L : buyer.getDemoBalancePaise();
-    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block batch booking
-    /*
-    if (totalBudget > balance) {
-      throw new BadRequestException("Insufficient buyer balance for batch escrow");
-    }
-    */
+    users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
 
     BookingBatchEntity batch = new BookingBatchEntity();
     batch.setCreatedByUserId(buyerId);
@@ -275,6 +268,11 @@ public class BookingBatchService {
         ? mediatorWorkers.findByBatchId(batch.getId()).size()
         : batchItems.size();
 
+    UserEntity buyer = users.findById(batch.getCreatedByUserId()).orElse(null);
+    String buyerName = buyer != null ? buyer.getDisplayName() : null;
+    String buyerPhone = buyer != null ? buyer.getPhone() : null;
+    String buyerEmail = buyer != null ? buyer.getEmail() : null;
+
     return new BatchDtos.BatchSummaryResponse(
         batch.getId(),
         batch.getTitle(),
@@ -290,7 +288,19 @@ public class BookingBatchService {
         batch.getAuditNotes(),
         batch.getBatchStartOtp(),
         batch.getBatchCompletionOtp(),
-        byStatus);
+        byStatus,
+        batch.getCreatedByUserId(),
+        buyerName,
+        buyerPhone,
+        buyerEmail,
+        batch.getTaskTemplateJson());
+  }
+
+  @Transactional(readOnly = true)
+  public List<BatchDtos.BatchSummaryResponse> listMyBatches(UUID buyerId) {
+    return batches.findByCreatedByUserIdOrderByCreatedAtDesc(buyerId).stream()
+        .map(batch -> getSummaryForAdmin(batch))
+        .toList();
   }
 
   @Transactional(readOnly = true)
@@ -319,6 +329,9 @@ public class BookingBatchService {
     batches.save(batch);
     writeEvent(batch.getId(), "MEDIATOR_AUDIT_APPROVED", "{\"status\":\"PENDING_MEDIATOR\"}");
     publishMediatorJobAvailable(batch);
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Bulk request approved", "Your bulk request has been verified. A mediator is being assigned.", batch.getId());
+    } catch (Exception ignored) {}
     return getSummaryForAdmin(batch);
   }
 
@@ -334,6 +347,42 @@ public class BookingBatchService {
     batch.setAuditedAt(Instant.now());
     batches.save(batch);
     writeEvent(batch.getId(), "MEDIATOR_AUDIT_HOLD", "{\"status\":\"ON_HOLD\"}");
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "More details needed", "Customer care needs more details for your bulk request.", batch.getId());
+    } catch (Exception ignored) {}
+    return getSummaryForAdmin(batch);
+  }
+
+  @Transactional
+  public BatchDtos.BatchSummaryResponse rejectMediatorBatch(UUID adminId, UUID batchId, String notes) {
+    BookingBatchEntity batch = batches.findById(batchId).orElseThrow(() -> new NotFoundException("Batch not found"));
+    if (batch.getStatus() != BookingBatchStatus.PENDING_AUDIT && batch.getStatus() != BookingBatchStatus.ON_HOLD) {
+      throw new BadRequestException("Only pending audit or on-hold mediator batches can be rejected");
+    }
+    batch.setStatus(BookingBatchStatus.CANCELLED);
+    batch.setAuditNotes(blankToNull(notes) == null ? "Rejected by Customer Care" : notes.trim());
+    batch.setAuditedByUserId(adminId);
+    batch.setAuditedAt(Instant.now());
+    batches.save(batch);
+    
+    List<BookingBatchItemEntity> batchItems = items.findByBatchIdOrderByLineNoAsc(batchId);
+    for (BookingBatchItemEntity item : batchItems) {
+      if (item.getTaskId() != null) {
+        try {
+          TaskEntity task = taskRepo.findById(item.getTaskId()).orElse(null);
+          if (task != null && canCancel(task)) {
+            tasks.cancelTask(adminId, UserRole.ADMIN, task.getId(), "Bulk request rejected during audit: " + batch.getAuditNotes());
+          }
+        } catch (Exception e) {
+          // ignore or log
+        }
+      }
+    }
+    
+    writeEvent(batch.getId(), "MEDIATOR_AUDIT_REJECTED", "{\"status\":\"CANCELLED\"}");
+    try {
+      pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Bulk request update", "Your bulk request could not be processed. Please contact support.", batch.getId());
+    } catch (Exception ignored) {}
     return getSummaryForAdmin(batch);
   }
 
@@ -403,14 +452,14 @@ public class BookingBatchService {
     if (line.title() == null || line.title().trim().length() < 3) errors.add("title too short");
     if (line.description() == null || line.description().trim().length() < 10) errors.add("description too short");
     if (line.timeMinutes() == null || line.timeMinutes() < 1 || line.timeMinutes() > 480) errors.add("timeMinutes out of range");
-    if (line.budgetPaise() == null || line.budgetPaise() < 0) errors.add("budgetPaise invalid");
+    if (line.budgetPaise() == null || line.budgetPaise() < 100) errors.add("budgetPaise must be at least 100");
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
     if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
       errors.add("location outside service area (Hyderabad only)");
     }
-    if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofMinutes(5)))) {
-      errors.add("scheduledAt must be at least 5 minutes in the future");
+    if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofHours(1)))) {
+      errors.add("scheduledAt must be at least 1 hour in the future");
     }
 
     if (line.title() != null && line.description() != null && line.title().trim().length() >= 3 && line.description().trim().length() >= 10) {
@@ -456,6 +505,12 @@ public class BookingBatchService {
     Map<String, Long> byStatus = new LinkedHashMap<>();
     byStatus.put("FAILED", batchItems.stream().filter(i -> i.getLineStatus() == BookingBatchLineStatus.FAILED).count());
     int addedWorkerCount = mediatorWorkers.findByBatchId(batch.getId()).size();
+
+    UserEntity buyer = users.findById(batch.getCreatedByUserId()).orElse(null);
+    String buyerName = buyer != null ? buyer.getDisplayName() : null;
+    String buyerPhone = buyer != null ? buyer.getPhone() : null;
+    String buyerEmail = buyer != null ? buyer.getEmail() : null;
+
     return new BatchDtos.BatchSummaryResponse(
         batch.getId(),
         batch.getTitle(),
@@ -471,7 +526,12 @@ public class BookingBatchService {
         batch.getAuditNotes(),
         batch.getBatchStartOtp(),
         batch.getBatchCompletionOtp(),
-        byStatus);
+        byStatus,
+        batch.getCreatedByUserId(),
+        buyerName,
+        buyerPhone,
+        buyerEmail,
+        batch.getTaskTemplateJson());
   }
 
   private BookingBatchStatus parseAuditStatus(String raw) {
@@ -524,6 +584,7 @@ public class BookingBatchService {
 
   @Transactional
   public BookingBatchEntity createPendingMediatorBatch(UUID buyerId, CreateBulkTaskRequest req) {
+    CrewSchedulingPolicy.validate(req.helperCount(), req.scheduledAt(), Instant.now());
     BookingBatchEntity batch = new BookingBatchEntity();
     batch.setCreatedByUserId(buyerId);
     String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
@@ -532,6 +593,9 @@ public class BookingBatchService {
     batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
     batch.setRequestedHelperCount(req.helperCount());
     batch.setScheduledWindowStart(req.scheduledAt());
+    if (req.scheduledAt() != null) {
+      batch.setScheduledWindowEnd(req.scheduledAt().plus(java.time.Duration.ofMinutes(req.timeMinutes())));
+    }
     ensureBatchOtp(batch);
 
     try {
