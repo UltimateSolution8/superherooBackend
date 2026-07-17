@@ -11,5 +11,6 @@ import org.springframework.stereotype.Repository;
 public interface MediatorJobWorkerRepository extends JpaRepository<MediatorJobWorkerEntity, UUID> {
   List<MediatorJobWorkerEntity> findByBatchId(UUID batchId);
   Optional<MediatorJobWorkerEntity> findByBatchIdAndHelperId(UUID batchId, UUID helperId);
+  Optional<MediatorJobWorkerEntity> findByTaskId(UUID taskId);
   void deleteByBatchIdAndHelperId(UUID batchId, UUID helperId);
 }

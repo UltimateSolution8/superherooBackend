@@ -20,6 +20,9 @@ import com.helpinminutes.api.mediator.model.MediatorJobWorkerEntity;
 import com.helpinminutes.api.mediator.repo.HelperMediatorLinkRepository;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.payments.model.PaymentEntity;
+import com.helpinminutes.api.payments.model.PaymentStatus;
+import com.helpinminutes.api.payments.repo.PaymentRepository;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -52,6 +55,7 @@ public class MediatorService {
   private final ObjectMapper objectMapper;
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
+  private final PaymentRepository payments;
 
   public MediatorService(
       BookingBatchRepository batches,
@@ -63,7 +67,8 @@ public class MediatorService {
       TaskRepository taskRepo,
       ObjectMapper objectMapper,
       RealtimePublisher realtime,
-      PushNotificationService pushNotifications) {
+      PushNotificationService pushNotifications,
+      PaymentRepository payments) {
     this.batches = batches;
     this.workers = workers;
     this.helperMediatorLinks = helperMediatorLinks;
@@ -74,6 +79,7 @@ public class MediatorService {
     this.objectMapper = objectMapper;
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
+    this.payments = payments;
   }
 
   @Transactional(readOnly = true)
@@ -593,7 +599,8 @@ public class MediatorService {
 
     for (MediatorJobWorkerEntity w : jobWorkers) {
       if (w.getAttendanceStatus() == MediatorAttendanceStatus.PRESENT) {
-        w.setPaymentStatus("PAID");
+        // Completion creates an amount due; it is not a bank payout.
+        w.setPaymentStatus("PAYMENT_PENDING");
         w.setPaymentAmountPaise(helperWage);
         totalHelperPayout += helperWage;
 
@@ -655,6 +662,16 @@ public class MediatorService {
     }
 
     List<MediatorJobWorkerEntity> jobWorkers = workers.findByBatchId(batchId);
+    List<UUID> taskIds = jobWorkers.stream().map(MediatorJobWorkerEntity::getTaskId)
+        .filter(java.util.Objects::nonNull).toList();
+    List<PaymentEntity> taskPaymentRows = taskIds.isEmpty() ? List.of() : payments.findByTaskIdIn(taskIds);
+    Map<UUID, PaymentEntity> taskPayments = taskPaymentRows.stream()
+        .collect(java.util.stream.Collectors.toMap(
+            PaymentEntity::getTaskId,
+            payment -> payment,
+            (left, right) -> left.getCreatedAt().isAfter(right.getCreatedAt()) ? left : right));
+    PaymentEntity consolidated = payments.findTopByBatchIdOrderByCreatedAtDesc(batchId).orElse(null);
+    boolean consolidatedCollected = consolidated != null && isCollected(consolidated.getStatus());
     List<WorkerPaymentDetail> list = new ArrayList<>();
     long totalHelperPayout = 0;
 
@@ -666,12 +683,18 @@ public class MediatorService {
       long amt = w.getPaymentAmountPaise() != null ? w.getPaymentAmountPaise() : 0L;
       totalHelperPayout += amt;
 
+      PaymentEntity taskPayment = w.getTaskId() == null ? null : taskPayments.get(w.getTaskId());
+      String collectionStatus = w.getAttendanceStatus() != MediatorAttendanceStatus.PRESENT
+          ? "SKIPPED"
+          : consolidatedCollected
+              ? "COLLECTED_CONSOLIDATED"
+              : taskPayment != null && isCollected(taskPayment.getStatus()) ? "COLLECTED" : "PAYMENT_PENDING";
       list.add(new WorkerPaymentDetail(
           w.getHelperId(),
           name,
           phone,
           w.getAttendanceStatus().name(),
-          w.getPaymentStatus(),
+          collectionStatus,
           amt
       ));
     }
@@ -680,13 +703,24 @@ public class MediatorService {
     long companyShare = Math.round(totalHelperPayout * 0.05);
     long totalJobValue = totalHelperPayout + mediatorCommission + companyShare;
 
+    long collectedTaskCount = taskPayments.values().stream().filter(payment -> isCollected(payment.getStatus())).count();
+    String overallCollectionStatus = consolidatedCollected
+        ? "CAPTURED"
+        : collectedTaskCount == 0 ? "PENDING" : collectedTaskCount >= list.stream().filter(item -> item.paymentAmountPaise() > 0).count()
+            ? "CAPTURED" : "PARTIALLY_COLLECTED";
     return new PaymentBreakdownResponse(
         totalJobValue,
         totalHelperPayout,
         mediatorCommission,
         companyShare,
+        batch.getPaymentMode() == null ? null : batch.getPaymentMode().name(),
+        overallCollectionStatus,
         list
     );
+  }
+
+  private static boolean isCollected(PaymentStatus status) {
+    return status == PaymentStatus.CAPTURED || status == PaymentStatus.PARTIALLY_REFUNDED;
   }
 
   @Transactional(readOnly = true)

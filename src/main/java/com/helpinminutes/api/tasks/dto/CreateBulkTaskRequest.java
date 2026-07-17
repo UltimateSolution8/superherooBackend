@@ -15,7 +15,7 @@ public record CreateBulkTaskRequest(
     @NotBlank @Size(min = 10, max = 2000) String description,
     @NotNull TaskUrgency urgency,
     @NotNull @Min(1) @Max(480) Integer timeMinutes,
-    @NotNull @Min(0) Long budgetPaise,
+    @NotNull @Min(100) Long budgetPaise,
     @DecimalMin("-90.0") @DecimalMax("90.0") double lat,
     @DecimalMin("-180.0") @DecimalMax("180.0") double lng,
     @Size(max = 500) String addressText,

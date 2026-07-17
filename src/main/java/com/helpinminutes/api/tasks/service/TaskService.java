@@ -16,7 +16,6 @@ import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.dto.TaskRatingRequest;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
-import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
@@ -290,22 +289,6 @@ public class TaskService {
       throw new BadRequestException("Service is currently live only in Hyderabad");
     }
 
-    long cost = req.budgetPaise() == null ? 0L : Math.max(0L, req.budgetPaise());
-    Long balance = buyer.getDemoBalancePaise();
-    long current = balance == null ? 1_000_000L : balance;
-    if (balance == null) {
-      buyer.setDemoBalancePaise(current);
-      users.save(buyer);
-    }
-    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block task booking
-    /*
-    if (cost > current) {
-      throw new BadRequestException("Insufficient demo balance for escrow");
-    }
-    buyer.setDemoBalancePaise(current - cost);
-    users.save(buyer);
-    */
-
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
     task.setTitle(req.title().trim());
@@ -328,9 +311,6 @@ public class TaskService {
     } else {
       task.setStatus(TaskStatus.SEARCHING);
     }
-    task.setEscrowStatus(TaskEscrowStatus.HELD);
-    task.setEscrowAmountPaise(cost);
-    task.setEscrowHeldAt(now);
     task.setArrivalOtp(generateOtp());
     task.setCompletionOtp(generateOtp());
 
@@ -393,8 +373,6 @@ public class TaskService {
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
 
-    long cost = req.budgetPaise() == null ? 0L : Math.max(0L, req.budgetPaise());
-
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
     task.setAssignedHelperId(helperId);
@@ -410,9 +388,6 @@ public class TaskService {
     Instant now = Instant.now();
     task.setScheduledAt(req.scheduledAt() != null ? req.scheduledAt() : now);
     task.setStatus(TaskStatus.ASSIGNED);
-    task.setEscrowStatus(TaskEscrowStatus.HELD);
-    task.setEscrowAmountPaise(cost);
-    task.setEscrowHeldAt(now);
     task.setArrivalOtp(generateOtp());
     task.setCompletionOtp(generateOtp());
 
@@ -572,18 +547,7 @@ public class TaskService {
       task.setWorkStartedAt(Instant.now());
     }
 
-    if (newStatus == TaskStatus.COMPLETED && task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
-      if (task.getEscrowStatus() == TaskEscrowStatus.HELD) {
-        task.setEscrowStatus(TaskEscrowStatus.RELEASE_SCHEDULED);
-        task.setEscrowReleaseAt(Instant.now().plusSeconds(300));
-        task.setEscrowReleasedToHelperId(helperId);
-      }
-    }
     tasks.save(task);
-
-    if (newStatus == TaskStatus.COMPLETED && task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
-      scheduleEscrowRelease(task.getId(), helperId);
-    }
 
     realtime.publish(
         "task_status_changed",
@@ -672,22 +636,6 @@ public class TaskService {
     task.setCancelledByRole(role.name());
     task.setCancelledByUserId(userId);
     task.setCancelledAt(Instant.now());
-
-    if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
-      if (task.getEscrowStatus() == TaskEscrowStatus.HELD
-          || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
-        UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
-        if (buyer != null) {
-          long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
-          buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
-          users.save(buyer);
-        }
-        task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
-        task.setEscrowReleaseAt(null);
-        task.setEscrowReleasedAt(Instant.now());
-        task.setEscrowReleasedToHelperId(null);
-      }
-    }
 
     return taskMapper.toResponse(task, role == UserRole.BUYER);
   }
@@ -916,50 +864,6 @@ public class TaskService {
     return String.valueOf(code);
   }
 
-  private void scheduleEscrowRelease(UUID taskId, UUID helperId) {
-    java.util.concurrent.CompletableFuture.runAsync(() -> {
-      try {
-        Thread.sleep(300_000);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        return;
-      }
-      try {
-        TaskEntity task = tasks.findById(taskId).orElse(null);
-        if (task == null)
-          return;
-        if (task.getEscrowStatus() != TaskEscrowStatus.RELEASE_SCHEDULED)
-          return;
-        Long amount = task.getEscrowAmountPaise();
-        if (amount == null || amount <= 0)
-          return;
-        UUID payHelperId = task.getAssignedHelperId() != null ? task.getAssignedHelperId() : helperId;
-        if (payHelperId == null)
-          return;
-        UserEntity helper = users.findById(payHelperId).orElse(null);
-        if (helper == null)
-          return;
-
-        long current = helper.getDemoBalancePaise() == null ? 0L : helper.getDemoBalancePaise();
-        helper.setDemoBalancePaise(current + amount);
-        task.setEscrowStatus(TaskEscrowStatus.RELEASED);
-        task.setEscrowReleasedAt(Instant.now());
-        task.setEscrowReleasedToHelperId(payHelperId);
-        tasks.save(task);
-        users.save(helper);
-
-        realtime.publish(
-            "escrow_released",
-            java.util.Map.of(
-                "taskId", taskId.toString(),
-                "helperId", payHelperId.toString(),
-                "amountPaise", amount));
-      } catch (Exception ignored) {
-        // best-effort for demo
-      }
-    });
-  }
-
   @Transactional
   public TaskResponse extendTask(UUID buyerId, UUID taskId, int additionalTimeMinutes, long additionalBudgetPaise) {
     TaskEntity task = tasks.findById(taskId)
@@ -973,24 +877,8 @@ public class TaskService {
       throw new BadRequestException("Task can only be extended while in progress (STARTED status)");
     }
 
-    UserEntity buyer = users.findById(buyerId)
-        .orElseThrow(() -> new ForbiddenException("Buyer not found"));
-
-    Long balance = buyer.getDemoBalancePaise();
-    long current = balance == null ? 1_000_000L : balance;
-    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block extensions
-    /*
-    if (additionalBudgetPaise > current) {
-      throw new BadRequestException("Insufficient demo balance for extension");
-    }
-
-    buyer.setDemoBalancePaise(current - additionalBudgetPaise);
-    users.save(buyer);
-    */
-
     task.setTimeMinutes(task.getTimeMinutes() + additionalTimeMinutes);
     task.setBudgetPaise(task.getBudgetPaise() + additionalBudgetPaise);
-    task.setEscrowAmountPaise(task.getEscrowAmountPaise() + additionalBudgetPaise);
     tasks.save(task);
 
     try {
@@ -1123,21 +1011,6 @@ public class TaskService {
       task.setCancelledByUserId(buyerId);
       task.setCancelledAt(Instant.now());
 
-      if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
-        if (task.getEscrowStatus() == TaskEscrowStatus.HELD
-            || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
-          UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
-          if (buyer != null) {
-            long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
-            buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
-            users.save(buyer);
-          }
-          task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
-          task.setEscrowReleaseAt(null);
-          task.setEscrowReleasedAt(Instant.now());
-          task.setEscrowReleasedToHelperId(null);
-        }
-      }
       tasks.save(task);
     }
 
@@ -1171,21 +1044,6 @@ public class TaskService {
         task.setCancelledByUserId(buyerId);
         task.setCancelledAt(Instant.now());
 
-        if (task.getEscrowAmountPaise() != null && task.getEscrowAmountPaise() > 0) {
-          if (task.getEscrowStatus() == TaskEscrowStatus.HELD
-              || task.getEscrowStatus() == TaskEscrowStatus.RELEASE_SCHEDULED) {
-            UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
-            if (buyer != null) {
-              long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
-              buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
-              users.save(buyer);
-            }
-            task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
-            task.setEscrowReleaseAt(null);
-            task.setEscrowReleasedAt(Instant.now());
-            task.setEscrowReleasedToHelperId(null);
-          }
-        }
         tasks.save(task);
       }
     }

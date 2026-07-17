@@ -83,6 +83,13 @@ public class GlobalExceptionHandler {
         .body(ApiError.of("BAD_REQUEST", ex.getMessage(), Map.of("path", req.getRequestURI())));
   }
 
+  @ExceptionHandler(PaymentProviderException.class)
+  public ResponseEntity<ApiError> handlePaymentProvider(PaymentProviderException ex, HttpServletRequest req) {
+    log.error("Payment provider error processing {}: {}", req.getRequestURI(), ex.getMessage());
+    return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+        .body(ApiError.of("PAYMENT_PROVIDER_UNAVAILABLE", "Payment service is temporarily unavailable", Map.of("path", req.getRequestURI())));
+  }
+
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
   @ExceptionHandler(Exception.class)

@@ -12,7 +12,7 @@ public record CreateTaskRequest(
     @NotBlank String description,
     @NotNull TaskUrgency urgency,
     @NotNull @Min(1) @Max(1440) Integer timeMinutes,
-    @NotNull @Min(0) Long budgetPaise,
+    @NotNull @Min(100) Long budgetPaise,
     @Min(-90) @Max(90) double lat,
     @Min(-180) @Max(180) double lng,
     String addressText,

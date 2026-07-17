@@ -2,11 +2,8 @@ package com.helpinminutes.api.tasks.service;
 
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
-import com.helpinminutes.api.tasks.model.TaskEscrowStatus;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
-import com.helpinminutes.api.users.model.UserEntity;
-import com.helpinminutes.api.users.repo.UserRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -28,7 +25,6 @@ public class TaskStaleCleanupJob {
   private static final Logger log = LoggerFactory.getLogger(TaskStaleCleanupJob.class);
 
   private final TaskRepository tasks;
-  private final UserRepository users;
   private final SupportService supportService;
   private final Duration staleAssigned;
   private final Duration searchingTimeout;
@@ -36,13 +32,11 @@ public class TaskStaleCleanupJob {
 
   public TaskStaleCleanupJob(
       TaskRepository tasks,
-      UserRepository users,
       SupportService supportService,
       RealtimePublisher realtime,
       @Value("${TASK_ASSIGNED_STALE_MINUTES:20}") long staleAssignedMinutes,
       @Value("${TASK_SEARCH_TIMEOUT_SECONDS:120}") long searchingTimeoutSeconds) {
     this.tasks = tasks;
-    this.users = users;
     this.supportService = supportService;
     this.realtime = realtime;
     this.staleAssigned = Duration.ofMinutes(Math.max(5, staleAssignedMinutes));
@@ -65,7 +59,6 @@ public class TaskStaleCleanupJob {
       task.setCancelledByRole("SYSTEM");
       task.setCancelledByUserId(null);
       task.setCancelledAt(now);
-      refundEscrow(task, now);
       tasks.save(task);
       closed++;
     }
@@ -87,7 +80,6 @@ public class TaskStaleCleanupJob {
       task.setCancelledByRole("SYSTEM");
       task.setCancelledByUserId(null);
       task.setCancelledAt(now);
-      refundEscrow(task, now);
       tasks.save(task);
       closed++;
       try {
@@ -117,20 +109,4 @@ public class TaskStaleCleanupJob {
     }
   }
 
-  private void refundEscrow(TaskEntity task, Instant now) {
-    if (task.getEscrowAmountPaise() == null || task.getEscrowAmountPaise() <= 0) return;
-    if (task.getEscrowStatus() != TaskEscrowStatus.HELD && task.getEscrowStatus() != TaskEscrowStatus.RELEASE_SCHEDULED) {
-      return;
-    }
-    UserEntity buyer = users.findById(task.getBuyerId()).orElse(null);
-    if (buyer != null) {
-      long current = buyer.getDemoBalancePaise() == null ? 0L : buyer.getDemoBalancePaise();
-      buyer.setDemoBalancePaise(current + task.getEscrowAmountPaise());
-      users.save(buyer);
-    }
-    task.setEscrowStatus(TaskEscrowStatus.REFUNDED);
-    task.setEscrowReleaseAt(null);
-    task.setEscrowReleasedAt(now);
-    task.setEscrowReleasedToHelperId(null);
-  }
 }

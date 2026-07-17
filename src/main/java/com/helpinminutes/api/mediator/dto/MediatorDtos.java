@@ -92,6 +92,8 @@ public class MediatorDtos {
       long totalHelperPayoutPaise,
       long mediatorCommissionPaise,
       long companySharePaise,
+      String collectionMode,
+      String collectionStatus,
       List<WorkerPaymentDetail> workerPayments
   ) {}
 

@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 import org.springframework.stereotype.Component;
 
 import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
+import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 
 @Component
 public class TaskMapper {
@@ -23,12 +24,19 @@ public class TaskMapper {
     private final TaskRepository tasks;
     private final com.helpinminutes.api.common.TranslationService translationService;
     private final BookingBatchItemRepository bookingBatchItems;
+    private final MediatorJobWorkerRepository mediatorWorkers;
 
-    public TaskMapper(UserRepository users, TaskRepository tasks, com.helpinminutes.api.common.TranslationService translationService, BookingBatchItemRepository bookingBatchItems) {
+    public TaskMapper(
+            UserRepository users,
+            TaskRepository tasks,
+            com.helpinminutes.api.common.TranslationService translationService,
+            BookingBatchItemRepository bookingBatchItems,
+            MediatorJobWorkerRepository mediatorWorkers) {
         this.users = users;
         this.tasks = tasks;
         this.translationService = translationService;
         this.bookingBatchItems = bookingBatchItems;
+        this.mediatorWorkers = mediatorWorkers;
     }
 
     public TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
@@ -83,7 +91,9 @@ public class TaskMapper {
 
         UUID batchId = bookingBatchItems.findByTaskId(t.getId())
                 .map(com.helpinminutes.api.batches.model.BookingBatchItemEntity::getBatchId)
-                .orElse(null);
+                .orElseGet(() -> mediatorWorkers.findByTaskId(t.getId())
+                        .map(com.helpinminutes.api.mediator.model.MediatorJobWorkerEntity::getBatchId)
+                        .orElse(null));
 
         return new TaskResponse(
                 t.getId(),

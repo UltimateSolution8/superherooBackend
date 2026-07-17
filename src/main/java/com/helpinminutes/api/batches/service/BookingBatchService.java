@@ -119,15 +119,7 @@ public class BookingBatchService {
       }
     }
 
-    UserEntity buyer = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
-    long totalBudget = req.items().stream().mapToLong(i -> Math.max(0L, i.budgetPaise())).sum();
-    long balance = buyer.getDemoBalancePaise() == null ? 1_000_000L : buyer.getDemoBalancePaise();
-    // Demo balance bypass: since we are on Cash / UPI, wallet balance should not block batch booking
-    /*
-    if (totalBudget > balance) {
-      throw new BadRequestException("Insufficient buyer balance for batch escrow");
-    }
-    */
+    users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
 
     BookingBatchEntity batch = new BookingBatchEntity();
     batch.setCreatedByUserId(buyerId);
@@ -459,7 +451,7 @@ public class BookingBatchService {
     if (line.title() == null || line.title().trim().length() < 3) errors.add("title too short");
     if (line.description() == null || line.description().trim().length() < 10) errors.add("description too short");
     if (line.timeMinutes() == null || line.timeMinutes() < 1 || line.timeMinutes() > 480) errors.add("timeMinutes out of range");
-    if (line.budgetPaise() == null || line.budgetPaise() < 0) errors.add("budgetPaise invalid");
+    if (line.budgetPaise() == null || line.budgetPaise() < 100) errors.add("budgetPaise must be at least 100");
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
     if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {

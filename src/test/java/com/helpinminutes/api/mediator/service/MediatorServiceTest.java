@@ -15,6 +15,7 @@ import com.helpinminutes.api.mediator.model.MediatorJobWorkerEntity;
 import com.helpinminutes.api.mediator.repo.HelperMediatorLinkRepository;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.payments.repo.PaymentRepository;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -58,7 +59,9 @@ public class MediatorServiceTest {
     realtime = mock(RealtimePublisher.class);
     pushNotifications = mock(PushNotificationService.class);
 
-    service = new MediatorService(batches, workers, helperMediatorLinks, users, helperProfiles, taskService, taskRepo, objectMapper, realtime, pushNotifications);
+    service = new MediatorService(
+        batches, workers, helperMediatorLinks, users, helperProfiles, taskService, taskRepo,
+        objectMapper, realtime, pushNotifications, mock(PaymentRepository.class));
   }
 
   @Test

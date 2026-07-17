@@ -151,6 +151,11 @@ exotel:
   subdomain: ${EXOTEL_SUBDOMAIN:api.exotel.com}
   from: ${EXOTEL_FROM:}
 
+razorpay:
+  key-id: ${RAZORPAY_KEY_ID:}
+  key-secret: ${RAZORPAY_KEY_SECRET:}
+  webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+
 zego:
   appId: ${ZEGO_APP_ID:}
   serverSecret: ${ZEGO_SERVER_SECRET:}
