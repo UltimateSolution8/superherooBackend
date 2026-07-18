@@ -45,3 +45,16 @@
 ## Required for real bank credit
 
 The current integration captures real payment-gateway funds and releases application earnings after completion. Actual automated bank settlement to helpers requires Razorpay Route activation, one Linked Account per beneficiary, helper bank/KYC onboarding, transfer/reversal webhooks, and reconciliation. Never describe the internal `EARNED` state as a completed bank payout until Route reports the transfer as processed/settled.
+
+### Route production switch
+
+`V48__razorpay_route_settlement_readiness.sql` reserves audited linked-account and transfer records with unique idempotency keys, retry state, and provider references. This is intentionally data-plane readiness only: no transfer is initiated until Razorpay enables Route on the merchant account and the payout account is `ACTIVE`.
+
+Before enabling automatic settlement:
+
+1. Complete Razorpay Route merchant activation and webhook approval.
+2. Create and verify one Razorpay Linked Account for each helper; store only the provider ID and masked bank details.
+3. Add transfer, settlement, reversal, and failure webhook handlers with signature verification and event idempotency.
+4. Queue a `READY` transfer only after a prepaid payment is `CAPTURED`, the task is `COMPLETED`, and its fulfillment state is `EARNED`.
+5. Reconcile provider transfers daily; never infer bank settlement from the internal ledger.
+6. Keep `RAZORPAY_ROUTE_ENABLED=false` until sandbox, reversal, duplicate-webhook, timeout, and partial-refund tests pass.
