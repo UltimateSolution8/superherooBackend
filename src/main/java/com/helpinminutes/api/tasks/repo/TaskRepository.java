@@ -71,6 +71,28 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     @Query("select avg(t.helperRating) from TaskEntity t where t.buyerId = :buyerId and t.helperRating is not null")
     Double avgHelperRatingForBuyer(@Param("buyerId") UUID buyerId);
 
+    @Query("""
+            select t.assignedHelperId, count(t), avg(t.buyerRating)
+            from TaskEntity t
+            where t.assignedHelperId in :helperIds
+              and t.status = :status
+            group by t.assignedHelperId
+            """)
+    java.util.List<Object[]> findHelperStats(
+            @Param("helperIds") Collection<UUID> helperIds,
+            @Param("status") TaskStatus status);
+
+    @Query("""
+            select t.buyerId, count(t), avg(t.helperRating)
+            from TaskEntity t
+            where t.buyerId in :buyerIds
+              and t.status = :status
+            group by t.buyerId
+            """)
+    java.util.List<Object[]> findBuyerStats(
+            @Param("buyerIds") Collection<UUID> buyerIds,
+            @Param("status") TaskStatus status);
+
     java.util.List<TaskEntity> findTop100ByStatusAndUpdatedAtBefore(TaskStatus status, Instant updatedAt);
 
     java.util.List<TaskEntity> findTop100ByStatusAndCreatedAtBefore(TaskStatus status, Instant createdAt);
