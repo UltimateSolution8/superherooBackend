@@ -456,7 +456,7 @@ public class BookingBatchService {
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
     if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
-      errors.add("location outside service area (Hyderabad only)");
+      errors.add("location outside service area (India only)");
     }
     if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofHours(1)))) {
       errors.add("scheduledAt must be at least 1 hour in the future");

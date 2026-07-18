@@ -45,11 +45,11 @@ class BookingBatchServiceTest {
 
     @Test
     void validateLine_outsideHyderabad_returnsError() {
-        // Mumbai coordinates
+        // New York coordinates
         var errors = validate("Valid title here", "Valid description long enough",
-                "NORMAL", 30, 10000L, 19.0760, 72.8777, null, null);
+                "NORMAL", 30, 10000L, 40.7128, -74.0060, null, null);
         assertTrue(errors.stream().anyMatch(e -> e.contains("service area")),
-                "Location outside Hyderabad should fail");
+                "Location outside India should fail");
     }
 
     @Test
@@ -132,9 +132,9 @@ class BookingBatchServiceTest {
             if (lat == null || lat < -90 || lat > 90) errors.add("lat invalid");
             if (lng == null || lng < -180 || lng > 180) errors.add("lng invalid");
             if (lat != null && lng != null) {
-                // Hyderabad bounding box check
-                boolean inHyd = lat >= 17.15 && lat <= 17.65 && lng >= 78.15 && lng <= 79.00;
-                if (!inHyd) errors.add("location outside service area (Hyderabad only)");
+                // India bounding box check
+                boolean inIndia = lat >= 8.0 && lat <= 38.0 && lng >= 68.0 && lng <= 98.0;
+                if (!inIndia) errors.add("location outside service area (India only)");
             }
             if (scheduledAt != null && scheduledAt.isBefore(Instant.now().plus(1, ChronoUnit.HOURS))) {
                 errors.add("scheduledAt must be at least 1 hour in the future");

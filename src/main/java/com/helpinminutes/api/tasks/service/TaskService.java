@@ -122,7 +122,7 @@ public class TaskService {
   public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
     taskModerationService.validateTask(req.title(), req.description());
     if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
-      throw new BadRequestException("Service is currently live only in Hyderabad");
+      throw new BadRequestException("Service is currently live only in India");
     }
 
     LocalTime time;
@@ -284,7 +284,7 @@ public class TaskService {
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
 
     if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
-      throw new BadRequestException("Service is currently live only in Hyderabad");
+      throw new BadRequestException("Service is currently live only in India");
     }
 
     TaskEntity task = new TaskEntity();
