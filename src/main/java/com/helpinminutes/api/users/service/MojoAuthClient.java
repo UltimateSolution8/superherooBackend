@@ -38,8 +38,10 @@ public class MojoAuthClient {
   }
 
   boolean verifyEmailOtp(String stateId, String otp) throws Exception {
-    post(VERIFY_URI, Map.of("state_id", stateId, "otp", otp));
-    return true;
+    JsonNode body = post(VERIFY_URI, Map.of("state_id", stateId, "otp", otp));
+    // Current MojoAuth responses include authenticated=true. Preserve
+    // compatibility with older successful responses where this field is absent.
+    return !body.has("authenticated") || body.path("authenticated").asBoolean(false);
   }
 
   private JsonNode post(URI uri, Map<String, String> payload) throws Exception {
