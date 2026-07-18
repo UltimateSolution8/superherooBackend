@@ -27,6 +27,9 @@ import com.helpinminutes.api.tasks.service.CrewSchedulingPolicy;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.payments.service.PaymentLifecycleService;
+import com.helpinminutes.api.batches.model.BatchPaymentMode;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
@@ -59,6 +62,7 @@ public class BookingBatchService {
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
   private final MediatorJobWorkerRepository mediatorWorkers;
+  private final PaymentLifecycleService paymentLifecycle;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -72,7 +76,8 @@ public class BookingBatchService {
       TaskModerationService taskModerationService,
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
-      MediatorJobWorkerRepository mediatorWorkers) {
+      MediatorJobWorkerRepository mediatorWorkers,
+      PaymentLifecycleService paymentLifecycle) {
     this.batches = batches;
     this.items = items;
     this.events = events;
@@ -85,6 +90,7 @@ public class BookingBatchService {
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
     this.mediatorWorkers = mediatorWorkers;
+    this.paymentLifecycle = paymentLifecycle;
   }
 
   public BatchDtos.PreviewResponse preview(BatchDtos.PreviewRequest req) {
@@ -364,6 +370,7 @@ public class BookingBatchService {
     batch.setAuditedByUserId(adminId);
     batch.setAuditedAt(Instant.now());
     batches.save(batch);
+    paymentLifecycle.requestBatchRefund(batch);
     
     List<BookingBatchItemEntity> batchItems = items.findByBatchIdOrderByLineNoAsc(batchId);
     for (BookingBatchItemEntity item : batchItems) {
@@ -590,7 +597,14 @@ public class BookingBatchService {
     String safeTitle = req.title() == null || req.title().isBlank() ? "Bulk Request" : req.title().trim();
     batch.setTitle(safeTitle + " (Bulk x" + req.helperCount() + ")");
     batch.setNotes("Created from buyer app bulk request (Mediator Routed)");
-    batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
+    PaymentCollectionMode collectionMode = req.resolvedPaymentCollectionMode();
+    batch.setPaymentCollectionMode(collectionMode);
+    batch.setStatus(collectionMode == PaymentCollectionMode.ONLINE_PREPAID
+        ? BookingBatchStatus.PAYMENT_PENDING
+        : BookingBatchStatus.PENDING_AUDIT);
+    if (collectionMode == PaymentCollectionMode.ONLINE_PREPAID) {
+      batch.setPaymentMode(BatchPaymentMode.PER_HELPER);
+    }
     batch.setRequestedHelperCount(req.helperCount());
     batch.setScheduledWindowStart(req.scheduledAt());
     if (req.scheduledAt() != null) {
@@ -609,7 +623,8 @@ public class BookingBatchService {
           req.lng(),
           req.addressText(),
           req.scheduledAt(),
-          req.landmark()
+          req.landmark(),
+          collectionMode
       );
       batch.setTaskTemplateJson(objectMapper.writeValueAsString(template));
     } catch (Exception e) {
@@ -617,7 +632,8 @@ public class BookingBatchService {
     }
 
     BookingBatchEntity saved = batches.save(batch);
-    writeEvent(saved.getId(), "BATCH_CREATED", "{\"status\":\"PENDING_AUDIT\",\"requested\":" + req.helperCount() + "}");
+    writeEvent(saved.getId(), "BATCH_CREATED", "{\"status\":\"" + saved.getStatus().name()
+        + "\",\"requested\":" + req.helperCount() + "}");
 
     return saved;
   }

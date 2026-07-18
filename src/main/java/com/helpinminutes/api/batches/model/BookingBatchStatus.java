@@ -1,6 +1,7 @@
 package com.helpinminutes.api.batches.model;
 
 public enum BookingBatchStatus {
+  PAYMENT_PENDING,
   CREATED,
   PARTIAL,
   COMPLETED,

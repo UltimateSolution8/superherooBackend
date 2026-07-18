@@ -26,12 +26,15 @@ import com.helpinminutes.api.payments.model.PaymentEntity;
 import com.helpinminutes.api.payments.model.PaymentScope;
 import com.helpinminutes.api.payments.model.PaymentStatus;
 import com.helpinminutes.api.payments.model.PaymentWebhookEventEntity;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.payments.model.PaymentFulfillmentStatus;
 import com.helpinminutes.api.payments.repo.PaymentAttemptRepository;
 import com.helpinminutes.api.payments.repo.PaymentRepository;
 import com.helpinminutes.api.payments.repo.PaymentWebhookEventRepository;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -77,6 +80,7 @@ public class PaymentService {
   private final RazorpayGateway razorpay;
   private final ObjectMapper objectMapper;
   private final TransactionTemplate tx;
+  private final PaymentLifecycleService lifecycle;
 
   public PaymentService(
       PaymentRepository payments,
@@ -88,7 +92,8 @@ public class PaymentService {
       UserRepository users,
       RazorpayGateway razorpay,
       ObjectMapper objectMapper,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      PaymentLifecycleService lifecycle) {
     this.payments = payments;
     this.attempts = attempts;
     this.webhookEvents = webhookEvents;
@@ -99,6 +104,7 @@ public class PaymentService {
     this.razorpay = razorpay;
     this.objectMapper = objectMapper;
     this.tx = new TransactionTemplate(transactionManager);
+    this.lifecycle = lifecycle;
   }
 
   public CreateOrderResponse createTaskOrder(UUID buyerId, UserRole role, UUID taskId, String rawIdempotencyKey) {
@@ -173,7 +179,10 @@ public class PaymentService {
     if (!stored.getBuyerId().equals(buyerId) || !targetMatches) {
       throw new ForbiddenException("Payment does not belong to this buyer and task");
     }
-    if (PAID.contains(stored.getStatus())) return toResponse(stored, paymentTitle(stored));
+    if (PAID.contains(stored.getStatus())) {
+      lifecycle.activateCapturedPayment(stored);
+      return toResponse(stored, paymentTitle(stored));
+    }
 
     // Always sign the server-stored order id; never trust the order id as proof from the client.
     if (!razorpay.verifyPaymentSignature(stored.getProviderOrderId(), request.razorpayPaymentId(), request.razorpaySignature())) {
@@ -205,8 +214,12 @@ public class PaymentService {
       return toResponse(current, paymentTitle(current));
     });
     if (verified == null || !verified.paid()) {
+      if (verified != null && verified.fulfillmentStatus() == PaymentFulfillmentStatus.REFUND_PENDING) {
+        throw new ConflictException("A duplicate charge was detected and will be refunded automatically");
+      }
       throw new ConflictException("Payment is verified but capture is still pending");
     }
+    payments.findById(stored.getId()).ifPresent(lifecycle::activateCapturedPayment);
     return verified;
   }
 
@@ -216,6 +229,44 @@ public class PaymentService {
     return payments.findTopByTaskIdOrderByCreatedAtDesc(taskId)
         .map(payment -> toResponse(payment, task.getTitle()))
         .orElse(null);
+  }
+
+  public PaymentResponse confirmDirectPayment(
+      UUID helperId, UserRole role, UUID taskId, String rawMethod) {
+    if (role != UserRole.HELPER) throw new ForbiddenException("Only the assigned partner can confirm collection");
+    String method = rawMethod == null ? "" : rawMethod.trim().toUpperCase(Locale.ROOT);
+    if (!Set.of("CASH", "UPI").contains(method)) throw new BadRequestException("Choose cash or UPI");
+    return tx.execute(status -> {
+      TaskEntity task = tasks.findByIdForUpdate(taskId)
+          .orElseThrow(() -> new NotFoundException("Task not found"));
+      if (!helperId.equals(task.getAssignedHelperId())) throw new ForbiddenException("This task is assigned to another partner");
+      if (task.getStatus() != TaskStatus.COMPLETED) throw new ConflictException("Complete the task before collecting payment");
+      if (task.getPaymentCollectionMode() != PaymentCollectionMode.PAY_AFTER_SERVICE) {
+        throw new ConflictException("This task was paid online before booking");
+      }
+      PaymentEntity existing = payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(taskId, PAID).orElse(null);
+      if (existing != null) return toResponse(existing, task.getTitle());
+      Instant now = Instant.now();
+      PaymentEntity payment = new PaymentEntity();
+      payment.setId(UUID.randomUUID());
+      payment.setTaskId(taskId);
+      payment.setPaymentScope(PaymentScope.TASK);
+      payment.setBuyerId(task.getBuyerId());
+      payment.setHelperId(helperId);
+      payment.setAmountPaise(task.getBudgetPaise());
+      payment.setCurrency(INR);
+      payment.setProvider("DIRECT");
+      payment.setMethod(method.toLowerCase(Locale.ROOT));
+      payment.setStatus(PaymentStatus.CAPTURED);
+      payment.setFulfillmentStatus(PaymentFulfillmentStatus.EARNED);
+      payment.setPaidAt(now);
+      payment.setCapturedAt(now);
+      payment.setEarningReleasedAt(now);
+      payment.setReceipt(receipt(taskId, payment.getId()));
+      payment.setIdempotencyKey("direct:" + taskId);
+      payments.saveAndFlush(payment);
+      return toResponse(payment, task.getTitle());
+    });
   }
 
   public PaymentResponse getForBatch(UUID userId, UserRole role, UUID batchId) {
@@ -239,7 +290,9 @@ public class PaymentService {
       if (!batch.getCreatedByUserId().equals(buyerId)) {
         throw new ForbiddenException("Only the bulk request buyer can choose payment mode");
       }
-      requireCompletedMediatorBatch(batch);
+      boolean prepaidSelection = batch.getStatus() == BookingBatchStatus.PAYMENT_PENDING
+          && batch.getPaymentCollectionMode() == PaymentCollectionMode.ONLINE_PREPAID;
+      if (!prepaidSelection) requireCompletedMediatorBatch(batch);
       List<UUID> taskIds = mediatorTaskIds(batchId);
       boolean hasPayments = payments.existsByBatchId(batchId)
           || (!taskIds.isEmpty() && payments.existsByTaskIdIn(taskIds));
@@ -291,10 +344,21 @@ public class PaymentService {
     PaymentEntity consolidated = payments.findTopByBatchIdOrderByCreatedAtDesc(batchId).orElse(null);
     boolean locked = consolidated != null || !latestByTask.isEmpty();
     long total = lines.stream().mapToLong(BatchPaymentLine::amountPaise).sum();
+    if (total == 0L && batch.getPaymentCollectionMode() == PaymentCollectionMode.ONLINE_PREPAID) {
+      try {
+        CreateTaskRequest template = objectMapper.readValue(batch.getTaskTemplateJson(), CreateTaskRequest.class);
+        int count = Math.max(1, batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount());
+        total = Math.multiplyExact(template.budgetPaise(), count);
+      } catch (Exception e) {
+        log.warn("Could not calculate prepaid bulk total for {}", batchId);
+      }
+    }
     return new BatchPaymentSummary(
         batchId,
         batch.getTitle(),
         batch.getPaymentMode(),
+        batch.getPaymentCollectionMode(),
+        batch.getStatus().name(),
         batch.getStatus() == BookingBatchStatus.MEDIATOR_COMPLETED,
         locked,
         total,
@@ -307,7 +371,8 @@ public class PaymentService {
     if (role == UserRole.BUYER) {
       rows = payments.findTop100ByBuyerIdOrderByCreatedAtDesc(userId);
     } else if (role == UserRole.HELPER) {
-      rows = payments.findTop100ByHelperIdOrderByCreatedAtDesc(userId);
+      rows = payments.findTop100ByHelperIdAndFulfillmentStatusOrderByEarningReleasedAtDesc(
+          userId, PaymentFulfillmentStatus.EARNED);
     } else if (role == UserRole.MEDIATOR) {
       rows = payments.findTop100ByMediatorIdOrderByCreatedAtDesc(userId);
     } else {
@@ -319,9 +384,31 @@ public class PaymentService {
         .stream().collect(Collectors.toMap(TaskEntity::getId, TaskEntity::getTitle));
     Map<UUID, String> batchTitles = batches.findAllById(batchIds)
         .stream().collect(Collectors.toMap(BookingBatchEntity::getId, BookingBatchEntity::getTitle));
-    return rows.stream().map(row -> toResponse(
+    List<PaymentResponse> result = new java.util.ArrayList<>(rows.stream().map(row -> toResponse(
         row,
-        row.getTaskId() == null ? batchTitles.get(row.getBatchId()) : titles.get(row.getTaskId()))).toList();
+        row.getTaskId() == null ? batchTitles.get(row.getBatchId()) : titles.get(row.getTaskId()))).toList());
+    if (role == UserRole.HELPER) {
+      for (MediatorJobWorkerEntity worker : mediatorWorkers
+          .findTop100ByHelperIdAndPaymentStatusOrderByAddedAtDesc(userId, "EARNED")) {
+        if (worker.getTaskId() == null || worker.getPaymentAmountPaise() == null) continue;
+        BookingBatchEntity batch = batches.findById(worker.getBatchId()).orElse(null);
+        TaskEntity task = tasks.findById(worker.getTaskId()).orElse(null);
+        PaymentEntity source = payments.findTopByBatchIdOrderByCreatedAtDesc(worker.getBatchId()).orElse(null);
+        if (batch == null || task == null || source == null
+            || batch.getPaymentMode() != BatchPaymentMode.PER_HELPER
+            || source.getFulfillmentStatus() != PaymentFulfillmentStatus.EARNED) continue;
+        Instant earnedAt = source.getEarningReleasedAt() == null ? task.getUpdatedAt() : source.getEarningReleasedAt();
+        result.add(new PaymentResponse(
+            worker.getId(), task.getId(), batch.getId(), PaymentScope.TASK, task.getTitle(),
+            worker.getPaymentAmountPaise(), source.getCurrency(), source.getProvider(), source.getMethod(),
+            source.getStatus(), PaymentFulfillmentStatus.EARNED, source.getProviderPaymentId(), 0L,
+            source.getPaidAt(), source.getCapturedAt(), earnedAt, source.getCreatedAt(), earnedAt, true));
+      }
+      result.sort(java.util.Comparator.comparing(
+          PaymentResponse::earningReleasedAt,
+          java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+    }
+    return result;
   }
 
   public void processWebhook(String rawBody, String signature, String eventId) {
@@ -360,7 +447,7 @@ public class PaymentService {
         if (!providerPayment.isMissingNode() && providerPayment.hasNonNull("order_id")) {
           applyWebhookPayment(eventType, providerPayment);
         } else if (eventType.startsWith("refund.")) {
-          reconcileRefundWithoutPaymentSnapshot(payload);
+          reconcileRefundWithoutPaymentSnapshot(eventType, payload);
         }
       }
       tx.executeWithoutResult(status -> {
@@ -383,10 +470,12 @@ public class PaymentService {
   private PreparedOrder prepareTaskOrder(UUID buyerId, UUID taskId, String idempotencyKey) {
     TaskEntity task = tasks.findByIdForUpdate(taskId).orElseThrow(() -> new NotFoundException("Task not found"));
     if (!task.getBuyerId().equals(buyerId)) throw new ForbiddenException("Only the task buyer can pay");
-    if (task.getStatus() != TaskStatus.COMPLETED) {
-      throw new BadRequestException("Payment is available after task completion");
+    boolean prepaidCheckout = task.getStatus() == TaskStatus.PAYMENT_PENDING
+        && task.getPaymentCollectionMode() == PaymentCollectionMode.ONLINE_PREPAID;
+    if (!prepaidCheckout && task.getStatus() != TaskStatus.COMPLETED) {
+      throw new BadRequestException("Payment is not available for this task yet");
     }
-    mediatorWorkers.findByTaskId(taskId).ifPresent(worker -> {
+    if (!prepaidCheckout) mediatorWorkers.findByTaskId(taskId).ifPresent(worker -> {
       BookingBatchEntity batch = batches.findAndLockById(worker.getBatchId())
           .orElseThrow(() -> new NotFoundException("Bulk request not found"));
       requireCompletedMediatorBatch(batch);
@@ -451,35 +540,50 @@ public class PaymentService {
     if (!batch.getCreatedByUserId().equals(buyerId)) {
       throw new ForbiddenException("Only the bulk request buyer can pay");
     }
-    requireCompletedMediatorBatch(batch);
-    if (batch.getPaymentMode() == BatchPaymentMode.PER_HELPER) {
-      throw new ConflictException("This bulk request uses separate payments for each partner");
-    }
-    if (batch.getPaymentMode() == null) {
-      batch.setPaymentMode(BatchPaymentMode.CONSOLIDATED_MEDIATOR);
+    boolean prepaidCheckout = batch.getStatus() == BookingBatchStatus.PAYMENT_PENDING
+        && batch.getPaymentCollectionMode() == PaymentCollectionMode.ONLINE_PREPAID;
+    long amount;
+    if (prepaidCheckout) {
+      CreateTaskRequest template;
+      try {
+        template = objectMapper.readValue(batch.getTaskTemplateJson(), CreateTaskRequest.class);
+      } catch (Exception e) {
+        throw new BadRequestException("Bulk request pricing is unavailable");
+      }
+      int count = Math.max(1, batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount());
+      amount = Math.multiplyExact(template.budgetPaise(), count);
+      if (batch.getPaymentMode() == null) batch.setPaymentMode(BatchPaymentMode.PER_HELPER);
       batches.save(batch);
-    }
-
-    List<MediatorJobWorkerEntity> payableWorkers = mediatorWorkers.findByBatchId(batchId).stream()
-        .filter(worker -> worker.getAttendanceStatus() == MediatorAttendanceStatus.PRESENT)
-        .filter(worker -> worker.getTaskId() != null)
-        .toList();
-    if (payableWorkers.isEmpty()) throw new BadRequestException("No completed partner work is payable");
-
-    long amount = 0L;
-    for (MediatorJobWorkerEntity worker : payableWorkers) {
-      TaskEntity task = tasks.findById(worker.getTaskId())
-          .orElseThrow(() -> new BadRequestException("A partner task is missing"));
-      if (task.getStatus() != TaskStatus.COMPLETED
-          || !buyerId.equals(task.getBuyerId())
-          || !worker.getHelperId().equals(task.getAssignedHelperId())) {
-        throw new ConflictException("Every present partner task must be completed before consolidated payment");
+    } else {
+      requireCompletedMediatorBatch(batch);
+      if (batch.getPaymentMode() == BatchPaymentMode.PER_HELPER) {
+        throw new ConflictException("This bulk request uses separate payments for each partner");
       }
-      long lineAmount = worker.getPaymentAmountPaise() == null ? 0L : worker.getPaymentAmountPaise();
-      if (lineAmount < 100 || !Long.valueOf(lineAmount).equals(task.getBudgetPaise())) {
-        throw new ConflictException("Partner payment amount does not match the completed task");
+      if (batch.getPaymentMode() == null) {
+        batch.setPaymentMode(BatchPaymentMode.CONSOLIDATED_MEDIATOR);
+        batches.save(batch);
       }
-      amount = Math.addExact(amount, lineAmount);
+
+      List<MediatorJobWorkerEntity> payableWorkers = mediatorWorkers.findByBatchId(batchId).stream()
+          .filter(worker -> worker.getAttendanceStatus() == MediatorAttendanceStatus.PRESENT)
+          .filter(worker -> worker.getTaskId() != null)
+          .toList();
+      if (payableWorkers.isEmpty()) throw new BadRequestException("No completed partner work is payable");
+      amount = 0L;
+      for (MediatorJobWorkerEntity worker : payableWorkers) {
+        TaskEntity task = tasks.findById(worker.getTaskId())
+            .orElseThrow(() -> new BadRequestException("A partner task is missing"));
+        if (task.getStatus() != TaskStatus.COMPLETED
+            || !buyerId.equals(task.getBuyerId())
+            || !worker.getHelperId().equals(task.getAssignedHelperId())) {
+          throw new ConflictException("Every present partner task must be completed before consolidated payment");
+        }
+        long lineAmount = worker.getPaymentAmountPaise() == null ? 0L : worker.getPaymentAmountPaise();
+        if (lineAmount < 100 || !Long.valueOf(lineAmount).equals(task.getBudgetPaise())) {
+          throw new ConflictException("Partner payment amount does not match the completed task");
+        }
+        amount = Math.addExact(amount, lineAmount);
+      }
     }
     if (amount < 100) throw new BadRequestException("Payment amount must be at least ₹1.00");
     UserEntity user = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
@@ -549,9 +653,12 @@ public class PaymentService {
       }
       payments.save(payment);
     }));
+    payments.findByProviderOrderId(orderId)
+        .filter(payment -> payment.getStatus() == PaymentStatus.CAPTURED)
+        .ifPresent(lifecycle::activateCapturedPayment);
   }
 
-  private void reconcileRefundWithoutPaymentSnapshot(JsonNode payload) {
+  private void reconcileRefundWithoutPaymentSnapshot(String eventType, JsonNode payload) {
     String providerPaymentId = payload.path("payload").path("refund").path("entity")
         .path("payment_id").asText("");
     if (providerPaymentId.isBlank()) return;
@@ -566,6 +673,16 @@ public class PaymentService {
     validateProviderPayment(stored, result);
     tx.executeWithoutResult(status -> payments.findById(stored.getId()).ifPresent(payment -> {
       applyProviderState(payment, result);
+      if ("refund.failed".equals(eventType)
+          && payment.getFulfillmentStatus() != PaymentFulfillmentStatus.REFUNDED) {
+        payment.setFulfillmentStatus(PaymentFulfillmentStatus.REFUND_PENDING);
+        payment.setRefundLastError("Refund was not processed. It will be retried.");
+      } else if ("refund.processed".equals(eventType)
+          && payment.getRefundRequestedAmountPaise() != null
+          && payment.getAmountRefundedPaise() >= payment.getRefundRequestedAmountPaise()) {
+        lifecycle.completeRefundReconciliation(payment);
+        return;
+      }
       payments.save(payment);
     }));
   }
@@ -576,6 +693,19 @@ public class PaymentService {
     long effectiveRefunded = Math.max(previousRefunded, Math.max(0, result.amountRefundedPaise()));
     Instant now = Instant.now();
     String status = result.status() == null ? "" : result.status().toLowerCase();
+
+    if ("captured".equals(status) && hasDifferentPaidPayment(payment)) {
+      payment.setProviderPaymentId(result.id());
+      payment.setMethod(safeMethod(result.method()));
+      payment.setStatus(PaymentStatus.FAILED);
+      payment.setFulfillmentStatus(PaymentFulfillmentStatus.REFUND_PENDING);
+      payment.setRefundRequestedAt(now);
+      payment.setRefundRequestedAmountPaise(payment.getAmountPaise());
+      payment.setFailureCode("DUPLICATE_PAYMENT");
+      payment.setFailureDescription("Duplicate charge queued for automatic refund");
+      payment.setFailedAt(now);
+      return;
+    }
 
     // Provider callbacks are retried and may arrive out of order. Never allow an
     // older authorized/captured/failed snapshot to undo a captured refund state.
@@ -591,15 +721,25 @@ public class PaymentService {
     payment.setAmountRefundedPaise(effectiveRefunded);
     if (effectiveRefunded >= payment.getAmountPaise()) {
       payment.setStatus(PaymentStatus.REFUNDED);
+      payment.setFulfillmentStatus(PaymentFulfillmentStatus.REFUNDED);
       payment.setRefundedAt(now);
     } else if ("captured".equals(status)) {
       payment.setStatus(effectiveRefunded > 0 ? PaymentStatus.PARTIALLY_REFUNDED : PaymentStatus.CAPTURED);
+      if (payment.getFulfillmentStatus() == null) {
+        payment.setFulfillmentStatus(isCompletedTarget(payment)
+            ? PaymentFulfillmentStatus.EARNED
+            : PaymentFulfillmentStatus.HELD);
+        if (payment.getFulfillmentStatus() == PaymentFulfillmentStatus.EARNED) {
+          payment.setEarningReleasedAt(now);
+        }
+      }
       if (payment.getPaidAt() == null) payment.setPaidAt(now);
       if (payment.getCapturedAt() == null) payment.setCapturedAt(now);
     } else if ("authorized".equals(status)) {
       payment.setStatus(PaymentStatus.AUTHORIZED);
     } else if ("refunded".equals(status)) {
       payment.setStatus(PaymentStatus.REFUNDED);
+      payment.setFulfillmentStatus(PaymentFulfillmentStatus.REFUNDED);
       payment.setRefundedAt(now);
     } else if ("failed".equals(status)) {
       payment.setStatus(PaymentStatus.FAILED);
@@ -607,6 +747,13 @@ public class PaymentService {
       payment.setFailureDescription(safeMessage(result.errorDescription()));
       payment.setFailedAt(now);
     }
+  }
+
+  private boolean hasDifferentPaidPayment(PaymentEntity payment) {
+    PaymentEntity paid = payment.getTaskId() != null
+        ? payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(payment.getTaskId(), PAID).orElse(null)
+        : payments.findTopByBatchIdAndStatusInOrderByCreatedAtDesc(payment.getBatchId(), PAID).orElse(null);
+    return paid != null && !paid.getId().equals(payment.getId());
   }
 
   private void validateOrder(OrderResult order, PaymentEntity payment) {
@@ -683,9 +830,24 @@ public class PaymentService {
     return new PaymentResponse(
         payment.getId(), payment.getTaskId(), payment.getBatchId(), payment.getPaymentScope(),
         title, payment.getAmountPaise(), payment.getCurrency(),
-        payment.getProvider(), payment.getMethod(), payment.getStatus(), payment.getProviderPaymentId(),
-        payment.getAmountRefundedPaise(), payment.getPaidAt(), payment.getCapturedAt(),
+        payment.getProvider(), payment.getMethod(), payment.getStatus(), payment.getFulfillmentStatus(),
+        payment.getProviderPaymentId(), payment.getAmountRefundedPaise(), payment.getPaidAt(), payment.getCapturedAt(),
+        payment.getEarningReleasedAt(),
         payment.getCreatedAt(), payment.getUpdatedAt(), PAID.contains(payment.getStatus()));
+  }
+
+  private boolean isCompletedTarget(PaymentEntity payment) {
+    if (payment.getTaskId() != null) {
+      return tasks.findById(payment.getTaskId())
+          .map(task -> task.getStatus() == TaskStatus.COMPLETED)
+          .orElse(false);
+    }
+    if (payment.getBatchId() != null) {
+      return batches.findById(payment.getBatchId())
+          .map(batch -> batch.getStatus() == BookingBatchStatus.MEDIATOR_COMPLETED)
+          .orElse(false);
+    }
+    return false;
   }
 
   private void requireTaskAccess(UUID userId, UserRole role, TaskEntity task) {

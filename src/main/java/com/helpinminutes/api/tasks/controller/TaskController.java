@@ -143,7 +143,8 @@ public class TaskController {
               req.lng(),
               req.addressText(),
               req.scheduledAt(),
-              req.landmark()));
+              req.landmark(),
+              req.resolvedPaymentCollectionMode()));
       return new CreateBulkTaskResponse(
           null,
           1,

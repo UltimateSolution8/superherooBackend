@@ -24,6 +24,8 @@ import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.payments.model.PaymentEntity;
 import com.helpinminutes.api.payments.model.PaymentStatus;
 import com.helpinminutes.api.payments.repo.PaymentRepository;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.payments.service.PaymentLifecycleService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.dto.CreateTaskRequest;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -58,6 +60,7 @@ public class MediatorService {
   private final PushNotificationService pushNotifications;
   private final PaymentRepository payments;
   private final AppProperties props;
+  private final PaymentLifecycleService paymentLifecycle;
 
   public MediatorService(
       BookingBatchRepository batches,
@@ -71,7 +74,8 @@ public class MediatorService {
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
       PaymentRepository payments,
-      AppProperties props) {
+      AppProperties props,
+      PaymentLifecycleService paymentLifecycle) {
     this.batches = batches;
     this.workers = workers;
     this.helperMediatorLinks = helperMediatorLinks;
@@ -84,6 +88,7 @@ public class MediatorService {
     this.pushNotifications = pushNotifications;
     this.payments = payments;
     this.props = props;
+    this.paymentLifecycle = paymentLifecycle;
   }
 
   @Transactional(readOnly = true)
@@ -145,6 +150,7 @@ public class MediatorService {
       batch.setMediatorNotes(req.notes());
     }
     batches.save(batch);
+    paymentLifecycle.bindMediator(batchId, mediatorId);
 
     try {
       realtime.publish("mediator.job_accepted", Map.of(
@@ -536,8 +542,27 @@ public class MediatorService {
       throw new ConflictException("Cannot start job in status: " + batch.getStatus());
     }
     verifyOtp(batch.getBatchStartOtp(), otp, "Start OTP is required");
+    List<MediatorJobWorkerEntity> jobWorkers = workers.findByBatchId(batchId);
+    for (MediatorJobWorkerEntity worker : jobWorkers) {
+      if (worker.getAttendanceStatus() == MediatorAttendanceStatus.ABSENT || worker.getTaskId() == null) continue;
+      TaskEntity task = taskRepo.findById(worker.getTaskId())
+          .orElseThrow(() -> new ConflictException("A crew task is missing"));
+      if (task.getArrivalSelfieUrl() == null || task.getArrivalSelfieUrl().isBlank()) {
+        throw new ConflictException("Every crew member must check in with an arrival photo before work starts");
+      }
+    }
     batch.setStatus(BookingBatchStatus.MEDIATOR_STARTED);
     batches.save(batch);
+    for (MediatorJobWorkerEntity worker : jobWorkers) {
+      if (worker.getTaskId() == null) continue;
+      taskRepo.findById(worker.getTaskId()).ifPresent(task -> {
+        if (task.getStatus() == TaskStatus.ASSIGNED || task.getStatus() == TaskStatus.ARRIVED) {
+          task.setStatus(TaskStatus.STARTED);
+          if (task.getWorkStartedAt() == null) task.setWorkStartedAt(Instant.now());
+          taskRepo.save(task);
+        }
+      });
+    }
     try {
       realtime.publish("mediator.job_started", Map.of(
           "batchId", batchId.toString(),
@@ -602,9 +627,21 @@ public class MediatorService {
     long totalHelperPayout = 0L;
 
     for (MediatorJobWorkerEntity w : jobWorkers) {
+      if (w.getAttendanceStatus() != MediatorAttendanceStatus.PRESENT || w.getTaskId() == null) continue;
+      TaskEntity task = taskRepo.findById(w.getTaskId())
+          .orElseThrow(() -> new ConflictException("A crew task is missing"));
+      if (task.getCompletionSelfieUrl() == null || task.getCompletionSelfieUrl().isBlank()) {
+        throw new ConflictException("Every present crew member must submit a completion photo");
+      }
+    }
+
+    for (MediatorJobWorkerEntity w : jobWorkers) {
       if (w.getAttendanceStatus() == MediatorAttendanceStatus.PRESENT) {
-        // Completion creates an amount due; it is not a bank payout.
-        w.setPaymentStatus("PAYMENT_PENDING");
+        w.setPaymentStatus(batch.getPaymentCollectionMode() == PaymentCollectionMode.ONLINE_PREPAID
+            ? (batch.getPaymentMode() == com.helpinminutes.api.batches.model.BatchPaymentMode.CONSOLIDATED_MEDIATOR
+                ? "VIA_MEDIATOR"
+                : "EARNED")
+            : "COLLECT_DIRECT");
         w.setPaymentAmountPaise(helperWage);
         totalHelperPayout += helperWage;
 
@@ -635,14 +672,16 @@ public class MediatorService {
       workers.save(w);
     }
 
-    // Default calculations if not explicitly set
+    // A mediator commission must be explicitly configured and included in the
+    // customer charge. Never invent earnings that were not collected.
     long mediatorCommission = batch.getMediatorCommissionPaise() != null
         ? batch.getMediatorCommissionPaise()
-        : Math.round(totalHelperPayout * 0.10); // 10%
+        : 0L;
 
     batch.setMediatorCommissionPaise(mediatorCommission);
     batch.setStatus(BookingBatchStatus.MEDIATOR_COMPLETED);
     batches.save(batch);
+    paymentLifecycle.releaseBatchEarnings(batch);
 
     try {
       realtime.publish("mediator.job_completed", Map.of(
@@ -704,8 +743,13 @@ public class MediatorService {
     }
 
     long mediatorCommission = batch.getMediatorCommissionPaise() != null ? batch.getMediatorCommissionPaise() : 0L;
-    long companyShare = Math.round(totalHelperPayout * 0.05);
-    long totalJobValue = totalHelperPayout + mediatorCommission + companyShare;
+    long companyShare = 0L;
+    long totalJobValue = consolidatedCollected && consolidated != null
+        ? consolidated.getAmountPaise()
+        : taskPayments.values().stream()
+            .filter(payment -> isCollected(payment.getStatus()))
+            .mapToLong(PaymentEntity::getAmountPaise)
+            .sum();
 
     long collectedTaskCount = taskPayments.values().stream().filter(payment -> isCollected(payment.getStatus())).count();
     String overallCollectionStatus = consolidatedCollected

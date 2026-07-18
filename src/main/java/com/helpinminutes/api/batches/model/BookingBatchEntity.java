@@ -10,6 +10,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
 
 @Entity
 @Table(name = "booking_batches")
@@ -82,6 +83,10 @@ public class BookingBatchEntity {
   @Column(name = "payment_mode", length = 30)
   private BatchPaymentMode paymentMode;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "payment_collection_mode", nullable = false, length = 30)
+  private PaymentCollectionMode paymentCollectionMode;
+
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
 
@@ -92,6 +97,7 @@ public class BookingBatchEntity {
   public void prePersist() {
     if (id == null) id = UUID.randomUUID();
     if (status == null) status = BookingBatchStatus.CREATED;
+    if (paymentCollectionMode == null) paymentCollectionMode = PaymentCollectionMode.PAY_AFTER_SERVICE;
     Instant now = Instant.now();
     if (createdAt == null) createdAt = now;
     updatedAt = now;
@@ -284,5 +290,13 @@ public class BookingBatchEntity {
 
   public void setPaymentMode(BatchPaymentMode paymentMode) {
     this.paymentMode = paymentMode;
+  }
+
+  public PaymentCollectionMode getPaymentCollectionMode() {
+    return paymentCollectionMode;
+  }
+
+  public void setPaymentCollectionMode(PaymentCollectionMode paymentCollectionMode) {
+    this.paymentCollectionMode = paymentCollectionMode;
   }
 }

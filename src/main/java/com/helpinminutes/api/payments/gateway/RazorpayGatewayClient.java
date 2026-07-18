@@ -6,6 +6,13 @@ import com.razorpay.RazorpayClient;
 import com.razorpay.RazorpayException;
 import com.razorpay.Utils;
 import java.util.Map;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Base64;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -75,6 +82,44 @@ public class RazorpayGatewayClient implements RazorpayGateway {
       return toPaymentResult(client().payments.capture(paymentId, request));
     } catch (RazorpayException | RuntimeException e) {
       throw new RazorpayGatewayException("Razorpay payment capture failed", e);
+    }
+  }
+
+  @Override
+  public RefundResult refundPayment(String paymentId, long amountPaise, String receipt) {
+    try {
+      JSONObject request = new JSONObject();
+      request.put("amount", amountPaise);
+      request.put("speed", "normal");
+      request.put("notes", new JSONObject(Map.of("receipt", receipt)));
+      String basicAuth = Base64.getEncoder().encodeToString(
+          (keyId + ":" + keySecret).getBytes(StandardCharsets.UTF_8));
+      HttpRequest httpRequest = HttpRequest.newBuilder()
+          .uri(URI.create("https://api.razorpay.com/v1/payments/" + paymentId + "/refund"))
+          .timeout(Duration.ofSeconds(20))
+          .header("Authorization", "Basic " + basicAuth)
+          .header("Content-Type", "application/json")
+          .header("X-Refund-Idempotency", receipt)
+          .POST(HttpRequest.BodyPublishers.ofString(request.toString()))
+          .build();
+      HttpResponse<String> response = HttpClient.newBuilder()
+          .connectTimeout(Duration.ofSeconds(10))
+          .build()
+          .send(httpRequest, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        throw new RazorpayGatewayException("Razorpay refund request returned HTTP " + response.statusCode());
+      }
+      JSONObject refund = new JSONObject(response.body());
+      return new RefundResult(
+          refund.optString("id"),
+          refund.optString("payment_id"),
+          refund.optLong("amount"),
+          refund.optString("status"));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new RazorpayGatewayException("Razorpay refund request was interrupted", e);
+    } catch (java.io.IOException | RuntimeException e) {
+      throw new RazorpayGatewayException("Razorpay refund request failed", e);
     }
   }
 

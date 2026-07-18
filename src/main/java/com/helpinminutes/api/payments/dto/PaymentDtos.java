@@ -3,6 +3,8 @@ package com.helpinminutes.api.payments.dto;
 import com.helpinminutes.api.batches.model.BatchPaymentMode;
 import com.helpinminutes.api.payments.model.PaymentScope;
 import com.helpinminutes.api.payments.model.PaymentStatus;
+import com.helpinminutes.api.payments.model.PaymentFulfillmentStatus;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -45,6 +47,8 @@ public final class PaymentDtos {
 
   public record SelectBatchPaymentModeRequest(@NotNull BatchPaymentMode mode) {}
 
+  public record DirectPaymentRequest(@NotBlank String method) {}
+
   public record BatchPaymentLine(
       UUID taskId,
       UUID helperId,
@@ -57,6 +61,8 @@ public final class PaymentDtos {
       UUID batchId,
       String batchTitle,
       BatchPaymentMode mode,
+      PaymentCollectionMode collectionMode,
+      String batchStatus,
       boolean completed,
       boolean modeLocked,
       long totalAmountPaise,
@@ -74,10 +80,12 @@ public final class PaymentDtos {
       String provider,
       String method,
       PaymentStatus status,
+      PaymentFulfillmentStatus fulfillmentStatus,
       String providerPaymentId,
       long amountRefundedPaise,
       Instant paidAt,
       Instant capturedAt,
+      Instant earningReleasedAt,
       Instant createdAt,
       Instant updatedAt,
       boolean paid) {}

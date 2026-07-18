@@ -37,6 +37,9 @@ public class UserEntity {
   @Column(name = "display_name")
   private String displayName;
 
+  @Column(name = "profile_image_url")
+  private String profileImageUrl;
+
   @Column(name = "email_verified", nullable = false)
   private boolean emailVerified;
 
@@ -129,6 +132,14 @@ public class UserEntity {
 
   public void setDisplayName(String displayName) {
     this.displayName = displayName;
+  }
+
+  public String getProfileImageUrl() {
+    return profileImageUrl;
+  }
+
+  public void setProfileImageUrl(String profileImageUrl) {
+    this.profileImageUrl = profileImageUrl;
   }
 
   public boolean isEmailVerified() {

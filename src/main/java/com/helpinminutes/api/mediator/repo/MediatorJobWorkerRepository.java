@@ -12,5 +12,6 @@ public interface MediatorJobWorkerRepository extends JpaRepository<MediatorJobWo
   List<MediatorJobWorkerEntity> findByBatchId(UUID batchId);
   Optional<MediatorJobWorkerEntity> findByBatchIdAndHelperId(UUID batchId, UUID helperId);
   Optional<MediatorJobWorkerEntity> findByTaskId(UUID taskId);
+  List<MediatorJobWorkerEntity> findTop100ByHelperIdAndPaymentStatusOrderByAddedAtDesc(UUID helperId, String paymentStatus);
   void deleteByBatchIdAndHelperId(UUID batchId, UUID helperId);
 }

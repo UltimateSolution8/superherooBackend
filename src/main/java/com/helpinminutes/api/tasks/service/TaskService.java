@@ -23,6 +23,8 @@ import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.payments.service.PaymentLifecycleService;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -78,6 +80,7 @@ public class TaskService {
   private final BookingBatchItemRepository bookingBatchItems;
   private final ObjectMapper objectMapper;
   private final InvoiceEmailService invoiceEmail;
+  private final PaymentLifecycleService paymentLifecycle;
 
   public TaskService(
       TaskRepository tasks,
@@ -97,7 +100,8 @@ public class TaskService {
       BookingBatchRepository bookingBatches,
       BookingBatchItemRepository bookingBatchItems,
       ObjectMapper objectMapper,
-      InvoiceEmailService invoiceEmail) {
+      InvoiceEmailService invoiceEmail,
+      PaymentLifecycleService paymentLifecycle) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -116,6 +120,7 @@ public class TaskService {
     this.bookingBatchItems = bookingBatchItems;
     this.objectMapper = objectMapper;
     this.invoiceEmail = invoiceEmail;
+    this.paymentLifecycle = paymentLifecycle;
   }
 
   @Transactional
@@ -298,13 +303,20 @@ public class TaskService {
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
     task.setLandmark(req.landmark());
+    PaymentCollectionMode paymentMode = req.paymentCollectionMode() == null
+        ? PaymentCollectionMode.PAY_AFTER_SERVICE
+        : req.paymentCollectionMode();
+    task.setPaymentCollectionMode(paymentMode);
     Instant now = Instant.now();
     Instant scheduledAt = req.scheduledAt();
     if (scheduledAt != null) {
       task.setScheduledAt(scheduledAt);
     }
     boolean isFutureScheduled = scheduledAt != null && scheduledAt.isAfter(now.plus(java.time.Duration.ofMinutes(1)));
-    if (isFutureScheduled) {
+    boolean awaitingPrepayment = paymentMode == PaymentCollectionMode.ONLINE_PREPAID;
+    if (awaitingPrepayment) {
+      task.setStatus(TaskStatus.PAYMENT_PENDING);
+    } else if (isFutureScheduled) {
       task.setStatus(TaskStatus.SCHEDULED_PENDING);
     } else {
       task.setStatus(TaskStatus.SEARCHING);
@@ -315,17 +327,17 @@ public class TaskService {
     tasks.save(task);
 
     List<UUID> offeredTo = new ArrayList<>();
-    if (!isFutureScheduled) {
+    if (!awaitingPrepayment && !isFutureScheduled) {
       try {
         offeredTo = matching.dispatchOffers(task, resolvedOptions.sendOfferNotifications());
       } catch (Exception e) {
         log.error("Failed to dispatch offers for task {}", task.getId(), e);
       }
-    } else {
+    } else if (!awaitingPrepayment) {
       log.info("Task {} scheduled for {}. Skipping immediate dispatch.", task.getId(), scheduledAt);
     }
 
-    try {
+    if (!awaitingPrepayment) try {
       java.util.concurrent.CompletableFuture.runAsync(() -> {
         try {
           realtime.publish(
@@ -343,8 +355,7 @@ public class TaskService {
         } catch (Exception ignored) {
         }
       });
-    } catch (Exception ignored) {
-    }
+    } catch (Exception ignored) {}
 
     return new CreateResult(task.getId(), offeredTo);
   }
@@ -383,6 +394,9 @@ public class TaskService {
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
     task.setLandmark(req.landmark());
+    task.setPaymentCollectionMode(req.paymentCollectionMode() == null
+        ? PaymentCollectionMode.PAY_AFTER_SERVICE
+        : req.paymentCollectionMode());
     Instant now = Instant.now();
     task.setScheduledAt(req.scheduledAt() != null ? req.scheduledAt() : now);
     task.setStatus(TaskStatus.ASSIGNED);
@@ -493,6 +507,7 @@ public class TaskService {
             "status", TaskStatus.ASSIGNED.name()));
 
     notificationQueue.enqueueTaskAccepted(task.getBuyerId(), task);
+    paymentLifecycle.bindHelper(taskId, helperId);
 
     return taskMapper.toResponse(task, false);
   }
@@ -564,6 +579,7 @@ public class TaskService {
     }
 
     if (newStatus == TaskStatus.COMPLETED) {
+      paymentLifecycle.releaseTaskEarning(task);
       notificationQueue.enqueueTaskCompleted(task.getBuyerId(), task);
       invoiceEmail.sendInvoiceEmailAsync(task);
     }
@@ -608,7 +624,8 @@ public class TaskService {
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
     TaskStatus status = task.getStatus();
-    if (status != TaskStatus.SCHEDULED_PENDING && status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED) {
+    if (status != TaskStatus.PAYMENT_PENDING && status != TaskStatus.SCHEDULED_PENDING
+        && status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED) {
       throw new BadRequestException("Task can only be cancelled before arrival");
     }
 
@@ -634,6 +651,7 @@ public class TaskService {
     task.setCancelledByRole(role.name());
     task.setCancelledByUserId(userId);
     task.setCancelledAt(Instant.now());
+    paymentLifecycle.requestTaskRefund(task);
 
     return taskMapper.toResponse(task, role == UserRole.BUYER);
   }
@@ -648,7 +666,7 @@ public class TaskService {
     }
 
     TaskStatus status = task.getStatus();
-    if (status != TaskStatus.SCHEDULED_PENDING && status != TaskStatus.SEARCHING) {
+    if (status != TaskStatus.PAYMENT_PENDING && status != TaskStatus.SCHEDULED_PENDING && status != TaskStatus.SEARCHING) {
       throw new BadRequestException("Task can only be rescheduled if pending or searching");
     }
 
@@ -656,7 +674,8 @@ public class TaskService {
     CrewSchedulingPolicy.validate(1, newScheduledAt, now);
 
     task.setScheduledAt(newScheduledAt);
-    task.setStatus(TaskStatus.SCHEDULED_PENDING);
+    task.setStatus(task.getPaymentCollectionMode() == PaymentCollectionMode.ONLINE_PREPAID
+        && status == TaskStatus.PAYMENT_PENDING ? TaskStatus.PAYMENT_PENDING : TaskStatus.SCHEDULED_PENDING);
     tasks.save(task);
 
     try {
@@ -841,6 +860,7 @@ public class TaskService {
     }
     realtime.publish("task_status_changed", payload);
     if (newStatus == TaskStatus.COMPLETED) {
+      paymentLifecycle.releaseTaskEarning(task);
       invoiceEmail.sendInvoiceEmailAsync(task);
     }
     return task;

@@ -115,6 +115,24 @@ public class SupabaseStorageService {
     throw new BadRequestException("Storage is not configured");
   }
 
+  public String uploadProfileImage(UUID userId, MultipartFile file) {
+    if (file == null || file.isEmpty()) {
+      throw new BadRequestException("Profile photo is required");
+    }
+    if (file.getSize() > 8L * 1024L * 1024L) {
+      throw new BadRequestException("Profile photo is too large (max 8 MB)");
+    }
+    String contentType = safeContentType(file.getContentType());
+    if (!contentType.startsWith("image/")) {
+      throw new BadRequestException("Please select an image");
+    }
+    String ext = detectExtension(contentType, file.getOriginalFilename());
+    String key = buildKey("profile-images", userId.toString(), "avatar", ext);
+    if (isConfigured()) return uploadFile(file, contentType, key, "profile photo");
+    if (isDevMode()) return uploadToMinioFallback(file, contentType, key, "profile photo");
+    throw new BadRequestException("Storage is not configured");
+  }
+
   public String uploadLearningAsset(UUID adminUserId, MultipartFile file) {
     if (file == null || file.isEmpty()) {
       throw new BadRequestException("Learning file is required");

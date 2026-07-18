@@ -142,7 +142,8 @@ public class TaskMapper {
                 t.getCreatedAt(),
                 t.getLandmark(),
                 t.getRecurringTaskId(),
-                batchId);
+                batchId,
+                t.getPaymentCollectionMode());
     }
 
     private String getAcceptLanguageHeader() {

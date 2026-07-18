@@ -25,6 +25,8 @@ import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.payments.dto.PaymentDtos.VerifyPaymentRequest;
 import com.helpinminutes.api.payments.gateway.RazorpayGateway;
 import com.helpinminutes.api.payments.model.PaymentEntity;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.payments.model.PaymentFulfillmentStatus;
 import com.helpinminutes.api.payments.model.PaymentScope;
 import com.helpinminutes.api.payments.model.PaymentStatus;
 import com.helpinminutes.api.payments.model.PaymentWebhookEventEntity;
@@ -61,6 +63,28 @@ class PaymentServiceTest {
   private RazorpayGateway gateway;
   private PaymentService service;
 
+  @Test
+  void helperCanConfirmCashOnlyAfterACompletedPayLaterTask() {
+    UUID buyerId = UUID.randomUUID();
+    UUID helperId = UUID.randomUUID();
+    TaskEntity task = completedTask(buyerId, 15_000L);
+    task.setAssignedHelperId(helperId);
+    task.setPaymentCollectionMode(PaymentCollectionMode.PAY_AFTER_SERVICE);
+    when(tasks.findByIdForUpdate(task.getId())).thenReturn(Optional.of(task));
+    when(payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(eq(task.getId()), any())).thenReturn(Optional.empty());
+    AtomicReference<PaymentEntity> saved = new AtomicReference<>();
+    when(payments.saveAndFlush(any(PaymentEntity.class))).thenAnswer(call -> {
+      saved.set(call.getArgument(0));
+      return call.getArgument(0);
+    });
+
+    var response = service.confirmDirectPayment(helperId, UserRole.HELPER, task.getId(), "cash");
+
+    assertEquals("DIRECT", response.provider());
+    assertEquals(PaymentFulfillmentStatus.EARNED, response.fulfillmentStatus());
+    assertEquals(helperId, saved.get().getHelperId());
+  }
+
   @BeforeEach
   void setUp() {
     payments = mock(PaymentRepository.class);
@@ -83,7 +107,8 @@ class PaymentServiceTest {
         users,
         gateway,
         new ObjectMapper(),
-        manager);
+        manager,
+        mock(PaymentLifecycleService.class));
     when(payments.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
     when(attempts.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
   }
@@ -121,6 +146,38 @@ class PaymentServiceTest {
     assertEquals("order_test", response.orderId());
     assertEquals(PaymentStatus.CREATED, response.status());
     verify(gateway).createOrder(eq(25_000L), eq("INR"), any(), any(Map.class));
+  }
+
+  @Test
+  void createsPrepaidOrderBeforeWorkWithoutDispatchingTheTask() {
+    UUID buyerId = UUID.randomUUID();
+    TaskEntity task = completedTask(buyerId, 19_900L);
+    task.setStatus(TaskStatus.PAYMENT_PENDING);
+    task.setPaymentCollectionMode(PaymentCollectionMode.ONLINE_PREPAID);
+    UserEntity buyer = buyer(buyerId);
+    AtomicReference<PaymentEntity> saved = new AtomicReference<>();
+
+    when(gateway.isConfigured()).thenReturn(true);
+    when(gateway.keyId()).thenReturn("rzp_test_key");
+    when(tasks.findByIdForUpdate(task.getId())).thenReturn(Optional.of(task));
+    when(users.findById(buyerId)).thenReturn(Optional.of(buyer));
+    when(payments.findByBuyerIdAndIdempotencyKey(eq(buyerId), any())).thenReturn(Optional.empty());
+    when(payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(eq(task.getId()), any())).thenReturn(Optional.empty());
+    when(payments.saveAndFlush(any(PaymentEntity.class))).thenAnswer(invocation -> {
+      PaymentEntity entity = invocation.getArgument(0);
+      saved.set(entity);
+      return entity;
+    });
+    when(payments.findById(any(UUID.class))).thenAnswer(ignored -> Optional.ofNullable(saved.get()));
+    when(gateway.createOrder(eq(19_900L), eq("INR"), any(), any(Map.class)))
+        .thenReturn(new RazorpayGateway.OrderResult("order_prepaid", 19_900L, "INR", "created"));
+
+    var response = service.createTaskOrder(
+        buyerId, UserRole.BUYER, task.getId(), "mobile:prepaid:12345678");
+
+    assertEquals("order_prepaid", response.orderId());
+    assertEquals(TaskStatus.PAYMENT_PENDING, task.getStatus());
+    assertEquals(PaymentStatus.CREATED, saved.get().getStatus());
   }
 
   @Test
@@ -343,6 +400,35 @@ class PaymentServiceTest {
         "{\"event\":\"payment.captured\"}", "invalid", "evt_invalid"));
 
     verify(webhookEvents, never()).saveAndFlush(any(PaymentWebhookEventEntity.class));
+  }
+
+  @Test
+  void duplicateCapturedPaymentIsQueuedForAutomaticRefund() {
+    UUID buyerId = UUID.randomUUID();
+    TaskEntity task = completedTask(buyerId, 25_000L);
+    PaymentEntity duplicate = taskPayment(task, "order_duplicate", PaymentStatus.CREATED);
+    duplicate.setProviderPaymentId(null);
+    PaymentEntity original = taskPayment(task, "order_original", PaymentStatus.CAPTURED);
+    original.setId(UUID.randomUUID());
+    original.setStatus(PaymentStatus.CAPTURED);
+    original.setProviderPaymentId("pay_original");
+    when(payments.findByProviderOrderId("order_duplicate")).thenReturn(Optional.of(duplicate));
+    when(payments.findById(duplicate.getId())).thenReturn(Optional.of(duplicate));
+    when(payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(eq(task.getId()), any()))
+        .thenReturn(Optional.of(original));
+    when(gateway.verifyPaymentSignature("order_duplicate", "pay_duplicate", "sig")).thenReturn(true);
+    when(gateway.fetchPayment("pay_duplicate")).thenReturn(new RazorpayGateway.PaymentResult(
+        "pay_duplicate", "order_duplicate", 25_000L, "INR", "captured", "upi", 0L, null, null));
+
+    assertThrows(ConflictException.class, () -> service.verify(
+        buyerId,
+        UserRole.BUYER,
+        new VerifyPaymentRequest(task.getId(), null, "order_duplicate", "pay_duplicate", "sig")));
+
+    assertEquals(PaymentStatus.FAILED, duplicate.getStatus());
+    assertEquals(PaymentFulfillmentStatus.REFUND_PENDING, duplicate.getFulfillmentStatus());
+    assertEquals(25_000L, duplicate.getRefundRequestedAmountPaise());
+    assertEquals("DUPLICATE_PAYMENT", duplicate.getFailureCode());
   }
 
   private static TaskEntity completedTask(UUID buyerId, long amountPaise) {

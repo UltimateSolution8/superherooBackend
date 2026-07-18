@@ -365,7 +365,8 @@ public class AdminController {
           t.getCreatedAt(),
           t.getLandmark(),
           t.getRecurringTaskId(),
-          null);
+          null,
+          t.getPaymentCollectionMode());
     }).toList();
   }
 

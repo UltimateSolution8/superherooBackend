@@ -11,6 +11,7 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
 
 @Entity
 @Table(name = "tasks")
@@ -52,6 +53,10 @@ public class TaskEntity {
 
   @Column(name = "scheduled_at")
   private Instant scheduledAt;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "payment_collection_mode", nullable = false, length = 30)
+  private PaymentCollectionMode paymentCollectionMode;
 
   @Column(name = "arrival_selfie_url")
   private String arrivalSelfieUrl;
@@ -142,6 +147,9 @@ public class TaskEntity {
     }
     if (status == null) {
       status = TaskStatus.SEARCHING;
+    }
+    if (paymentCollectionMode == null) {
+      paymentCollectionMode = PaymentCollectionMode.PAY_AFTER_SERVICE;
     }
     if (urgency == null) {
       urgency = TaskUrgency.NORMAL;
@@ -254,6 +262,14 @@ public class TaskEntity {
 
   public void setScheduledAt(Instant scheduledAt) {
     this.scheduledAt = scheduledAt;
+  }
+
+  public PaymentCollectionMode getPaymentCollectionMode() {
+    return paymentCollectionMode;
+  }
+
+  public void setPaymentCollectionMode(PaymentCollectionMode paymentCollectionMode) {
+    this.paymentCollectionMode = paymentCollectionMode;
   }
 
   public String getArrivalSelfieUrl() {

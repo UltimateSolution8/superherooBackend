@@ -73,6 +73,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     java.util.List<TaskEntity> findTop100ByStatusAndUpdatedAtBefore(TaskStatus status, Instant updatedAt);
 
+    java.util.List<TaskEntity> findTop100ByStatusAndCreatedAtBefore(TaskStatus status, Instant createdAt);
+
     @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")
     long sumBudgetPaiseByStatus(@Param("status") TaskStatus status);
 
