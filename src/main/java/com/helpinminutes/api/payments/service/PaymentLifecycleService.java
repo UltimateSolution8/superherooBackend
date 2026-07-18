@@ -26,7 +26,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class PaymentLifecycleService {
@@ -41,6 +43,7 @@ public class PaymentLifecycleService {
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
   private final RazorpayGateway razorpay;
+  private final TransactionTemplate transactions;
 
   @Value("${PAYMENT_PENDING_EXPIRY_MINUTES:30}")
   private long paymentPendingExpiryMinutes = 30;
@@ -53,7 +56,8 @@ public class PaymentLifecycleService {
       MatchingService matching,
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
-      RazorpayGateway razorpay) {
+      RazorpayGateway razorpay,
+      PlatformTransactionManager transactionManager) {
     this.payments = payments;
     this.tasks = tasks;
     this.batches = batches;
@@ -62,6 +66,7 @@ public class PaymentLifecycleService {
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
     this.razorpay = razorpay;
+    this.transactions = new TransactionTemplate(transactionManager);
   }
 
   @Transactional
@@ -206,7 +211,9 @@ public class PaymentLifecycleService {
   public void processPendingRefunds() {
     for (PaymentEntity row : payments.findTop50ByFulfillmentStatusAndRefundAttemptsLessThanOrderByUpdatedAtAsc(
         PaymentFulfillmentStatus.REFUND_PENDING, MAX_REFUND_ATTEMPTS)) {
-      processRefund(row.getId());
+      // Scheduled calls do not pass through this bean's transactional proxy.
+      // Give every refund its own transaction so one provider failure cannot block the batch.
+      transactions.executeWithoutResult(ignored -> processRefund(row.getId()));
     }
   }
 

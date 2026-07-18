@@ -33,6 +33,8 @@ import java.time.Instant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 class PaymentLifecycleServiceTest {
   private PaymentRepository payments;
@@ -42,6 +44,7 @@ class PaymentLifecycleServiceTest {
   private BookingBatchRepository batches;
   private MediatorJobWorkerRepository workers;
   private PaymentLifecycleService service;
+  private PlatformTransactionManager transactionManager;
 
   @BeforeEach
   void setUp() {
@@ -51,9 +54,12 @@ class PaymentLifecycleServiceTest {
     razorpay = mock(RazorpayGateway.class);
     batches = mock(BookingBatchRepository.class);
     workers = mock(MediatorJobWorkerRepository.class);
+    transactionManager = mock(PlatformTransactionManager.class);
+    when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
     service = new PaymentLifecycleService(
         payments, tasks, batches, workers,
-        matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay);
+        matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
+        transactionManager);
     when(payments.save(any(PaymentEntity.class))).thenAnswer(call -> call.getArgument(0));
   }
 
@@ -109,6 +115,27 @@ class PaymentLifecycleServiceTest {
 
     assertEquals(PaymentFulfillmentStatus.REFUND_PROCESSING, payment.getFulfillmentStatus());
     verify(razorpay).refundPayment(any(), anyLong(), any());
+  }
+
+  @Test
+  void scheduledRefundRunsInsideATransaction() {
+    PaymentEntity payment = payment(UUID.randomUUID(), PaymentStatus.CAPTURED,
+        PaymentFulfillmentStatus.REFUND_PENDING);
+    payment.setProviderPaymentId("pay_scheduled");
+    when(payments.findTop50ByFulfillmentStatusAndRefundAttemptsLessThanOrderByUpdatedAtAsc(
+        PaymentFulfillmentStatus.REFUND_PENDING, 10)).thenReturn(List.of(payment));
+    when(payments.findByIdForUpdate(payment.getId())).thenReturn(Optional.of(payment));
+    when(razorpay.refundPayment(any(), anyLong(), any()))
+        .thenReturn(new RazorpayGateway.RefundResult(
+            "rfnd_scheduled", "pay_scheduled", payment.getAmountPaise(), "processed"));
+
+    service.processPendingRefunds();
+
+    assertEquals(PaymentFulfillmentStatus.REFUND_PROCESSING, payment.getFulfillmentStatus());
+    verify(transactionManager).getTransaction(any());
+    verify(transactionManager).commit(any());
+    verify(razorpay).refundPayment("pay_scheduled", payment.getAmountPaise(),
+        "refund_" + payment.getId().toString().replace("-", "").substring(0, 20));
   }
 
   @Test
