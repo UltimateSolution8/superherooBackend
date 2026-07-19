@@ -603,7 +603,7 @@ public class BookingBatchService {
         ? BookingBatchStatus.PAYMENT_PENDING
         : BookingBatchStatus.PENDING_AUDIT);
     if (collectionMode == PaymentCollectionMode.ONLINE_PREPAID) {
-      batch.setPaymentMode(BatchPaymentMode.PER_HELPER);
+      batch.setPaymentMode(req.paymentMode() == null ? BatchPaymentMode.PER_HELPER : req.paymentMode());
     }
     batch.setRequestedHelperCount(req.helperCount());
     batch.setScheduledWindowStart(req.scheduledAt());

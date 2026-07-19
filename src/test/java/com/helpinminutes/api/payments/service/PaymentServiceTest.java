@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -41,6 +43,7 @@ import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.util.Map;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -51,6 +54,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class PaymentServiceTest {
   private PaymentRepository payments;
@@ -178,6 +182,28 @@ class PaymentServiceTest {
     assertEquals("order_prepaid", response.orderId());
     assertEquals(TaskStatus.PAYMENT_PENDING, task.getStatus());
     assertEquals(PaymentStatus.CREATED, saved.get().getStatus());
+  }
+
+  @Test
+  void blocksASecondOrderWhileAnotherCheckoutIsBeingPrepared() {
+    UUID buyerId = UUID.randomUUID();
+    TaskEntity task = completedTask(buyerId, 19_900L);
+    task.setStatus(TaskStatus.PAYMENT_PENDING);
+    task.setPaymentCollectionMode(PaymentCollectionMode.ONLINE_PREPAID);
+    PaymentEntity creating = taskPayment(task, null, PaymentStatus.CREATING);
+    ReflectionTestUtils.setField(creating, "createdAt", Instant.now());
+
+    when(gateway.isConfigured()).thenReturn(true);
+    when(tasks.findByIdForUpdate(task.getId())).thenReturn(Optional.of(task));
+    when(users.findById(buyerId)).thenReturn(Optional.of(buyer(buyerId)));
+    when(payments.findByBuyerIdAndIdempotencyKey(buyerId, "mobile:new-attempt:12345678"))
+        .thenReturn(Optional.empty());
+    when(payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(eq(task.getId()), any()))
+        .thenReturn(Optional.empty(), Optional.of(creating));
+
+    assertThrows(ConflictException.class, () -> service.createTaskOrder(
+        buyerId, UserRole.BUYER, task.getId(), "mobile:new-attempt:12345678"));
+    verify(gateway, never()).createOrder(anyLong(), anyString(), anyString(), anyMap());
   }
 
   @Test

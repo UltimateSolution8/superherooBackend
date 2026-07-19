@@ -60,7 +60,7 @@ public class ZegoRecordingCallbackController {
 
   private boolean verifySignature(String signature, String timestamp, String nonce) {
     if (props.callbackSecret() == null || props.callbackSecret().isBlank()) {
-      return true;
+      return false;
     }
     if (signature == null || signature.isBlank()) {
       return false;

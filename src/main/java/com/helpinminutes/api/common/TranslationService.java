@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -22,9 +23,13 @@ public class TranslationService {
   private final ObjectMapper objectMapper;
   private final HttpClient httpClient;
   private final Map<String, String> cache = new ConcurrentHashMap<>();
+  private final boolean dynamicTranslationEnabled;
 
-  public TranslationService(ObjectMapper objectMapper) {
+  public TranslationService(
+      ObjectMapper objectMapper,
+      @Value("${DYNAMIC_CONTENT_TRANSLATION_ENABLED:false}") boolean dynamicTranslationEnabled) {
     this.objectMapper = objectMapper;
+    this.dynamicTranslationEnabled = dynamicTranslationEnabled;
     this.httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(1000))
         .build();
@@ -40,6 +45,10 @@ public class TranslationService {
     if (!"en".equals(lang) && !"hi".equals(lang) && !"te".equals(lang)) {
       return text;
     }
+    // User-entered task content must never make list/detail APIs wait on an
+    // external translation service. UI copy is translated in the mobile app;
+    // dynamic translation remains an explicit opt-in feature.
+    if ("en".equals(lang) || !dynamicTranslationEnabled) return text;
 
     String cacheKey = text + "_" + lang;
     String cached = cache.get(cacheKey);
@@ -76,6 +85,7 @@ public class TranslationService {
             }
             String result = sb.toString();
             if (!result.isBlank()) {
+              if (cache.size() >= 10_000) cache.clear();
               cache.put(cacheKey, result);
               return result;
             }

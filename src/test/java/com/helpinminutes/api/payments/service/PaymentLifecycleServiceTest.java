@@ -59,7 +59,7 @@ class PaymentLifecycleServiceTest {
     service = new PaymentLifecycleService(
         payments, tasks, batches, workers,
         matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
-        transactionManager);
+        transactionManager, Runnable::run);
     when(payments.save(any(PaymentEntity.class))).thenAnswer(call -> call.getArgument(0));
   }
 

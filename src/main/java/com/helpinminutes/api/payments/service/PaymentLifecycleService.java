@@ -21,6 +21,8 @@ import com.helpinminutes.api.tasks.repo.TaskRepository;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +31,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class PaymentLifecycleService {
@@ -44,6 +48,7 @@ public class PaymentLifecycleService {
   private final PushNotificationService pushNotifications;
   private final RazorpayGateway razorpay;
   private final TransactionTemplate transactions;
+  private final Executor realtimeDispatchExecutor;
 
   @Value("${PAYMENT_PENDING_EXPIRY_MINUTES:30}")
   private long paymentPendingExpiryMinutes = 30;
@@ -57,7 +62,8 @@ public class PaymentLifecycleService {
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
       RazorpayGateway razorpay,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor) {
     this.payments = payments;
     this.tasks = tasks;
     this.batches = batches;
@@ -67,6 +73,7 @@ public class PaymentLifecycleService {
     this.pushNotifications = pushNotifications;
     this.razorpay = razorpay;
     this.transactions = new TransactionTemplate(transactionManager);
+    this.realtimeDispatchExecutor = realtimeDispatchExecutor;
   }
 
   @Transactional
@@ -99,13 +106,31 @@ public class PaymentLifecycleService {
     tasks.save(task);
 
     if (!scheduled) {
-      try {
-        matching.dispatchOffers(task);
-      } catch (Exception e) {
-        log.error("Captured task {} could not be dispatched", taskId, e);
-      }
+      runAfterCommit(() -> {
+        try {
+          matching.dispatchOffers(task);
+        } catch (Exception e) {
+          // The task is already SEARCHING and remains visible through the
+          // marketplace REST fallback even if realtime dispatch is delayed.
+          log.error("Captured task {} could not be dispatched", taskId, e);
+        }
+      });
     }
     publishTaskActivated(task);
+  }
+
+  private void runAfterCommit(Runnable action) {
+    Runnable submit = () -> realtimeDispatchExecutor.execute(action);
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override
+        public void afterCommit() {
+          submit.run();
+        }
+      });
+    } else {
+      submit.run();
+    }
   }
 
   private void activateBatch(UUID batchId) {

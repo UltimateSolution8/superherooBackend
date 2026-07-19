@@ -783,6 +783,11 @@ public class TaskService {
     return tasks.findById(taskId).orElseThrow(() -> new NotFoundException("Task not found"));
   }
 
+  public boolean hasActiveOffer(UUID taskId, UUID helperId) {
+    return offers.existsByTaskIdAndHelperIdAndStatusAndExpiresAtAfter(
+        taskId, helperId, TaskOfferStatus.OFFERED, Instant.now());
+  }
+
   public List<TaskEntity> listTasksForAdmin(TaskStatus status) {
     return status == null
         ? tasks.findTop100ByOrderByCreatedAtDesc()
@@ -836,9 +841,20 @@ public class TaskService {
     }
 
     Instant now = Instant.now();
-    return tasks.findTop100ByStatusOrderByCreatedAtDesc(TaskStatus.SEARCHING)
+    double radiusMeters = 3000d;
+    double latDelta = radiusMeters / 111_320d;
+    double cosLat = Math.max(0.1d, Math.abs(Math.cos(Math.toRadians(state.lat()))));
+    double lngDelta = radiusMeters / (111_320d * cosLat);
+    return tasks.findAvailableInBounds(
+            TaskStatus.SEARCHING,
+            helperId,
+            now,
+            state.lat() - latDelta,
+            state.lat() + latDelta,
+            state.lng() - lngDelta,
+            state.lng() + lngDelta,
+            org.springframework.data.domain.PageRequest.of(0, 200))
         .stream()
-        .filter(t -> t.getScheduledAt() == null || !t.getScheduledAt().isAfter(now))
         .filter(t -> GeoUtils.distanceMeters(t.getLat(), t.getLng(), state.lat(), state.lng()) <= 3000d)
         .limit(50)
         .toList();

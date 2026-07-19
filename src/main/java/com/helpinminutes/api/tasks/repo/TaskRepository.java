@@ -24,6 +24,26 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     java.util.List<TaskEntity> findTop100ByStatusOrderByCreatedAtDesc(TaskStatus status);
 
+    @Query("""
+            select t from TaskEntity t
+            where t.status = :status
+              and t.assignedHelperId is null
+              and t.buyerId <> :helperId
+              and (t.scheduledAt is null or t.scheduledAt <= :now)
+              and t.lat between :minLat and :maxLat
+              and t.lng between :minLng and :maxLng
+            order by t.createdAt desc
+            """)
+    java.util.List<TaskEntity> findAvailableInBounds(
+            @Param("status") TaskStatus status,
+            @Param("helperId") UUID helperId,
+            @Param("now") Instant now,
+            @Param("minLat") double minLat,
+            @Param("maxLat") double maxLat,
+            @Param("minLng") double minLng,
+            @Param("maxLng") double maxLng,
+            Pageable pageable);
+
     java.util.List<TaskEntity> findTop50ByStatusAndCreatedAtAfterOrderByCreatedAtDesc(TaskStatus status,
             Instant createdAt);
 

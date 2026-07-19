@@ -11,7 +11,7 @@ public class TranslationServiceTest {
 
     @BeforeEach
     public void setUp() {
-        translationService = new TranslationService(new ObjectMapper());
+        translationService = new TranslationService(new ObjectMapper(), false);
     }
 
     @Test

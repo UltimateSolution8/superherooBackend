@@ -68,7 +68,7 @@ public class PaymentService {
   private static final Set<PaymentStatus> OPEN = EnumSet.of(PaymentStatus.CREATING, PaymentStatus.CREATED, PaymentStatus.AUTHORIZED);
   private static final Set<String> SUPPORTED_WEBHOOK_EVENTS = Set.of(
       "payment.captured", "payment.failed", "order.paid", "refund.processed", "refund.failed");
-  private static final Duration CREATING_TIMEOUT = Duration.ofMinutes(2);
+  private static final Duration CREATING_TIMEOUT = Duration.ofSeconds(30);
 
   private final PaymentRepository payments;
   private final PaymentAttemptRepository attempts;
@@ -510,8 +510,19 @@ public class PaymentService {
     if (paid != null) return new PreparedOrder(null, responseFor(paid, user, true), user);
 
     PaymentEntity open = payments.findTopByTaskIdAndStatusInOrderByCreatedAtDesc(taskId, OPEN).orElse(null);
-    if (open != null && open.getProviderOrderId() != null) {
-      return new PreparedOrder(null, responseFor(open, user, false), user);
+    if (open != null) {
+      if (open.getProviderOrderId() != null) {
+        return new PreparedOrder(null, responseFor(open, user, false), user);
+      }
+      if (open.getStatus() == PaymentStatus.CREATING
+          && open.getCreatedAt().isAfter(Instant.now().minus(CREATING_TIMEOUT))) {
+        throw new ConflictException("Payment checkout is being prepared. Please retry shortly");
+      }
+      open.setStatus(PaymentStatus.FAILED);
+      open.setFailureCode("ORDER_CREATION_STALE");
+      open.setFailureDescription("A previous checkout attempt did not finish");
+      open.setFailedAt(Instant.now());
+      payments.save(open);
     }
 
     PaymentEntity intent = new PaymentEntity();
@@ -606,8 +617,19 @@ public class PaymentService {
     PaymentEntity paid = payments.findTopByBatchIdAndStatusInOrderByCreatedAtDesc(batchId, PAID).orElse(null);
     if (paid != null) return new PreparedOrder(null, responseFor(paid, user, true), user);
     PaymentEntity open = payments.findTopByBatchIdAndStatusInOrderByCreatedAtDesc(batchId, OPEN).orElse(null);
-    if (open != null && open.getProviderOrderId() != null) {
-      return new PreparedOrder(null, responseFor(open, user, false), user);
+    if (open != null) {
+      if (open.getProviderOrderId() != null) {
+        return new PreparedOrder(null, responseFor(open, user, false), user);
+      }
+      if (open.getStatus() == PaymentStatus.CREATING
+          && open.getCreatedAt().isAfter(Instant.now().minus(CREATING_TIMEOUT))) {
+        throw new ConflictException("Payment checkout is being prepared. Please retry shortly");
+      }
+      open.setStatus(PaymentStatus.FAILED);
+      open.setFailureCode("ORDER_CREATION_STALE");
+      open.setFailureDescription("A previous checkout attempt did not finish");
+      open.setFailedAt(Instant.now());
+      payments.save(open);
     }
 
     PaymentEntity intent = new PaymentEntity();
