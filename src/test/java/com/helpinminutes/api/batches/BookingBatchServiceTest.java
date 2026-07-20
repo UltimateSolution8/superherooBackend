@@ -61,6 +61,37 @@ class BookingBatchServiceTest {
     }
 
     @Test
+    void validateLine_mumbaiCoordinates_shouldBeRejected() {
+        // Bug reproduction: Mumbai coordinates are within India boundaries but should be rejected
+        // as they are outside Hyderabad service area
+        // Mumbai: Latitude 19.0760, Longitude 72.8777
+        var errors = validate("Valid title here", "Valid description long enough",
+                "NORMAL", 30, 10000L, 19.0760, 72.8777, null, null);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("service area")),
+                "Mumbai location outside service area should fail - THIS IS THE BUG");
+    }
+
+    @Test
+    void validateLine_hyderabadCenterCoordinates_shouldBeAccepted() {
+        // Positive test: Hyderabad center coordinates should be accepted
+        // Hyderabad center: Latitude 17.3850, Longitude 78.4867
+        var errors = validate("Valid title here", "Valid description long enough",
+                "NORMAL", 30, 10000L, 17.3850, 78.4867, null, null);
+        assertFalse(errors.stream().anyMatch(e -> e.contains("service area")),
+                "Hyderabad center location should be accepted");
+    }
+
+    @Test
+    void validateLine_hyderabadNearbyCoordinates_shouldBeAccepted() {
+        // Positive test: Coordinates within Hyderabad service area (55km radius) should pass
+        // Location ~10km south of Hyderabad center
+        var errors = validate("Valid title here", "Valid description long enough",
+                "NORMAL", 30, 10000L, 17.2850, 78.4867, null, null);
+        assertFalse(errors.stream().anyMatch(e -> e.contains("service area")),
+                "Location within Hyderabad service area should be accepted");
+    }
+
+    @Test
     void validateLine_scheduledAtInPast_returnsError() {
         Instant past = Instant.now().minus(1, ChronoUnit.HOURS);
         var errors = validate("Valid title here", "Valid description long enough",

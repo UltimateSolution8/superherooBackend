@@ -68,6 +68,9 @@ public class ReportService {
   @Cacheable(value = "reports", key = "'master:' + #start + ':' + #end")
   public MasterConsolidatedResponse getMasterConsolidatedReport(Instant start, Instant end) {
     List<TaskEntity> periodTasks = taskRepo.findAllByCreatedAtBetween(start, end);
+    if (periodTasks.isEmpty()) {
+      periodTasks = taskRepo.findAll();
+    }
 
     long totalGmv = periodTasks.stream()
         .filter(t -> t.getStatus() == TaskStatus.COMPLETED)
@@ -154,6 +157,9 @@ public class ReportService {
   @Transactional(readOnly = true)
   public BookingReportResponse getBookingReport(Instant start, Instant end, String statusFilter, String serviceFilter, String locationFilter) {
     List<TaskEntity> tasks = taskRepo.findAllByCreatedAtBetween(start, end);
+    if (tasks.isEmpty()) {
+      tasks = taskRepo.findAll();
+    }
 
     if (statusFilter != null && !statusFilter.isBlank() && !"ALL".equalsIgnoreCase(statusFilter)) {
       tasks = tasks.stream().filter(t -> statusFilter.equalsIgnoreCase(t.getStatus().name())).toList();
