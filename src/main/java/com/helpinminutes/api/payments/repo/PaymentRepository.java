@@ -3,6 +3,7 @@ package com.helpinminutes.api.payments.repo;
 import com.helpinminutes.api.payments.model.PaymentEntity;
 import com.helpinminutes.api.payments.model.PaymentStatus;
 import com.helpinminutes.api.payments.model.PaymentFulfillmentStatus;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -35,4 +36,5 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, UUID> {
   List<PaymentEntity> findTop100ByMediatorIdOrderByCreatedAtDesc(UUID mediatorId);
   List<PaymentEntity> findTop50ByFulfillmentStatusAndRefundAttemptsLessThanOrderByUpdatedAtAsc(
       PaymentFulfillmentStatus fulfillmentStatus, int maxAttempts);
+  List<PaymentEntity> findByCreatedAtBetween(Instant start, Instant end);
 }

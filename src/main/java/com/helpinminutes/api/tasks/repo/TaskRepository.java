@@ -136,4 +136,6 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     java.util.List<TaskEntity> findByRecurringTaskIdAndStatus(UUID recurringTaskId, TaskStatus status);
 
     java.util.List<TaskEntity> findByRecurringTaskId(UUID recurringTaskId);
+
+    java.util.List<TaskEntity> findAllByCreatedAtBetween(Instant start, Instant end);
 }
