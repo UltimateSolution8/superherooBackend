@@ -27,8 +27,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
 
--- 2. Audit Logs Table for Security and Admin Activity Tracking
-CREATE TABLE IF NOT EXISTS audit_logs (
+-- 2. System Audit Logs Table for Security and Admin Activity Tracking
+CREATE TABLE IF NOT EXISTS system_audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     actor_id UUID,
     actor_email VARCHAR(255),
@@ -41,9 +41,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action_type);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_sys_audit_logs_created_at ON system_audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sys_audit_logs_action ON system_audit_logs(action_type);
+CREATE INDEX IF NOT EXISTS idx_sys_audit_logs_actor ON system_audit_logs(actor_id);
 
 -- 3. Daily Aggregate Summary Fact Table
 CREATE TABLE IF NOT EXISTS reporting_daily_metrics (
