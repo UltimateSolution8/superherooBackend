@@ -2,18 +2,28 @@ package com.helpinminutes.api.helpers.presence;
 
 import com.helpinminutes.api.config.AppProperties;
 import com.uber.h3core.H3Core;
+import java.util.LinkedHashMap;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.data.geo.Point;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.redis.connection.RedisGeoCommands;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 
 @Service
 public class HelperPresenceService {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(HelperPresenceService.class);
   private static final String ONLINE_HELPERS_KEY = "him:online:helpers";
+  private static final String ONLINE_HELPERS_GEO_KEY = "him:online:helpers:geo";
   private final StringRedisTemplate redis;
   private final H3Core h3;
   private final AppProperties props;
@@ -31,37 +41,46 @@ public class HelperPresenceService {
     String stateKey = keyHelperState(helperId);
     String prevCell = redis.opsForHash().get(stateKey, "h3") instanceof String s ? s : null;
 
-    if (prevCell != null && !prevCell.isBlank() && !prevCell.equals(newCell)) {
-      redis.opsForSet().remove(keyOnlineH3(prevCell), helperId.toString());
-    }
+    String member = helperId.toString();
+    Map<byte[], byte[]> state = new LinkedHashMap<>();
+    state.put(bytes("lat"), bytes(Double.toString(lat)));
+    state.put(bytes("lng"), bytes(Double.toString(lng)));
+    state.put(bytes("h3"), bytes(newCell));
+    state.put(bytes("online"), bytes("1"));
+    state.put(bytes("lastSeenEpochMs"), bytes(Long.toString(Instant.now().toEpochMilli())));
 
-    redis.opsForHash().put(stateKey, "lat", Double.toString(lat));
-    redis.opsForHash().put(stateKey, "lng", Double.toString(lng));
-    redis.opsForHash().put(stateKey, "h3", newCell);
-    redis.opsForHash().put(stateKey, "online", "1");
-    redis.opsForHash().put(stateKey, "lastSeenEpochMs", Long.toString(Instant.now().toEpochMilli()));
-    
-    // Set 10-minute expiry to automatically clean up Redis memory when helpers go offline/inactive
-    redis.expire(stateKey, Duration.ofMinutes(10));
-
-    redis.opsForSet().add(keyOnlineH3(newCell), helperId.toString());
-    redis.opsForSet().add(ONLINE_HELPERS_KEY, helperId.toString());
+    // Upstash is network-remote in production. Pipeline the heartbeat update so
+    // one online toggle does not incur a separate network round trip per field.
+    redis.executePipelined((RedisCallback<Object>) connection -> {
+      if (prevCell != null && !prevCell.isBlank() && !prevCell.equals(newCell)) {
+        connection.setCommands().sRem(bytes(keyOnlineH3(prevCell)), bytes(member));
+      }
+      connection.hashCommands().hMSet(bytes(stateKey), state);
+      connection.keyCommands().pExpire(bytes(stateKey), Duration.ofMinutes(10).toMillis());
+      connection.setCommands().sAdd(bytes(keyOnlineH3(newCell)), bytes(member));
+      connection.setCommands().sAdd(bytes(ONLINE_HELPERS_KEY), bytes(member));
+      connection.geoCommands().geoAdd(bytes(ONLINE_HELPERS_GEO_KEY), new Point(lng, lat), bytes(member));
+      return null;
+    });
   }
 
   public void setOffline(UUID helperId) {
     String stateKey = keyHelperState(helperId);
     String prevCell = redis.opsForHash().get(stateKey, "h3") instanceof String s ? s : null;
-    if (prevCell != null && !prevCell.isBlank()) {
-      redis.opsForSet().remove(keyOnlineH3(prevCell), helperId.toString());
-    }
-
-    redis.opsForHash().put(stateKey, "online", "0");
-    redis.opsForHash().put(stateKey, "lastSeenEpochMs", Long.toString(Instant.now().toEpochMilli()));
-    
-    // Expire the offline state after 10 minutes to clean up Redis memory
-    redis.expire(stateKey, Duration.ofMinutes(10));
-    
-    redis.opsForSet().remove(ONLINE_HELPERS_KEY, helperId.toString());
+    String member = helperId.toString();
+    Map<byte[], byte[]> state = new LinkedHashMap<>();
+    state.put(bytes("online"), bytes("0"));
+    state.put(bytes("lastSeenEpochMs"), bytes(Long.toString(Instant.now().toEpochMilli())));
+    redis.executePipelined((RedisCallback<Object>) connection -> {
+      if (prevCell != null && !prevCell.isBlank()) {
+        connection.setCommands().sRem(bytes(keyOnlineH3(prevCell)), bytes(member));
+      }
+      connection.hashCommands().hMSet(bytes(stateKey), state);
+      connection.keyCommands().pExpire(bytes(stateKey), Duration.ofMinutes(10).toMillis());
+      connection.setCommands().sRem(bytes(ONLINE_HELPERS_KEY), bytes(member));
+      connection.zSetCommands().zRem(bytes(ONLINE_HELPERS_GEO_KEY), bytes(member));
+      return null;
+    });
   }
 
   private boolean isHelperActive(UUID helperId) {
@@ -90,6 +109,7 @@ public class HelperPresenceService {
 
     // Helper is stale/inactive. Clean up from sets.
     redis.opsForSet().remove(ONLINE_HELPERS_KEY, helperId.toString());
+    redis.opsForGeo().remove(ONLINE_HELPERS_GEO_KEY, helperId.toString());
     if (h3Cell != null && !h3Cell.isBlank()) {
       redis.opsForSet().remove(keyOnlineH3(h3Cell), helperId.toString());
     }
@@ -121,19 +141,129 @@ public class HelperPresenceService {
   }
 
   public Set<UUID> getOnlineHelpersForCells(List<Long> h3Cells) {
-    Set<String> helperIds = h3Cells.stream()
+    if (h3Cells == null || h3Cells.isEmpty()) return Set.of();
+    List<String> keys = h3Cells.stream()
         .map(Long::toUnsignedString)
         .map(HelperPresenceService::keyOnlineH3)
-        .flatMap(k -> {
-          Set<String> members = redis.opsForSet().members(k);
-          return members == null ? Set.<String>of().stream() : members.stream();
-        })
-        .collect(Collectors.toSet());
+        .toList();
+    Set<String> helperIds = keys.size() == 1
+        ? redis.opsForSet().members(keys.get(0))
+        : redis.opsForSet().union(keys.get(0), keys.subList(1, keys.size()));
+    if (helperIds == null || helperIds.isEmpty()) return Set.of();
 
     return helperIds.stream()
-        .map(UUID::fromString)
-        .filter(this::isHelperActive)
+        .map(HelperPresenceService::safeUuid)
+        .filter(java.util.Objects::nonNull)
         .collect(Collectors.toSet());
+  }
+
+  /**
+   * Finds nearby helpers with one Redis geospatial lookup, then verifies their
+   * authoritative online heartbeat before they enter matching. H3 remains as a
+   * migration fallback while existing online sessions populate the GEO index.
+   */
+  public Map<UUID, HelperState> getNearbyActiveHelperStates(
+      double lat,
+      double lng,
+      double radiusMeters,
+      int limit) {
+    var args = RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs()
+        .includeDistance()
+        .sortAscending()
+        .limit(Math.max(1, limit));
+    org.springframework.data.geo.GeoResults<RedisGeoCommands.GeoLocation<String>> results;
+    try {
+      results = redis.opsForGeo().search(
+          ONLINE_HELPERS_GEO_KEY,
+          GeoReference.fromCoordinate(lng, lat),
+          new Distance(Math.max(1d, radiusMeters) / 1000d, Metrics.KILOMETERS),
+          args);
+    } catch (RuntimeException e) {
+      log.warn("Nearby helper GEO lookup failed; using H3 fallback: {}", e.getMessage());
+      return Map.of();
+    }
+    if (results == null || results.getContent().isEmpty()) return Map.of();
+
+    List<String> memberIds = results.getContent().stream()
+        .map(result -> result.getContent().getName())
+        .filter(java.util.Objects::nonNull)
+        .filter(id -> safeUuid(id) != null)
+        .toList();
+    if (memberIds.isEmpty()) return Map.of();
+    byte[][] fields = List.of("lat", "lng", "h3", "online", "lastSeenEpochMs").stream()
+        .map(redis.getStringSerializer()::serialize)
+        .toArray(byte[][]::new);
+    List<Object> stateRows;
+    try {
+      stateRows = redis.executePipelined((RedisCallback<Object>) connection -> {
+        for (String memberId : memberIds) {
+          connection.hashCommands().hMGet(
+              redis.getStringSerializer().serialize(keyHelperState(UUID.fromString(memberId))), fields);
+        }
+        return null;
+      });
+    } catch (RuntimeException e) {
+      log.warn("Nearby helper state pipeline failed; using H3 fallback: {}", e.getMessage());
+      return Map.of();
+    }
+
+    Map<UUID, HelperState> active = new LinkedHashMap<>();
+    List<String> staleMembers = new java.util.ArrayList<>();
+    for (int i = 0; i < memberIds.size(); i++) {
+      UUID helperId = safeUuid(memberIds.get(i));
+      HelperState state = helperId == null || i >= stateRows.size() ? null : stateFromPipeline(stateRows.get(i));
+      if (helperId != null && isActiveState(state)) {
+        active.put(helperId, state);
+      } else {
+        staleMembers.add(memberIds.get(i));
+      }
+    }
+    if (!staleMembers.isEmpty()) {
+      redis.opsForGeo().remove(ONLINE_HELPERS_GEO_KEY, staleMembers.toArray(String[]::new));
+    }
+    return active;
+  }
+
+  private static HelperState stateFromPipeline(Object raw) {
+    if (!(raw instanceof List<?> values) || values.size() < 5) return null;
+    try {
+      String lat = stringValue(values.get(0));
+      String lng = stringValue(values.get(1));
+      if (lat == null || lng == null) return null;
+      String lastSeen = stringValue(values.get(4));
+      return new HelperState(
+          Double.parseDouble(lat),
+          Double.parseDouble(lng),
+          stringValue(values.get(2)),
+          stringValue(values.get(3)),
+          lastSeen == null ? null : Long.parseLong(lastSeen));
+    } catch (RuntimeException ignored) {
+      return null;
+    }
+  }
+
+  private static String stringValue(Object value) {
+    if (value instanceof String string) return string;
+    if (value instanceof byte[] bytes) return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    return value == null ? null : String.valueOf(value);
+  }
+
+  private boolean isActiveState(HelperState state) {
+    if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) return false;
+    long staleMs = Math.max(10, props.matching().helperStaleAfterSeconds()) * 1000L;
+    return Instant.now().toEpochMilli() - state.lastSeenEpochMs() <= staleMs;
+  }
+
+  private static UUID safeUuid(String raw) {
+    try {
+      return raw == null ? null : UUID.fromString(raw);
+    } catch (IllegalArgumentException ignored) {
+      return null;
+    }
+  }
+
+  private byte[] bytes(String value) {
+    return redis.getStringSerializer().serialize(value);
   }
 
   public Set<UUID> getOnlineHelpers() {

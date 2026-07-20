@@ -48,31 +48,46 @@ public class TaskMapper {
             return Collections.emptyList();
         }
 
-        Set<UUID> userIds = taskEntities.stream()
-                .flatMap(t -> Stream.of(t.getBuyerId(), t.getAssignedHelperId()))
+        Set<UUID> buyerIds = taskEntities.stream()
+                .map(TaskEntity::getBuyerId)
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toSet());
+        Set<UUID> helperIds = taskEntities.stream()
+                .map(TaskEntity::getAssignedHelperId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+        Set<UUID> userIds = Stream.concat(buyerIds.stream(), helperIds.stream())
+                .collect(Collectors.toSet());
+        Set<UUID> taskIds = taskEntities.stream().map(TaskEntity::getId).collect(Collectors.toSet());
 
         Map<UUID, UserEntity> userMap = users.findAllById(userIds).stream()
                 .collect(Collectors.toMap(UserEntity::getId, u -> u));
 
-        // Note: For production at scale, these aggregates should be cached in
-        // UserEntity or HelperProfile.
-        // For now, we optimize by fetching them once per unique user in the list.
-        Map<UUID, UserStats> statsMap = userIds.stream()
-                .collect(Collectors.toMap(uid -> uid, uid -> fetchUserStats(uid)));
+        Map<UUID, UserStats> buyerStats = statsMap(
+                buyerIds.isEmpty() ? List.of() : tasks.findBuyerStats(buyerIds, TaskStatus.COMPLETED));
+        Map<UUID, UserStats> helperStats = statsMap(
+                helperIds.isEmpty() ? List.of() : tasks.findHelperStats(helperIds, TaskStatus.COMPLETED));
+
+        Map<UUID, UUID> batchIdsByTask = bookingBatchItems.findByTaskIdIn(taskIds).stream()
+                .collect(Collectors.toMap(
+                        com.helpinminutes.api.batches.model.BookingBatchItemEntity::getTaskId,
+                        com.helpinminutes.api.batches.model.BookingBatchItemEntity::getBatchId,
+                        (first, ignored) -> first));
+        mediatorWorkers.findByTaskIdIn(taskIds).forEach(worker ->
+                batchIdsByTask.putIfAbsent(worker.getTaskId(), worker.getBatchId()));
 
         return taskEntities.stream()
-                .map(t -> mapToResponse(t, includeOtp, userMap, statsMap))
+                .map(t -> mapToResponse(t, includeOtp, userMap, buyerStats, helperStats, batchIdsByTask))
                 .collect(Collectors.toList());
     }
 
     private TaskResponse mapToResponse(TaskEntity t, boolean includeOtp, Map<UUID, UserEntity> userMap,
-            Map<UUID, UserStats> statsMap) {
+            Map<UUID, UserStats> buyerStatsMap, Map<UUID, UserStats> helperStatsMap,
+            Map<UUID, UUID> batchIdsByTask) {
         UserEntity buyer = userMap.get(t.getBuyerId());
         UserEntity helper = userMap.get(t.getAssignedHelperId());
-        UserStats buyerStats = statsMap.get(t.getBuyerId());
-        UserStats helperStats = statsMap.get(t.getAssignedHelperId());
+        UserStats buyerStats = buyerStatsMap.get(t.getBuyerId());
+        UserStats helperStats = helperStatsMap.get(t.getAssignedHelperId());
 
         String buyerPhone = buyer != null ? buyer.getPhone() : null;
         String buyerName = buyer != null
@@ -89,11 +104,7 @@ public class TaskMapper {
         String translatedTitle = translationService.translate(t.getTitle(), acceptLanguage);
         String translatedDescription = translationService.translate(t.getDescription(), acceptLanguage);
 
-        UUID batchId = bookingBatchItems.findByTaskId(t.getId())
-                .map(com.helpinminutes.api.batches.model.BookingBatchItemEntity::getBatchId)
-                .orElseGet(() -> mediatorWorkers.findByTaskId(t.getId())
-                        .map(com.helpinminutes.api.mediator.model.MediatorJobWorkerEntity::getBatchId)
-                        .orElse(null));
+        UUID batchId = batchIdsByTask.get(t.getId());
 
         return new TaskResponse(
                 t.getId(),
@@ -142,7 +153,8 @@ public class TaskMapper {
                 t.getCreatedAt(),
                 t.getLandmark(),
                 t.getRecurringTaskId(),
-                batchId);
+                batchId,
+                t.getPaymentCollectionMode());
     }
 
     private String getAcceptLanguageHeader() {
@@ -160,17 +172,11 @@ public class TaskMapper {
         return null;
     }
 
-    private UserStats fetchUserStats(UUID userId) {
-        // This is still N queries if unique user count is high, but much better than N
-        // * 6.
-        // Ideally these would be aggregate queries using GROUP BY or cached.
-        Long count = tasks.countByAssignedHelperIdAndStatus(userId, TaskStatus.COMPLETED);
-        if (count == 0) {
-            count = tasks.countByBuyerIdAndStatus(userId, TaskStatus.COMPLETED);
-        }
-        Double helperAvg = tasks.avgBuyerRatingForHelper(userId);
-        Double buyerAvg = tasks.avgHelperRatingForBuyer(userId);
-        return new UserStats(count, helperAvg != null ? helperAvg : buyerAvg);
+    private Map<UUID, UserStats> statsMap(List<Object[]> rows) {
+        return rows.stream().collect(Collectors.toMap(
+                row -> (UUID) row[0],
+                row -> new UserStats(((Number) row[1]).longValue(),
+                        row[2] == null ? null : ((Number) row[2]).doubleValue())));
     }
 
     private record UserStats(Long completedCount, Double avgRating) {

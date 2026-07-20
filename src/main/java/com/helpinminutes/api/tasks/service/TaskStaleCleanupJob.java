@@ -19,6 +19,7 @@ import com.helpinminutes.api.support.service.SupportService;
 import com.helpinminutes.api.support.dto.CreateTicketRequest;
 import com.helpinminutes.api.support.model.SupportTicketCategory;
 import com.helpinminutes.api.users.model.UserRole;
+import com.helpinminutes.api.payments.service.PaymentLifecycleService;
 
 @Component
 public class TaskStaleCleanupJob {
@@ -29,16 +30,19 @@ public class TaskStaleCleanupJob {
   private final Duration staleAssigned;
   private final Duration searchingTimeout;
   private final RealtimePublisher realtime;
+  private final PaymentLifecycleService paymentLifecycle;
 
   public TaskStaleCleanupJob(
       TaskRepository tasks,
       SupportService supportService,
       RealtimePublisher realtime,
+      PaymentLifecycleService paymentLifecycle,
       @Value("${TASK_ASSIGNED_STALE_MINUTES:20}") long staleAssignedMinutes,
       @Value("${TASK_SEARCH_TIMEOUT_SECONDS:120}") long searchingTimeoutSeconds) {
     this.tasks = tasks;
     this.supportService = supportService;
     this.realtime = realtime;
+    this.paymentLifecycle = paymentLifecycle;
     this.staleAssigned = Duration.ofMinutes(Math.max(5, staleAssignedMinutes));
     this.searchingTimeout = Duration.ofSeconds(Math.max(60, searchingTimeoutSeconds));
   }
@@ -60,6 +64,7 @@ public class TaskStaleCleanupJob {
       task.setCancelledByUserId(null);
       task.setCancelledAt(now);
       tasks.save(task);
+      paymentLifecycle.requestTaskRefund(task);
       closed++;
     }
     log.info("Auto-cancelled {} assigned tasks older than {} minutes", closed, staleAssigned.toMinutes());
@@ -81,12 +86,15 @@ public class TaskStaleCleanupJob {
       task.setCancelledByUserId(null);
       task.setCancelledAt(now);
       tasks.save(task);
+      paymentLifecycle.requestTaskRefund(task);
       closed++;
       try {
         CreateTicketRequest ticketReq = new CreateTicketRequest(
             SupportTicketCategory.CANCELLATION,
             "Task Auto-Cancelled: Timeout",
-            "Task with title '" + task.getTitle() + "' and ID " + task.getId() + " was auto-cancelled because no helper accepted it within 4 minutes.",
+            "Task with title '" + task.getTitle() + "' and ID " + task.getId()
+                + " was auto-cancelled because no helper accepted it within "
+                + searchingTimeout.toSeconds() + " seconds.",
             task.getId().toString()
         );
         supportService.createTicket(task.getBuyerId(), UserRole.BUYER, ticketReq);

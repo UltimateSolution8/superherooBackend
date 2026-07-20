@@ -143,7 +143,8 @@ public class TaskController {
               req.lng(),
               req.addressText(),
               req.scheduledAt(),
-              req.landmark()));
+              req.landmark(),
+              req.resolvedPaymentCollectionMode()));
       return new CreateBulkTaskResponse(
           null,
           1,
@@ -230,6 +231,7 @@ public class TaskController {
 
     boolean canSee = (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
         || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
+        || (principal.role() == UserRole.HELPER && tasks.hasActiveOffer(taskId, principal.userId()))
         || principal.role() == UserRole.ADMIN;
 
     if (!canSee) {

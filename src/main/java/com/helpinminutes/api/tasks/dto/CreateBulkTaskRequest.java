@@ -9,6 +9,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.batches.model.BatchPaymentMode;
 
 public record CreateBulkTaskRequest(
     @NotBlank @Size(max = 120) String title,
@@ -21,6 +23,11 @@ public record CreateBulkTaskRequest(
     @Size(max = 500) String addressText,
     Instant scheduledAt,
     @NotNull @Min(1) @Max(500) Integer helperCount,
-    String landmark
+    String landmark,
+    PaymentCollectionMode paymentCollectionMode,
+    BatchPaymentMode paymentMode
 ) {
+  public PaymentCollectionMode resolvedPaymentCollectionMode() {
+    return paymentCollectionMode == null ? PaymentCollectionMode.PAY_AFTER_SERVICE : paymentCollectionMode;
+  }
 }

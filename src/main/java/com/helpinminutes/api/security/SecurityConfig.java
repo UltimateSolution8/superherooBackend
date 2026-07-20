@@ -14,13 +14,17 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
 
   @Bean
-  public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService) throws Exception {
+  public SecurityFilterChain securityFilterChain(
+      HttpSecurity http,
+      JwtService jwtService,
+      StringRedisTemplate redis) throws Exception {
     http
         .csrf(csrf -> csrf.disable())
         .cors(Customizer.withDefaults())
@@ -38,7 +42,7 @@ public class SecurityConfig {
             .requestMatchers("/api/v1/tasks/unassigned").permitAll()
             .requestMatchers("/api/v1/kyc/recording/**").permitAll()
             .anyRequest().authenticated())
-        .addFilterBefore(new RateLimitFilter(), UsernamePasswordAuthenticationFilter.class)
+        .addFilterBefore(new RateLimitFilter(redis), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
 
     return http.build();

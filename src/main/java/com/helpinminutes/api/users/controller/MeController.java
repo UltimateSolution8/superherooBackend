@@ -8,6 +8,7 @@ import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
 import com.helpinminutes.api.users.service.EmailVerificationService;
 import com.helpinminutes.api.auth.service.OtpService;
+import com.helpinminutes.api.storage.SupabaseStorageService;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,6 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.multipart.MultipartFile;
 import jakarta.validation.Valid;
 
 @RestController
@@ -26,29 +29,21 @@ public class MeController {
   private final EmailVerificationService emailVerificationService;
   private final AppProperties props;
   private final OtpService otpService;
+  private final SupabaseStorageService storage;
 
-  public MeController(UserRepository users, EmailVerificationService emailVerificationService, AppProperties props, OtpService otpService) {
+  public MeController(UserRepository users, EmailVerificationService emailVerificationService, AppProperties props, OtpService otpService, SupabaseStorageService storage) {
     this.users = users;
     this.emailVerificationService = emailVerificationService;
     this.props = props;
     this.otpService = otpService;
+    this.storage = storage;
   }
 
   @GetMapping("/me")
   public MeResponse me(@AuthenticationPrincipal UserPrincipal principal) {
     UUID userId = principal.userId();
     UserEntity u = users.findById(userId).orElseThrow();
-    return new MeResponse(
-        u.getId(),
-        u.getRole().name(),
-        u.getPhone(),
-        u.getEmail(),
-        u.isEmailVerified(),
-        u.getDisplayName(),
-        u.isBulkCsvEnabled(),
-        u.getDob(),
-        u.getBloodGroup(),
-        u.getGender());
+    return response(u);
   }
 
   @PutMapping("/me")
@@ -89,17 +84,7 @@ public class MeController {
       u.setGender(req.gender().trim().isEmpty() ? null : req.gender().trim());
     }
     users.save(u);
-    return new MeResponse(
-        u.getId(),
-        u.getRole().name(),
-        u.getPhone(),
-        u.getEmail(),
-        u.isEmailVerified(),
-        u.getDisplayName(),
-        u.isBulkCsvEnabled(),
-        u.getDob(),
-        u.getBloodGroup(),
-        u.getGender());
+    return response(u);
   }
 
   @PostMapping("/me/email/verify/send")
@@ -126,17 +111,7 @@ public class MeController {
     }
     u.setEmailVerified(true);
     users.save(u);
-    return new MeResponse(
-        u.getId(),
-        u.getRole().name(),
-        u.getPhone(),
-        u.getEmail(),
-        u.isEmailVerified(),
-        u.getDisplayName(),
-        u.isBulkCsvEnabled(),
-        u.getDob(),
-        u.getBloodGroup(),
-        u.getGender());
+    return response(u);
   }
 
   @PostMapping("/me/phone/verify/send")
@@ -176,17 +151,24 @@ public class MeController {
     UserEntity u = users.findById(principal.userId()).orElseThrow();
     u.setPhone(normalized);
     users.save(u);
+    return response(u);
+  }
+
+  @PostMapping(value = "/me/profile-photo", consumes = "multipart/form-data")
+  public MeResponse uploadProfilePhoto(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @RequestPart("file") MultipartFile file) {
+    UserEntity user = users.findById(principal.userId()).orElseThrow();
+    user.setProfileImageUrl(storage.uploadProfileImage(user.getId(), file));
+    users.save(user);
+    return response(user);
+  }
+
+  private MeResponse response(UserEntity u) {
     return new MeResponse(
-        u.getId(),
-        u.getRole().name(),
-        u.getPhone(),
-        u.getEmail(),
-        u.isEmailVerified(),
-        u.getDisplayName(),
-        u.isBulkCsvEnabled(),
-        u.getDob(),
-        u.getBloodGroup(),
-        u.getGender());
+        u.getId(), u.getRole().name(), u.getPhone(), u.getEmail(), u.isEmailVerified(),
+        u.getDisplayName(), u.isBulkCsvEnabled(), u.getDob(), u.getBloodGroup(), u.getGender(),
+        u.getProfileImageUrl(), u.getCreatedAt());
   }
 
   public record UpdateMeRequest(String displayName, String email, String dob, String bloodGroup, String gender) {}
@@ -201,7 +183,9 @@ public class MeController {
       boolean bulkCsvEnabled,
       String dob,
       String bloodGroup,
-      String gender) {}
+      String gender,
+      String profileImageUrl,
+      java.time.Instant createdAt) {}
 
   public record SendEmailOtpResponse(boolean success, String otp) {}
 

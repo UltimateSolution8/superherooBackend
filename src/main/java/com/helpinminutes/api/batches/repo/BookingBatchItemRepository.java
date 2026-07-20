@@ -2,6 +2,7 @@ package com.helpinminutes.api.batches.repo;
 
 import com.helpinminutes.api.batches.model.BookingBatchItemEntity;
 import java.util.List;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,5 +11,6 @@ public interface BookingBatchItemRepository extends JpaRepository<BookingBatchIt
   List<BookingBatchItemEntity> findByBatchIdOrderByLineNoAsc(UUID batchId);
   Optional<BookingBatchItemEntity> findByIdAndBatchId(UUID id, UUID batchId);
   Optional<BookingBatchItemEntity> findByTaskId(UUID taskId);
+  List<BookingBatchItemEntity> findByTaskIdIn(Collection<UUID> taskIds);
   long countByBatchId(UUID batchId);
 }

@@ -60,7 +60,8 @@ public class TaskRescheduleTest {
         mock(com.helpinminutes.api.batches.repo.BookingBatchRepository.class),
         mock(com.helpinminutes.api.batches.repo.BookingBatchItemRepository.class),
         mock(com.fasterxml.jackson.databind.ObjectMapper.class),
-        mock(InvoiceEmailService.class)
+        mock(InvoiceEmailService.class),
+        mock(com.helpinminutes.api.payments.service.PaymentLifecycleService.class)
     );
   }
 

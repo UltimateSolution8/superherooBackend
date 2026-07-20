@@ -235,6 +235,7 @@ public class PushNotificationService {
     try {
       Map<String, String> data = new HashMap<>();
       data.put("type", "TASK_CREATED_MONITOR");
+      data.put("destination", "NOTIFICATIONS");
       data.put("taskId", task.getId().toString());
       data.put("title", bodyTitle);
       data.put("budgetPaise", String.valueOf(budgetPaise));

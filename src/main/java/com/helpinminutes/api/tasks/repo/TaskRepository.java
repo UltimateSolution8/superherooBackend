@@ -24,6 +24,26 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     java.util.List<TaskEntity> findTop100ByStatusOrderByCreatedAtDesc(TaskStatus status);
 
+    @Query("""
+            select t from TaskEntity t
+            where t.status = :status
+              and t.assignedHelperId is null
+              and t.buyerId <> :helperId
+              and (t.scheduledAt is null or t.scheduledAt <= :now)
+              and t.lat between :minLat and :maxLat
+              and t.lng between :minLng and :maxLng
+            order by t.createdAt desc
+            """)
+    java.util.List<TaskEntity> findAvailableInBounds(
+            @Param("status") TaskStatus status,
+            @Param("helperId") UUID helperId,
+            @Param("now") Instant now,
+            @Param("minLat") double minLat,
+            @Param("maxLat") double maxLat,
+            @Param("minLng") double minLng,
+            @Param("maxLng") double maxLng,
+            Pageable pageable);
+
     java.util.List<TaskEntity> findTop50ByStatusAndCreatedAtAfterOrderByCreatedAtDesc(TaskStatus status,
             Instant createdAt);
 
@@ -71,7 +91,31 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     @Query("select avg(t.helperRating) from TaskEntity t where t.buyerId = :buyerId and t.helperRating is not null")
     Double avgHelperRatingForBuyer(@Param("buyerId") UUID buyerId);
 
+    @Query("""
+            select t.assignedHelperId, count(t), avg(t.buyerRating)
+            from TaskEntity t
+            where t.assignedHelperId in :helperIds
+              and t.status = :status
+            group by t.assignedHelperId
+            """)
+    java.util.List<Object[]> findHelperStats(
+            @Param("helperIds") Collection<UUID> helperIds,
+            @Param("status") TaskStatus status);
+
+    @Query("""
+            select t.buyerId, count(t), avg(t.helperRating)
+            from TaskEntity t
+            where t.buyerId in :buyerIds
+              and t.status = :status
+            group by t.buyerId
+            """)
+    java.util.List<Object[]> findBuyerStats(
+            @Param("buyerIds") Collection<UUID> buyerIds,
+            @Param("status") TaskStatus status);
+
     java.util.List<TaskEntity> findTop100ByStatusAndUpdatedAtBefore(TaskStatus status, Instant updatedAt);
+
+    java.util.List<TaskEntity> findTop100ByStatusAndCreatedAtBefore(TaskStatus status, Instant createdAt);
 
     @Query("select coalesce(sum(t.budgetPaise), 0) from TaskEntity t where t.status = :status")
     long sumBudgetPaiseByStatus(@Param("status") TaskStatus status);
@@ -92,4 +136,6 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
     java.util.List<TaskEntity> findByRecurringTaskIdAndStatus(UUID recurringTaskId, TaskStatus status);
 
     java.util.List<TaskEntity> findByRecurringTaskId(UUID recurringTaskId);
+
+    java.util.List<TaskEntity> findAllByCreatedAtBetween(Instant start, Instant end);
 }

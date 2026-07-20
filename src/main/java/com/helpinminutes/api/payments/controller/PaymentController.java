@@ -5,6 +5,7 @@ import com.helpinminutes.api.payments.dto.PaymentDtos.BatchPaymentSummary;
 import com.helpinminutes.api.payments.dto.PaymentDtos.PaymentResponse;
 import com.helpinminutes.api.payments.dto.PaymentDtos.SelectBatchPaymentModeRequest;
 import com.helpinminutes.api.payments.dto.PaymentDtos.VerifyPaymentRequest;
+import com.helpinminutes.api.payments.dto.PaymentDtos.DirectPaymentRequest;
 import com.helpinminutes.api.payments.service.PaymentService;
 import com.helpinminutes.api.security.UserPrincipal;
 import jakarta.validation.Valid;
@@ -60,6 +61,15 @@ public class PaymentController {
     return payments.verify(principal.userId(), principal.role(), request);
   }
 
+  @PostMapping("/tasks/{taskId}/direct-payment")
+  public PaymentResponse confirmDirectPayment(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody DirectPaymentRequest request) {
+    return payments.confirmDirectPayment(
+        principal.userId(), principal.role(), taskId, request.method());
+  }
+
   @GetMapping("/tasks/{taskId}")
   public ResponseEntity<PaymentResponse> taskPayment(
       @AuthenticationPrincipal UserPrincipal principal,
@@ -89,8 +99,8 @@ public class PaymentController {
   @PostMapping("/webhooks/razorpay")
   public ResponseEntity<Void> razorpayWebhook(
       @RequestBody String rawBody,
-      @RequestHeader("X-Razorpay-Signature") String signature,
-      @RequestHeader("X-Razorpay-Event-Id") String eventId) {
+      @RequestHeader(value = "X-Razorpay-Signature", required = false) String signature,
+      @RequestHeader(value = "X-Razorpay-Event-Id", required = false) String eventId) {
     payments.processWebhook(rawBody, signature, eventId);
     return ResponseEntity.noContent().build();
   }

@@ -62,7 +62,8 @@ public class MediatorServiceTest {
 
     service = new MediatorService(
         batches, workers, helperMediatorLinks, users, helperProfiles, taskService, taskRepo,
-        objectMapper, realtime, pushNotifications, mock(PaymentRepository.class), mock(AppProperties.class));
+        objectMapper, realtime, pushNotifications, mock(PaymentRepository.class), mock(AppProperties.class),
+        mock(com.helpinminutes.api.payments.service.PaymentLifecycleService.class));
   }
 
   @Test

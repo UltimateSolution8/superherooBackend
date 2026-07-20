@@ -53,6 +53,10 @@ public class PaymentEntity {
   @Column(nullable = false, length = 30)
   private PaymentStatus status;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "fulfillment_status", length = 30)
+  private PaymentFulfillmentStatus fulfillmentStatus;
+
   @Column(nullable = false, length = 40, unique = true)
   private String receipt;
 
@@ -85,6 +89,24 @@ public class PaymentEntity {
 
   @Column(name = "refunded_at")
   private Instant refundedAt;
+
+  @Column(name = "earning_released_at")
+  private Instant earningReleasedAt;
+
+  @Column(name = "refund_requested_at")
+  private Instant refundRequestedAt;
+
+  @Column(name = "refund_requested_amount_paise")
+  private Long refundRequestedAmountPaise;
+
+  @Column(name = "refund_attempts", nullable = false)
+  private int refundAttempts;
+
+  @Column(name = "refund_last_error", length = 500)
+  private String refundLastError;
+
+  @Column(name = "provider_refund_id", length = 128)
+  private String providerRefundId;
 
   @Column(name = "created_at", nullable = false)
   private Instant createdAt;
@@ -136,6 +158,8 @@ public class PaymentEntity {
   public void setMethod(String method) { this.method = method; }
   public PaymentStatus getStatus() { return status; }
   public void setStatus(PaymentStatus status) { this.status = status; }
+  public PaymentFulfillmentStatus getFulfillmentStatus() { return fulfillmentStatus; }
+  public void setFulfillmentStatus(PaymentFulfillmentStatus fulfillmentStatus) { this.fulfillmentStatus = fulfillmentStatus; }
   public String getReceipt() { return receipt; }
   public void setReceipt(String receipt) { this.receipt = receipt; }
   public String getIdempotencyKey() { return idempotencyKey; }
@@ -158,6 +182,18 @@ public class PaymentEntity {
   public void setFailedAt(Instant failedAt) { this.failedAt = failedAt; }
   public Instant getRefundedAt() { return refundedAt; }
   public void setRefundedAt(Instant refundedAt) { this.refundedAt = refundedAt; }
+  public Instant getEarningReleasedAt() { return earningReleasedAt; }
+  public void setEarningReleasedAt(Instant earningReleasedAt) { this.earningReleasedAt = earningReleasedAt; }
+  public Instant getRefundRequestedAt() { return refundRequestedAt; }
+  public void setRefundRequestedAt(Instant refundRequestedAt) { this.refundRequestedAt = refundRequestedAt; }
+  public Long getRefundRequestedAmountPaise() { return refundRequestedAmountPaise; }
+  public void setRefundRequestedAmountPaise(Long refundRequestedAmountPaise) { this.refundRequestedAmountPaise = refundRequestedAmountPaise; }
+  public int getRefundAttempts() { return refundAttempts; }
+  public void setRefundAttempts(int refundAttempts) { this.refundAttempts = refundAttempts; }
+  public String getRefundLastError() { return refundLastError; }
+  public void setRefundLastError(String refundLastError) { this.refundLastError = refundLastError; }
+  public String getProviderRefundId() { return providerRefundId; }
+  public void setProviderRefundId(String providerRefundId) { this.providerRefundId = providerRefundId; }
   public Instant getCreatedAt() { return createdAt; }
   public Instant getUpdatedAt() { return updatedAt; }
 }

@@ -55,7 +55,10 @@ public class RealtimePublisher {
       log.warn("Realtime Redis publish failed type={} eventId={}", type, eventId, e);
     }
 
-    java.util.concurrent.CompletableFuture.runAsync(() -> publishHttpFallback(envelope));
+    String publishUrl = props.realtime().publishHttpUrl();
+    if (publishUrl != null && !publishUrl.isBlank()) {
+      java.util.concurrent.CompletableFuture.runAsync(() -> publishHttpFallback(envelope));
+    }
   }
 
   private void publishHttpFallback(Map<String, Object> envelope) {

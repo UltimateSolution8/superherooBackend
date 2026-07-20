@@ -14,6 +14,12 @@ import org.springframework.data.repository.query.Param;
 public interface TaskOfferRepository extends JpaRepository<TaskOfferEntity, UUID> {
   Optional<TaskOfferEntity> findByTaskIdAndHelperId(UUID taskId, UUID helperId);
 
+  boolean existsByTaskIdAndHelperIdAndStatusAndExpiresAtAfter(
+      UUID taskId,
+      UUID helperId,
+      TaskOfferStatus status,
+      Instant expiresAt);
+
   List<TaskOfferEntity> findAllByTaskId(UUID taskId);
 
   boolean existsByTaskId(UUID taskId);

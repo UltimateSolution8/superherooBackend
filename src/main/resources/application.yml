@@ -30,6 +30,9 @@ spring:
       mail:
         smtp:
           auth: true
+          connectiontimeout: ${SPRING_MAIL_CONNECTION_TIMEOUT_MS:5000}
+          timeout: ${SPRING_MAIL_READ_TIMEOUT_MS:5000}
+          writetimeout: ${SPRING_MAIL_WRITE_TIMEOUT_MS:5000}
           starttls:
             enable: true
 
@@ -137,6 +140,9 @@ app:
     publishHttpUrl: ${REALTIME_HTTP_PUBLISH_URL:}
     publishHttpSecret: ${REALTIME_HTTP_PUBLISH_SECRET:}
     publishHttpTimeoutMs: ${REALTIME_HTTP_PUBLISH_TIMEOUT_MS:1500}
+
+mojoauth:
+  api-key: ${MOJOAUTH_API_KEY:}
 
 twilio:
   accountSid: ${TWILIO_ACCOUNT_SID:}

@@ -9,15 +9,21 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 public class RateLimitFilter extends OncePerRequestFilter {
+  private static final DefaultRedisScript<Long> INCREMENT_WITH_EXPIRY = new DefaultRedisScript<>(
+      "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]); end; return n",
+      Long.class);
   private static final class Counter {
     volatile long minute;
     final AtomicInteger count = new AtomicInteger(0);
   }
 
   private final Map<String, Counter> counters = new ConcurrentHashMap<>();
+  private final StringRedisTemplate redis;
   private final int otpStartPerMin = intEnv("RATE_LIMIT_OTP_START_PER_MIN", 5);
   private final int otpVerifyPerMin = intEnv("RATE_LIMIT_OTP_VERIFY_PER_MIN", 10);
   private final int loginPerMin = intEnv("RATE_LIMIT_LOGIN_PER_MIN", 12);
@@ -26,6 +32,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
   private final int refreshPerMin = intEnv("RATE_LIMIT_REFRESH_PER_MIN", 30);
   private final int paymentOrderPerMin = intEnv("RATE_LIMIT_PAYMENT_ORDER_PER_MIN", 20);
   private final int paymentVerifyPerMin = intEnv("RATE_LIMIT_PAYMENT_VERIFY_PER_MIN", 40);
+
+  public RateLimitFilter() {
+    this(null);
+  }
+
+  public RateLimitFilter(StringRedisTemplate redis) {
+    this.redis = redis;
+  }
 
   @Override
   protected void doFilterInternal(
@@ -78,6 +92,21 @@ public class RateLimitFilter extends OncePerRequestFilter {
     String ip = clientIp(request);
     String key = bucket + ":" + ip;
     long minute = Instant.now().getEpochSecond() / 60;
+    if (redis != null) {
+      try {
+        Long current = redis.execute(
+            INCREMENT_WITH_EXPIRY,
+            java.util.List.of("him:rate:" + bucket + ":" + ip + ":" + minute),
+            "70");
+        if (current != null) return current > limit;
+      } catch (RuntimeException ignored) {
+        // Authentication remains available during a Redis incident, while the
+        // process-local limiter still provides basic protection.
+      }
+    }
+    if (counters.size() > 10_000) {
+      counters.entrySet().removeIf(entry -> entry.getValue().minute < minute - 1);
+    }
     Counter counter = counters.computeIfAbsent(key, k -> {
       Counter c = new Counter();
       c.minute = minute;
@@ -92,19 +121,40 @@ public class RateLimitFilter extends OncePerRequestFilter {
   }
 
   private static String clientIp(HttpServletRequest request) {
-    String forwarded = request.getHeader("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      int comma = forwarded.indexOf(',');
-      if (comma > 0) {
-        return forwarded.substring(0, comma).trim();
+    String remote = request.getRemoteAddr();
+    if (isTrustedProxy(remote)) {
+      String real = request.getHeader("X-Real-IP");
+      if (real != null && !real.isBlank()) return real.trim();
+      String forwarded = request.getHeader("X-Forwarded-For");
+      if (forwarded != null && !forwarded.isBlank()) {
+        String[] chain = forwarded.split(",");
+        for (int i = chain.length - 1; i >= 0; i--) {
+          String candidate = chain[i].trim();
+          if (!candidate.isBlank() && !isTrustedProxy(candidate)) return candidate;
+        }
       }
-      return forwarded.trim();
     }
-    String real = request.getHeader("X-Real-IP");
-    if (real != null && !real.isBlank()) {
-      return real.trim();
+    return remote == null ? "unknown" : remote;
+  }
+
+  private static boolean isTrustedProxy(String ip) {
+    if (ip == null) return false;
+    String value = ip.trim();
+    if (value.equals("127.0.0.1") || value.equals("::1") || value.startsWith("10.") || value.startsWith("192.168.")) {
+      return true;
     }
-    return request.getRemoteAddr() == null ? "unknown" : request.getRemoteAddr();
+    if (value.startsWith("172.")) {
+      String[] parts = value.split("\\.");
+      if (parts.length > 1) {
+        try {
+          int second = Integer.parseInt(parts[1]);
+          return second >= 16 && second <= 31;
+        } catch (NumberFormatException ignored) {
+          return false;
+        }
+      }
+    }
+    return false;
   }
 
   private static int intEnv(String key, int fallback) {

@@ -19,6 +19,8 @@ import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.common.GeoUtils;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -31,6 +33,7 @@ public class HelperService {
   private final UserRepository users;
   private final TaskRepository tasks;
   private final MatchingService matching;
+  private final Executor realtimeDispatchExecutor;
 
   public HelperService(
       HelperProfileRepository profiles,
@@ -38,13 +41,15 @@ public class HelperService {
       SupabaseStorageService storage,
       UserRepository users,
       TaskRepository tasks,
-      MatchingService matching) {
+      MatchingService matching,
+      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor) {
     this.profiles = profiles;
     this.presence = presence;
     this.storage = storage;
     this.users = users;
     this.tasks = tasks;
     this.matching = matching;
+    this.realtimeDispatchExecutor = realtimeDispatchExecutor;
   }
 
   public void setOnline(UUID helperId, double lat, double lng) {
@@ -57,17 +62,32 @@ public class HelperService {
 
     presence.setOnline(helperId, lat, lng);
 
+    realtimeDispatchExecutor.execute(() -> dispatchNearbySearchingTasks(helperId, lat, lng));
+  }
+
+  private void dispatchNearbySearchingTasks(UUID helperId, double lat, double lng) {
     try {
-      java.util.List<TaskEntity> searching = tasks.findTop100ByStatusOrderByCreatedAtDesc(TaskStatus.SEARCHING);
+      double radiusMeters = 3000d;
+      double latDelta = radiusMeters / 111_320d;
+      double cosLat = Math.max(0.1d, Math.abs(Math.cos(Math.toRadians(lat))));
+      double lngDelta = radiusMeters / (111_320d * cosLat);
+      java.util.List<TaskEntity> searching = tasks.findAvailableInBounds(
+          TaskStatus.SEARCHING,
+          helperId,
+          java.time.Instant.now(),
+          lat - latDelta,
+          lat + latDelta,
+          lng - lngDelta,
+          lng + lngDelta,
+          org.springframework.data.domain.PageRequest.of(0, 100));
       for (TaskEntity task : searching) {
-        if (task.getAssignedHelperId() == null) {
-          double dist = GeoUtils.distanceMeters(task.getLat(), task.getLng(), lat, lng);
-          if (dist <= 3000d) {
-            matching.dispatchOffers(task);
-          }
+        if (GeoUtils.distanceMeters(task.getLat(), task.getLng(), lat, lng) <= radiusMeters) {
+          matching.dispatchOffers(task);
         }
       }
-    } catch (Exception ignored) {
+    } catch (Exception e) {
+      org.slf4j.LoggerFactory.getLogger(HelperService.class)
+          .warn("Could not refresh nearby offers for helper {}: {}", helperId, e.getMessage());
     }
   }
 
