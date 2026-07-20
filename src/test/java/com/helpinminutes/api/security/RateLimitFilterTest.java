@@ -148,4 +148,42 @@ class RateLimitFilterTest {
         filter.doFilterInternal(mockRequest(loginPath, ip), resLogin, chain);
         verify(resLogin, never()).setStatus(429);
     }
+
+    @Test
+    void rateLimitFilter_doesNotInterfere_withAuthenticationFlow() throws Exception {
+        // Rate limiter (429) should only apply to specific paths
+        // Other authenticated paths should pass through to SecurityConfig
+        // which will return 401 for unauthenticated access
+        String protectedPath = "/api/v1/tasks";
+        HttpServletRequest req = mockRequest(protectedPath, "10.0.0.50");
+        HttpServletResponse res = mockResponse();
+        
+        filter.doFilterInternal(req, res, chain);
+        
+        // Rate limiter should NOT block this path (not in rate limit list)
+        verify(res, never()).setStatus(429);
+        // Chain should be invoked, allowing Spring Security to handle auth
+        verify(chain, times(1)).doFilter(any(), any());
+    }
+
+    @Test
+    void rateLimitFilter_returnsCorrectStatus_for429() throws Exception {
+        // Verify 429 is used for rate limiting, not confused with 401
+        String path = "/api/v1/auth/otp/start";
+        String ip = "10.0.0.60";
+        
+        // Exhaust rate limit
+        for (int i = 0; i < 5; i++) {
+            filter.doFilterInternal(mockRequest(path, ip), mockResponse(), chain);
+        }
+        
+        // 6th request should be blocked with 429, not 401
+        HttpServletRequest reqBlocked = mockRequest(path, ip);
+        HttpServletResponse resBlocked = mockResponse();
+        filter.doFilterInternal(reqBlocked, resBlocked, chain);
+        
+        verify(resBlocked).setStatus(429);
+        verify(resBlocked, never()).setStatus(401);
+        verify(resBlocked, never()).setStatus(403);
+    }
 }
