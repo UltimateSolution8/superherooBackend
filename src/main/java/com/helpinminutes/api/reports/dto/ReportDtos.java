@@ -256,4 +256,31 @@ public class ReportDtos {
       long totalLogsCount,
       List<AuditLogItem> items
   ) {}
+
+  public record AiModerationReportItem(
+      UUID taskId,
+      String title,
+      String aiStatus,
+      int confidence,
+      int riskScore,
+      int qualityScore,
+      String modelUsed,
+      long latencyMs,
+      List<String> flags,
+      List<String> reasons,
+      Instant evaluatedAt
+  ) {}
+
+  public record AiModerationReportResponse(
+      long totalTasksEvaluated,
+      long autoApprovedCount,
+      double autoApprovalRatePercentage,
+      long adminReviewCount,
+      double adminReviewRatePercentage,
+      long rejectedCount,
+      double avgLatencyMs,
+      Map<String, Long> riskCategoryBreakdown,
+      Map<String, Long> modelUsageBreakdown,
+      List<AiModerationReportItem> items
+  ) {}
 }
