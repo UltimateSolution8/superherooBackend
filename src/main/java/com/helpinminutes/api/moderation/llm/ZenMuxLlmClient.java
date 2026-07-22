@@ -28,10 +28,10 @@ public class ZenMuxLlmClient implements LlmClient {
   @Value("${ai.moderation.zenmux.endpoint:https://zenmux.ai/api/v1/chat/completions}")
   private String endpoint;
 
-  @Value("${ai.moderation.zenmux.primary-model:z-ai/glm-4.7-flash-free}")
+  @Value("${ai.moderation.zenmux.primary-model:moonshotai/kimi-k3-free}")
   private String primaryModel;
 
-  @Value("${ai.moderation.zenmux.fallback-model:moonshotai/kimi-k3-free}")
+  @Value("${ai.moderation.zenmux.fallback-model:z-ai/glm-4.7-flash-free}")
   private String fallbackModel;
 
   @Value("${ai.moderation.zenmux.timeout-seconds:10}")

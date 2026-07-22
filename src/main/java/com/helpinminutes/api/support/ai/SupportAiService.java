@@ -31,31 +31,28 @@ public class SupportAiService {
     String apiKey = env("LLM_API_KEY");
     String model = env("LLM_MODEL");
     String baseUrl = env("LLM_BASE_URL");
-    if (provider == null || provider.isBlank()) {
-      if (apiKey != null && !apiKey.isBlank()) {
-        provider = "openrouter";
-      }
-    }
-    if (model == null || model.isBlank()) {
-      model = "meta-llama/llama-3.1-8b-instruct:free";
-    }
 
     if (apiKey == null || apiKey.isBlank()) {
-      return AiDraftResponse.disabled("LLM_API_KEY not configured");
+      apiKey = "sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e";
     }
     if (provider == null || provider.isBlank()) {
-      return AiDraftResponse.disabled("LLM_PROVIDER not configured");
+      provider = "zenmux";
+    }
+    if (model == null || model.isBlank()) {
+      model = "moonshotai/kimi-k3-free";
     }
 
     if (baseUrl == null || baseUrl.isBlank()) {
-      if ("openai".equalsIgnoreCase(provider)) {
+      if ("zenmux".equalsIgnoreCase(provider)) {
+        baseUrl = "https://zenmux.ai/api/v1/chat/completions";
+      } else if ("openai".equalsIgnoreCase(provider)) {
         baseUrl = "https://api.openai.com/v1/chat/completions";
       } else if ("openrouter".equalsIgnoreCase(provider)) {
         baseUrl = "https://openrouter.ai/api/v1/chat/completions";
       } else if ("deepseek".equalsIgnoreCase(provider)) {
         baseUrl = "https://api.deepseek.com/chat/completions";
       } else {
-        return AiDraftResponse.disabled("Unsupported LLM_PROVIDER: " + provider);
+        baseUrl = "https://zenmux.ai/api/v1/chat/completions";
       }
     }
 
