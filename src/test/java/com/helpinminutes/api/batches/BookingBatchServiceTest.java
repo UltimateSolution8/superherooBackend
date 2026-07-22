@@ -162,10 +162,8 @@ class BookingBatchServiceTest {
             if (budgetPaise == null || budgetPaise < 0) errors.add("budgetPaise invalid");
             if (lat == null || lat < -90 || lat > 90) errors.add("lat invalid");
             if (lng == null || lng < -180 || lng > 180) errors.add("lng invalid");
-            if (lat != null && lng != null) {
-                // India bounding box check
-                boolean inIndia = lat >= 8.0 && lat <= 38.0 && lng >= 68.0 && lng <= 98.0;
-                if (!inIndia) errors.add("location outside service area (India only)");
+            if (lat != null && lng != null && !com.helpinminutes.api.common.ServiceArea.isWithinHyderabad(lat, lng)) {
+                errors.add("location outside service area");
             }
             if (scheduledAt != null && scheduledAt.isBefore(Instant.now().plus(1, ChronoUnit.HOURS))) {
                 errors.add("scheduledAt must be at least 1 hour in the future");

@@ -12,7 +12,7 @@ public final class ServiceArea {
     if ("false".equalsIgnoreCase(enforced)) {
       return true;
     }
-    // Allow India: Lat between 8.0 and 38.0, Lng between 68.0 and 98.0
-    return lat >= 8.0 && lat <= 38.0 && lng >= 68.0 && lng <= 98.0;
+    double dist = GeoUtils.distanceMeters(HYDERABAD_LAT, HYDERABAD_LNG, lat, lng);
+    return dist <= HYDERABAD_RADIUS_METERS;
   }
 }
