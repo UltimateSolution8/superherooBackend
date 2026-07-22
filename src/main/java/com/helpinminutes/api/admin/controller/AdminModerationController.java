@@ -12,7 +12,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/admin/moderation")
+@RequestMapping({"/api/v1/admin/moderation", "/api/admin/moderation"})
 public class AdminModerationController {
 
   private final AdminModerationService moderationService;
