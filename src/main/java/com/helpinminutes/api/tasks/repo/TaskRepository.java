@@ -24,6 +24,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     java.util.List<TaskEntity> findTop100ByStatusOrderByCreatedAtDesc(TaskStatus status);
 
+    org.springframework.data.domain.Page<TaskEntity> findByStatus(TaskStatus status, Pageable pageable);
+
     @Query("""
             select t from TaskEntity t
             where t.status = :status

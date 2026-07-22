@@ -81,6 +81,7 @@ public class TaskService {
   private final ObjectMapper objectMapper;
   private final InvoiceEmailService invoiceEmail;
   private final PaymentLifecycleService paymentLifecycle;
+  private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
   public TaskService(
       TaskRepository tasks,
@@ -102,6 +103,30 @@ public class TaskService {
       ObjectMapper objectMapper,
       InvoiceEmailService invoiceEmail,
       PaymentLifecycleService paymentLifecycle) {
+    this(tasks, offers, matching, realtime, storage, presence, props, users, helperProfiles, notificationQueue, pushNotifications, taskMapper, recurringTasks, taskModerationService, bookingBatches, bookingBatchItems, objectMapper, invoiceEmail, paymentLifecycle, event -> {});
+  }
+
+  public TaskService(
+      TaskRepository tasks,
+      TaskOfferRepository offers,
+      MatchingService matching,
+      RealtimePublisher realtime,
+      SupabaseStorageService storage,
+      HelperPresenceService presence,
+      AppProperties props,
+      UserRepository users,
+      HelperProfileRepository helperProfiles,
+      NotificationQueueService notificationQueue,
+      PushNotificationService pushNotifications,
+      TaskMapper taskMapper,
+      RecurringTaskRepository recurringTasks,
+      TaskModerationService taskModerationService,
+      BookingBatchRepository bookingBatches,
+      BookingBatchItemRepository bookingBatchItems,
+      ObjectMapper objectMapper,
+      InvoiceEmailService invoiceEmail,
+      PaymentLifecycleService paymentLifecycle,
+      org.springframework.context.ApplicationEventPublisher eventPublisher) {
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -113,6 +138,7 @@ public class TaskService {
     this.helperProfiles = helperProfiles;
     this.notificationQueue = notificationQueue;
     this.pushNotifications = pushNotifications;
+    this.eventPublisher = eventPublisher;
     this.taskMapper = taskMapper;
     this.recurringTasks = recurringTasks;
     this.taskModerationService = taskModerationService;
@@ -319,7 +345,7 @@ public class TaskService {
     } else if (isFutureScheduled) {
       task.setStatus(TaskStatus.SCHEDULED_PENDING);
     } else {
-      task.setStatus(TaskStatus.SEARCHING);
+      task.setStatus(TaskStatus.AI_PENDING);
     }
     task.setArrivalOtp(generateOtp());
     task.setCompletionOtp(generateOtp());
@@ -328,11 +354,8 @@ public class TaskService {
 
     List<UUID> offeredTo = new ArrayList<>();
     if (!awaitingPrepayment && !isFutureScheduled) {
-      try {
-        offeredTo = matching.dispatchOffers(task, resolvedOptions.sendOfferNotifications());
-      } catch (Exception e) {
-        log.error("Failed to dispatch offers for task {}", task.getId(), e);
-      }
+      // Publish event for Async AI Moderation (AI will dispatch offers if approved)
+      eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), resolvedOptions.sendOfferNotifications()));
     } else if (!awaitingPrepayment) {
       log.info("Task {} scheduled for {}. Skipping immediate dispatch.", task.getId(), scheduledAt);
     }
