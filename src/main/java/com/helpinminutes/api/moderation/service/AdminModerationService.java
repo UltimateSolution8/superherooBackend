@@ -53,14 +53,22 @@ public class AdminModerationService {
   }
 
   public Page<AdminModerationTaskDto> getModerationQueue(String statusFilter, Pageable pageable) {
-    TaskStatus targetStatus = TaskStatus.ADMIN_REVIEW;
-    if (statusFilter != null && !statusFilter.isBlank() && !"ALL".equalsIgnoreCase(statusFilter)) {
-      try {
-        targetStatus = TaskStatus.valueOf(statusFilter.toUpperCase());
-      } catch (IllegalArgumentException ignored) {}
-    }
+    Page<TaskEntity> tasksPage;
 
-    Page<TaskEntity> tasksPage = taskRepository.findByStatus(targetStatus, pageable);
+    if (statusFilter == null || statusFilter.isBlank() || "ALL".equalsIgnoreCase(statusFilter)) {
+      tasksPage = taskRepository.findAllByOrderByCreatedAtDesc(pageable);
+    } else if ("ADMIN_APPROVED".equalsIgnoreCase(statusFilter)) {
+      tasksPage = taskRepository.findByStatus(TaskStatus.SEARCHING, pageable);
+    } else if ("ADMIN_REJECTED".equalsIgnoreCase(statusFilter)) {
+      tasksPage = taskRepository.findByStatus(TaskStatus.CANCELLED, pageable);
+    } else {
+      try {
+        TaskStatus status = TaskStatus.valueOf(statusFilter.toUpperCase());
+        tasksPage = taskRepository.findByStatus(status, pageable);
+      } catch (IllegalArgumentException e) {
+        tasksPage = taskRepository.findAllByOrderByCreatedAtDesc(pageable);
+      }
+    }
 
     List<AdminModerationTaskDto> dtos = tasksPage.getContent().stream().map(task -> {
       UserEntity buyer = userRepository.findById(task.getBuyerId()).orElse(null);

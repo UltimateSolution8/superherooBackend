@@ -106,6 +106,7 @@ public class TaskService {
     this(tasks, offers, matching, realtime, storage, presence, props, users, helperProfiles, notificationQueue, pushNotifications, taskMapper, recurringTasks, taskModerationService, bookingBatches, bookingBatchItems, objectMapper, invoiceEmail, paymentLifecycle, event -> {});
   }
 
+  @org.springframework.beans.factory.annotation.Autowired
   public TaskService(
       TaskRepository tasks,
       TaskOfferRepository offers,
@@ -815,7 +816,7 @@ public class TaskService {
 
   public List<TaskEntity> listRecentTasks(int limit) {
     int size = Math.max(1, Math.min(50, limit));
-    return tasks.findAllByOrderByCreatedAtDesc(org.springframework.data.domain.PageRequest.of(0, size));
+    return tasks.findAllByOrderByCreatedAtDesc(org.springframework.data.domain.PageRequest.of(0, size)).getContent();
   }
 
   public List<TaskEntity> listTasksForUser(UUID userId, UserRole role) {

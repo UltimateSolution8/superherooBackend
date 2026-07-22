@@ -65,6 +65,7 @@ public class ReportService {
     this(taskRepo, paymentRepo, userRepo, helperProfileRepo, recurringTaskRepo, auditLogRepo, null, new ObjectMapper());
   }
 
+  @org.springframework.beans.factory.annotation.Autowired
   public ReportService(
       TaskRepository taskRepo,
       PaymentRepository paymentRepo,

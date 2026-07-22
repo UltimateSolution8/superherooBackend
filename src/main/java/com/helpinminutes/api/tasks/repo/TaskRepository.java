@@ -53,7 +53,9 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     java.util.List<TaskEntity> findTop50ByAssignedHelperIdOrderByCreatedAtDesc(UUID helperId);
 
-    java.util.List<TaskEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
+    org.springframework.data.domain.Page<TaskEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    org.springframework.data.domain.Page<TaskEntity> findByStatusOrderByCreatedAtDesc(TaskStatus status, Pageable pageable);
 
     long countByStatus(TaskStatus status);
 
