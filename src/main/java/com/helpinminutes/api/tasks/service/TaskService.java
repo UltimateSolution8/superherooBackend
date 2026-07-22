@@ -151,7 +151,6 @@ public class TaskService {
 
   @Transactional
   public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
-    taskModerationService.validateTask(req.title(), req.description());
     if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
@@ -309,7 +308,6 @@ public class TaskService {
 
   @Transactional
   public CreateResult createTask(UUID buyerId, CreateTaskRequest req, TaskCreateOptions options) {
-    taskModerationService.validateTask(req.title(), req.description());
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
@@ -385,8 +383,6 @@ public class TaskService {
 
   @Transactional
   public TaskEntity createTaskForHelper(UUID buyerId, UUID helperId, CreateTaskRequest req) {
-    taskModerationService.validateTask(req.title(), req.description());
-
     UserEntity helper = users.findById(helperId)
         .orElseThrow(() -> new BadRequestException("Helper not found"));
     if (helper.getRole() != UserRole.HELPER) {
