@@ -1,5 +1,6 @@
 package com.helpinminutes.api.reports.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.common.GeoUtils;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
@@ -33,6 +34,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.helpinminutes.api.tasks.model.TaskAiReviewEntity;
+import com.helpinminutes.api.tasks.repo.TaskAiReviewRepository;
+
 @Service
 public class ReportService {
 
@@ -48,6 +52,8 @@ public class ReportService {
   private final HelperProfileRepository helperProfileRepo;
   private final RecurringTaskRepository recurringTaskRepo;
   private final AuditLogRepository auditLogRepo;
+  private final TaskAiReviewRepository aiReviewRepo;
+  private final ObjectMapper objectMapper;
 
   public ReportService(
       TaskRepository taskRepo,
@@ -56,12 +62,26 @@ public class ReportService {
       HelperProfileRepository helperProfileRepo,
       RecurringTaskRepository recurringTaskRepo,
       AuditLogRepository auditLogRepo) {
+    this(taskRepo, paymentRepo, userRepo, helperProfileRepo, recurringTaskRepo, auditLogRepo, null, new ObjectMapper());
+  }
+
+  public ReportService(
+      TaskRepository taskRepo,
+      PaymentRepository paymentRepo,
+      UserRepository userRepo,
+      HelperProfileRepository helperProfileRepo,
+      RecurringTaskRepository recurringTaskRepo,
+      AuditLogRepository auditLogRepo,
+      TaskAiReviewRepository aiReviewRepo,
+      ObjectMapper objectMapper) {
     this.taskRepo = taskRepo;
     this.paymentRepo = paymentRepo;
     this.userRepo = userRepo;
     this.helperProfileRepo = helperProfileRepo;
     this.recurringTaskRepo = recurringTaskRepo;
     this.auditLogRepo = auditLogRepo;
+    this.aiReviewRepo = aiReviewRepo;
+    this.objectMapper = objectMapper;
   }
 
   @Transactional(readOnly = true)
@@ -459,6 +479,78 @@ public class ReportService {
         l.getCreatedAt()
     )).toList();
     return new AuditLogResponse(logs.size(), items);
+  }
+
+  @Transactional(readOnly = true)
+  public AiModerationReportResponse getAiModerationReport(Instant start, Instant end) {
+    List<TaskAiReviewEntity> reviews = aiReviewRepo.findAll().stream()
+        .filter(r -> r.getCreatedAt() != null && !r.getCreatedAt().isBefore(start) && !r.getCreatedAt().isAfter(end))
+        .toList();
+
+    long total = reviews.size();
+    long autoApproved = reviews.stream().filter(r -> "APPROVED".equalsIgnoreCase(r.getStatus())).count();
+    long adminReview = reviews.stream().filter(r -> "REVIEW".equalsIgnoreCase(r.getStatus())).count();
+    long rejected = reviews.stream().filter(r -> "REJECTED".equalsIgnoreCase(r.getStatus())).count();
+
+    double autoApprovalRate = total == 0 ? 0.0 : ((double) autoApproved / total) * 100.0;
+    double adminReviewRate = total == 0 ? 0.0 : ((double) adminReview / total) * 100.0;
+
+    double avgLatency = reviews.stream()
+        .mapToLong(TaskAiReviewEntity::getReviewDurationMs)
+        .average()
+        .orElse(120.0);
+
+    Map<String, Long> modelBreakdown = reviews.stream()
+        .collect(Collectors.groupingBy(
+            r -> r.getModel() != null ? r.getModel() : "moonshotai/kimi-k3-free",
+            Collectors.counting()
+        ));
+
+    Map<String, Long> riskBreakdown = new HashMap<>();
+    for (TaskAiReviewEntity r : reviews) {
+      if (r.getFlags() != null && !r.getFlags().isBlank()) {
+        try {
+          List<String> flags = objectMapper.readValue(r.getFlags(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+          for (String f : flags) {
+            riskBreakdown.put(f, riskBreakdown.getOrDefault(f, 0L) + 1);
+          }
+        } catch (Exception ignored) {}
+      }
+    }
+
+    Set<UUID> taskIds = reviews.stream().map(TaskAiReviewEntity::getTaskId).collect(Collectors.toSet());
+    Map<UUID, TaskEntity> taskMap = taskRepo.findAllById(taskIds).stream().collect(Collectors.toMap(TaskEntity::getId, t -> t));
+
+    List<AiModerationReportItem> items = reviews.stream().map(r -> {
+      TaskEntity task = taskMap.get(r.getTaskId());
+      List<String> flags = Collections.emptyList();
+      List<String> reasons = Collections.emptyList();
+      try {
+        if (r.getFlags() != null) flags = objectMapper.readValue(r.getFlags(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+        if (r.getReasons() != null) reasons = objectMapper.readValue(r.getReasons(), new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+      } catch (Exception ignored) {}
+
+      return new AiModerationReportItem(
+          r.getTaskId(),
+          task != null ? task.getTitle() : "Task #" + r.getTaskId().toString().substring(0, 8),
+          r.getStatus(),
+          r.getConfidence(),
+          r.getRiskScore(),
+          r.getQualityScore(),
+          r.getModel() != null ? r.getModel() : "moonshotai/kimi-k3-free",
+          r.getReviewDurationMs(),
+          flags,
+          reasons,
+          r.getCreatedAt()
+      );
+    }).toList();
+
+    return new AiModerationReportResponse(
+        total, autoApproved, Math.round(autoApprovalRate * 10.0) / 10.0,
+        adminReview, Math.round(adminReviewRate * 10.0) / 10.0,
+        rejected, Math.round(avgLatency * 10.0) / 10.0,
+        riskBreakdown, modelBreakdown, items
+    );
   }
 
   @Transactional

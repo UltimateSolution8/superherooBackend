@@ -173,6 +173,18 @@ public class ReportController {
     return ResponseEntity.ok(reportService.getAuditLogReport(start, end, limit));
   }
 
+  @GetMapping("/ai-moderation")
+  public ResponseEntity<AiModerationReportResponse> getAiModerationReport(
+      @RequestParam(required = false) String startDate,
+      @RequestParam(required = false) String endDate,
+      @AuthenticationPrincipal UserPrincipal principal,
+      HttpServletRequest request) {
+    Instant start = parseStart(startDate);
+    Instant end = parseEnd(endDate);
+    logAudit(principal, request, "VIEW_REPORT", "ai-moderation");
+    return ResponseEntity.ok(reportService.getAiModerationReport(start, end));
+  }
+
   @GetMapping("/export/bookings.csv")
   public ResponseEntity<StreamingResponseBody> exportBookingReportCsv(
       @RequestParam(required = false) String startDate,

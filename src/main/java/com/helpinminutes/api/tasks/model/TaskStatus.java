@@ -1,6 +1,11 @@
 package com.helpinminutes.api.tasks.model;
 
 public enum TaskStatus {
+  AI_PENDING,
+  AI_APPROVED,
+  ADMIN_REVIEW,
+  ADMIN_APPROVED,
+  ADMIN_REJECTED,
   PAYMENT_PENDING,
   SCHEDULED_PENDING,
   SEARCHING,

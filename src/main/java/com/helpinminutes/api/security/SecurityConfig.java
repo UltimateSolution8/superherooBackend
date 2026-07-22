@@ -37,6 +37,7 @@ public class SecurityConfig {
         .authorizeHttpRequests(auth -> auth
             .requestMatchers("/health", "/api/v1/health", "/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
             .requestMatchers("/api/v1/auth/**").permitAll()
+            .requestMatchers("/api/public/**").permitAll()
             .requestMatchers("/api/v1/payments/webhooks/razorpay").permitAll()
             .requestMatchers("/api/v1/skills").permitAll()
             .requestMatchers("/api/v1/tasks/unassigned").permitAll()

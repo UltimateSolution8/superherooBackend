@@ -187,3 +187,13 @@ sentry:
 logging:
   level:
     org.springframework.security: INFO
+
+ai:
+  moderation:
+    zenmux:
+      api-key: ${ZENMUX_API_KEY:sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e}
+      endpoint: ${ZENMUX_ENDPOINT:https://zenmux.ai/api/v1/chat/completions}
+      primary-model: ${ZENMUX_PRIMARY_MODEL:moonshotai/kimi-k3-free}
+      fallback-model: ${ZENMUX_FALLBACK_MODEL:z-ai/glm-4.7-flash-free}
+      timeout-seconds: ${ZENMUX_TIMEOUT_SECONDS:10}
+
