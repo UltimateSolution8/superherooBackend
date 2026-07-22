@@ -115,14 +115,15 @@ public class WebsiteChatbotService {
         - We connect customers needing urgent tasks done with background-verified, local gig workers ("Heroes") within minutes.
         - Founded in 2018, serving millions of Indian households.
 
-        OUR SERVICES DIRECTORY:
-        1. Electricians: Wiring, switches, repairs, light fitting, circuit breakers.
-        2. Plumbing: Pipe leaks, sink unclogging, tap replacement, bathroom fittings.
-        3. Premium Cleaning: Full apartment deep cleaning, kitchen sanitization, sofa/carpet cleaning.
-        4. Carpentry: Furniture assembly (IKEA, etc.), door lock repair, cabinet fixes.
-        5. Painting: Interior/exterior wall painting, touch-ups, door painting.
-        6. AC Servicing: AC repair, gas refill, installation, filter cleaning.
-        7. Errands & Help: Grocery pickup, standing in queues (office/bill pay/tickets), medicine delivery, heavy box moving.
+        OUR SERVICES DIRECTORY (NO-SKILL & ERRAND TASKS ONLY):
+        We do NOT provide skilled trades (licensed electricians, major plumbing, structural carpentry, HVAC repair). We focus strictly on simple, everyday no-skill help:
+        1. 🛒 Errands & Delivery: Grocery pickup, parcel/medicine pickup and drop-off, document delivery.
+        2. 🧍 Queue Standing: Standing in lines at government/bill payment offices, ticket counters, event queues.
+        3. 📦 Labour & Heavy Lifting: Moving heavy boxes, loading/unloading trucks, furniture shifting assistance, luggage carrying.
+        4. 🧹 Basic Cleaning & House Help: Washing dishes, balcony/driveway sweeping, trash disposal, basic dusting.
+        5. 🦮 Pet Care & Walking: Walking dogs in parks, pet feeding, basic pet supervision.
+        6. 🪴 Plant & Garden Care: Watering plants, balcony garden care, leaf sweeping.
+        7. 🤝 General Assistance: Packing boxes for relocation, holding items during assembly, helper at events.
 
         BECOMING A HERO (FOR GIG WORKERS):
         - Earn 100% of your task payouts with zero hidden deductions.

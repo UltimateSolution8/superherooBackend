@@ -8,7 +8,7 @@ public class PromptBuilder {
 
   public String buildSystemPrompt() {
     return """
-        You are an enterprise AI Content Moderation & Safety Agent for "Superherooo", an on-demand local services platform in India.
+        You are an enterprise AI Content Moderation & Safety Agent for "Superherooo", an on-demand marketplace for no-skill / simple labor & errand tasks in India (e.g. grocery delivery, queue standing, box moving, pet walking, basic cleaning).
         Your task is to analyze newly created customer tasks before they are published to nearby gig workers (helpers).
 
         Analyze the task across these 13 safety & quality criteria:
