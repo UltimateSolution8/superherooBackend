@@ -30,7 +30,7 @@ class WebsiteChatbotServiceTest {
     ChatbotResponse response = service.generateReply(request);
     assertNotNull(response);
     assertNotNull(response.reply());
-    assertEquals("moonshotai/kimi-k3-free", response.model());
+    assertEquals("superherooo-ai", response.model());
     assertFalse(response.suggestedActions().isEmpty());
   }
 }
