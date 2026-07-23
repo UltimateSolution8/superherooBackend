@@ -27,6 +27,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 @Service
 public class AiTaskModerationService {
@@ -68,7 +70,7 @@ public class AiTaskModerationService {
   }
 
   @Async
-  @EventListener
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
   @Transactional
   public void handleTaskCreatedEvent(TaskCreatedEvent event) {
     UUID taskId = event.taskId();
