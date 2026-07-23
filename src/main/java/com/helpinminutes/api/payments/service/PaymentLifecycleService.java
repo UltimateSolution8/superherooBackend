@@ -49,6 +49,7 @@ public class PaymentLifecycleService {
   private final RazorpayGateway razorpay;
   private final TransactionTemplate transactions;
   private final Executor realtimeDispatchExecutor;
+  private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
   @Value("${PAYMENT_PENDING_EXPIRY_MINUTES:30}")
   private long paymentPendingExpiryMinutes = 30;
@@ -63,7 +64,8 @@ public class PaymentLifecycleService {
       PushNotificationService pushNotifications,
       RazorpayGateway razorpay,
       PlatformTransactionManager transactionManager,
-      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor) {
+      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor,
+      org.springframework.context.ApplicationEventPublisher eventPublisher) {
     this.payments = payments;
     this.tasks = tasks;
     this.batches = batches;
@@ -74,6 +76,7 @@ public class PaymentLifecycleService {
     this.razorpay = razorpay;
     this.transactions = new TransactionTemplate(transactionManager);
     this.realtimeDispatchExecutor = realtimeDispatchExecutor;
+    this.eventPublisher = eventPublisher;
   }
 
   @Transactional
@@ -100,21 +103,13 @@ public class PaymentLifecycleService {
   private void activateTask(UUID taskId) {
     TaskEntity task = tasks.findByIdForUpdate(taskId).orElse(null);
     if (task == null || task.getStatus() != TaskStatus.PAYMENT_PENDING) return;
-    Instant now = Instant.now();
-    boolean scheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(now.plusSeconds(60));
-    task.setStatus(scheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING);
+    task.setStatus(TaskStatus.AI_PENDING);
     tasks.save(task);
 
-    if (!scheduled) {
-      runAfterCommit(() -> {
-        try {
-          matching.dispatchOffers(task);
-        } catch (Exception e) {
-          // The task is already SEARCHING and remains visible through the
-          // marketplace REST fallback even if realtime dispatch is delayed.
-          log.error("Captured task {} could not be dispatched", taskId, e);
-        }
-      });
+    try {
+      eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), true));
+    } catch (Exception e) {
+      log.error("Failed to publish TaskCreatedEvent after payment for task {}", task.getId(), e);
     }
     publishTaskActivated(task);
   }

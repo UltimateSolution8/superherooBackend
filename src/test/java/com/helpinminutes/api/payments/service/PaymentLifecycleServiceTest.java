@@ -45,6 +45,7 @@ class PaymentLifecycleServiceTest {
   private MediatorJobWorkerRepository workers;
   private PaymentLifecycleService service;
   private PlatformTransactionManager transactionManager;
+  private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
   @BeforeEach
   void setUp() {
@@ -55,11 +56,12 @@ class PaymentLifecycleServiceTest {
     batches = mock(BookingBatchRepository.class);
     workers = mock(MediatorJobWorkerRepository.class);
     transactionManager = mock(PlatformTransactionManager.class);
+    eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
     when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
     service = new PaymentLifecycleService(
         payments, tasks, batches, workers,
         matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
-        transactionManager, Runnable::run);
+        transactionManager, Runnable::run, eventPublisher);
     when(payments.save(any(PaymentEntity.class))).thenAnswer(call -> call.getArgument(0));
   }
 
@@ -74,8 +76,8 @@ class PaymentLifecycleServiceTest {
 
     service.activateCapturedPayment(payment);
 
-    assertEquals(TaskStatus.SEARCHING, task.getStatus());
-    verify(matching).dispatchOffers(task);
+    assertEquals(TaskStatus.AI_PENDING, task.getStatus());
+    verify(eventPublisher).publishEvent(any(com.helpinminutes.api.tasks.event.TaskCreatedEvent.class));
   }
 
   @Test
@@ -149,8 +151,8 @@ class PaymentLifecycleServiceTest {
 
     service.activateCapturedPayment(payment);
 
-    assertEquals(TaskStatus.SCHEDULED_PENDING, task.getStatus());
-    verify(matching, never()).dispatchOffers(any(TaskEntity.class));
+    assertEquals(TaskStatus.AI_PENDING, task.getStatus());
+    verify(eventPublisher).publishEvent(any(com.helpinminutes.api.tasks.event.TaskCreatedEvent.class));
   }
 
   @Test

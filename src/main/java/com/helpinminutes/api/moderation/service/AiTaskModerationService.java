@@ -127,19 +127,22 @@ public class AiTaskModerationService {
       auditLog.setTaskId(taskId);
 
       if (finalStatus == TaskStatus.AI_APPROVED) {
-        task.setStatus(TaskStatus.SEARCHING); // Mark live for helper dispatch
+        boolean scheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
+        task.setStatus(scheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING);
         taskRepository.save(task);
 
         auditLog.setAction("AI_APPROVED");
         auditLog.setPerformedBy("AI_AGENT:" + aiResult.modelUsed());
-        auditLog.setRemarks("Auto-approved with confidence " + aiResult.confidence() + "%");
+        auditLog.setRemarks("Auto-approved with confidence " + aiResult.confidence() + "%. Status set to " + task.getStatus());
         auditLogRepository.save(auditLog);
 
-        // Dispatch offers to helpers
-        try {
-          matchingService.dispatchOffers(task, event.sendOfferNotifications());
-        } catch (Exception e) {
-          log.error("Failed to dispatch offers after AI approval for task {}", taskId, e);
+        if (!scheduled) {
+          // Dispatch offers to helpers
+          try {
+            matchingService.dispatchOffers(task, event.sendOfferNotifications());
+          } catch (Exception e) {
+            log.error("Failed to dispatch offers after AI approval for task {}", taskId, e);
+          }
         }
 
         meterRegistry.counter("ai.review.approved").increment();

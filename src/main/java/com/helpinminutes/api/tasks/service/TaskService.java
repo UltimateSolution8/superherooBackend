@@ -317,6 +317,9 @@ public class TaskService {
       throw new BadRequestException("Service is currently live only in India");
     }
 
+    // Static moderation check: Throws BadRequestException immediately if illegal/prohibited terms detected
+    taskModerationService.validateTask(req.title(), req.description());
+
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
     task.setTitle(req.title().trim());
@@ -341,8 +344,6 @@ public class TaskService {
     boolean awaitingPrepayment = paymentMode == PaymentCollectionMode.ONLINE_PREPAID;
     if (awaitingPrepayment) {
       task.setStatus(TaskStatus.PAYMENT_PENDING);
-    } else if (isFutureScheduled) {
-      task.setStatus(TaskStatus.SCHEDULED_PENDING);
     } else {
       task.setStatus(TaskStatus.AI_PENDING);
     }
@@ -352,11 +353,12 @@ public class TaskService {
     tasks.save(task);
 
     List<UUID> offeredTo = new ArrayList<>();
-    if (!awaitingPrepayment && !isFutureScheduled) {
-      // Publish event for Async AI Moderation (AI will dispatch offers if approved)
-      eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), resolvedOptions.sendOfferNotifications()));
-    } else if (!awaitingPrepayment) {
-      log.info("Task {} scheduled for {}. Skipping immediate dispatch.", task.getId(), scheduledAt);
+    if (!awaitingPrepayment) {
+      try {
+        eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), resolvedOptions.sendOfferNotifications()));
+      } catch (Exception e) {
+        log.error("Failed to publish TaskCreatedEvent for task {}", task.getId(), e);
+      }
     }
 
     if (!awaitingPrepayment) try {
