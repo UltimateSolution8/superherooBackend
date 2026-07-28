@@ -362,7 +362,15 @@ public class TaskService {
     tasks.save(task);
 
     List<UUID> offeredTo = new ArrayList<>();
-    if (!awaitingPrepayment && !isFutureScheduled) {
+    if (isReviewer && !awaitingPrepayment && !isFutureScheduled) {
+      task.setStatus(TaskStatus.SEARCHING);
+      tasks.save(task);
+      try {
+        offeredTo = matching.dispatchOffers(task, resolvedOptions.sendOfferNotifications());
+      } catch (Exception e) {
+        log.error("Failed to dispatch offers for reviewer task {}", task.getId(), e);
+      }
+    } else if (!awaitingPrepayment && !isFutureScheduled) {
       // Publish event for Async AI Moderation (AI will dispatch offers if approved)
       eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), resolvedOptions.sendOfferNotifications()));
     } else if (!awaitingPrepayment) {
