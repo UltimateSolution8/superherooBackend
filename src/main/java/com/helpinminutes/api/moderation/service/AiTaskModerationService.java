@@ -24,6 +24,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.event.TransactionPhase;
@@ -45,6 +46,8 @@ public class AiTaskModerationService {
   private final PushNotificationService pushNotifications;
   private final ObjectMapper objectMapper;
   private final MeterRegistry meterRegistry;
+  @Value("${ai.moderation.llm-enabled:false}")
+  private boolean llmModerationEnabled;
 
   public AiTaskModerationService(
       TaskRepository taskRepository,
@@ -99,7 +102,36 @@ public class AiTaskModerationService {
           Collections.emptyList()
       );
 
-      AIReviewResult aiResult = llmClient.evaluateTask(payload);
+      AIReviewResult aiResult;
+      if (localFlags != null && !localFlags.isEmpty()) {
+        aiResult = new AIReviewResult(
+            "REVIEW",
+            100,
+            90,
+            20,
+            List.of("Restricted content matched local regex/static moderation"),
+            List.of(),
+            true,
+            "{\"fallback\":\"local-precheck\"}",
+            "local-regex",
+            0L
+        );
+      } else if (!llmModerationEnabled) {
+        aiResult = new AIReviewResult(
+            "APPROVED",
+            90,
+            8,
+            82,
+            List.of("Approved by local regex/static moderation fallback"),
+            List.of(),
+            false,
+            "{\"fallback\":\"local-regex\"}",
+            "local-regex",
+            0L
+        );
+      } else {
+        aiResult = llmClient.evaluateTask(payload);
+      }
 
       // 3. Determine final status
       TaskStatus finalStatus = decisionEngine.determineStatus(aiResult, localFlags);

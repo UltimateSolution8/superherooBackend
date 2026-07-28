@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
@@ -84,6 +85,8 @@ public class TaskService {
   private final PaymentLifecycleService paymentLifecycle;
   private final org.springframework.context.ApplicationEventPublisher eventPublisher;
   private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
+  @Value("${app.service-area.enforce-hyderabad:false}")
+  private boolean enforceHyderabadServiceArea;
 
   public TaskService(
       TaskRepository tasks,
@@ -160,7 +163,7 @@ public class TaskService {
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
     boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
     requireVerifiedEmailForLaunchAction(buyer);
-    if (!isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (enforceHyderabadServiceArea && !isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
 
@@ -323,7 +326,7 @@ public class TaskService {
     requireVerifiedEmailForLaunchAction(buyer);
     boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
 
-    if (!isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (enforceHyderabadServiceArea && !isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
 

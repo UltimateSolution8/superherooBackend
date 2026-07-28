@@ -1,8 +1,6 @@
 package com.helpinminutes.api.moderation;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
 import com.helpinminutes.api.moderation.dto.AIReviewResult;
 import com.helpinminutes.api.moderation.service.ModerationDecisionEngine;
 import com.helpinminutes.api.tasks.model.TaskStatus;
@@ -19,7 +17,8 @@ class ModerationDecisionEngineTest {
 
   @BeforeEach
   void setUp() {
-    staticModerationService = mock(TaskModerationService.class);
+    staticModerationService = new TaskModerationService();
+    staticModerationService.init();
     decisionEngine = new ModerationDecisionEngine(staticModerationService);
   }
 

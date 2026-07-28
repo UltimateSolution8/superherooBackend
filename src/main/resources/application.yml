@@ -117,6 +117,8 @@ management:
 
 app:
   env: ${APP_ENV:dev}
+  service-area:
+    enforce-hyderabad: ${SERVICE_AREA_ENFORCE_HYDERABAD:false}
   jwt:
     accessSecret: ${JWT_ACCESS_SECRET:dev_access_secret_change_me}
     refreshSecret: ${JWT_REFRESH_SECRET:dev_refresh_secret_change_me}
@@ -190,6 +192,7 @@ logging:
 
 ai:
   moderation:
+    llm-enabled: ${AI_MODERATION_LLM_ENABLED:false}
     zenmux:
       api-key: ${ZENMUX_API_KEY:sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e}
       endpoint: ${ZENMUX_ENDPOINT:https://zenmux.ai/api/v1/chat/completions}

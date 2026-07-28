@@ -46,6 +46,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 
 @Service
 public class BookingBatchService {
@@ -63,6 +64,8 @@ public class BookingBatchService {
   private final PushNotificationService pushNotifications;
   private final MediatorJobWorkerRepository mediatorWorkers;
   private final PaymentLifecycleService paymentLifecycle;
+  @Value("${app.service-area.enforce-hyderabad:false}")
+  private boolean enforceHyderabadServiceArea;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -462,7 +465,7 @@ public class BookingBatchService {
     if (line.budgetPaise() == null || line.budgetPaise() < 100) errors.add("budgetPaise must be at least 100");
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
-    if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
+    if (enforceHyderabadServiceArea && line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
       errors.add("location outside service area (India only)");
     }
     if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofHours(1)))) {
