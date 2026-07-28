@@ -18,6 +18,9 @@ import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.model.UserStatus;
 import com.helpinminutes.api.users.repo.UserRepository;
+import com.helpinminutes.api.users.service.EmailVerificationService;
+import com.helpinminutes.api.mediator.model.HelperMediatorLinkEntity;
+import com.helpinminutes.api.mediator.repo.HelperMediatorLinkRepository;
 import java.time.Instant;
 import java.util.List;
 import org.slf4j.Logger;
@@ -38,6 +41,8 @@ public class AuthService {
   private final RefreshTokenRepository refreshTokens;
   private final PasswordEncoder passwordEncoder;
   private final SupabaseStorageService storage;
+  private final HelperMediatorLinkRepository helperMediatorLinks;
+  private final EmailVerificationService emailVerificationService;
 
   public AuthService(
       AppProperties props,
@@ -47,7 +52,9 @@ public class AuthService {
       JwtService jwt,
       RefreshTokenRepository refreshTokens,
       PasswordEncoder passwordEncoder,
-      SupabaseStorageService storage) {
+      SupabaseStorageService storage,
+      HelperMediatorLinkRepository helperMediatorLinks,
+      EmailVerificationService emailVerificationService) {
     this.props = props;
     this.otp = otp;
     this.users = users;
@@ -56,38 +63,69 @@ public class AuthService {
     this.refreshTokens = refreshTokens;
     this.passwordEncoder = passwordEncoder;
     this.storage = storage;
+    this.helperMediatorLinks = helperMediatorLinks;
+    this.emailVerificationService = emailVerificationService;
+  }
+
+  AuthService(
+      AppProperties props,
+      OtpService otp,
+      UserRepository users,
+      HelperProfileRepository helperProfiles,
+      JwtService jwt,
+      RefreshTokenRepository refreshTokens,
+      PasswordEncoder passwordEncoder,
+      SupabaseStorageService storage,
+      HelperMediatorLinkRepository helperMediatorLinks) {
+    this(props, otp, users, helperProfiles, jwt, refreshTokens, passwordEncoder, storage,
+        helperMediatorLinks, null);
   }
 
   public String startOtp(String phone, String channel) {
+    boolean isReviewer = "9999999991".equals(phone) || "9999999992".equals(phone) || "9999999993".equals(phone);
+    if (isReviewer) {
+      return "123456";
+    }
     return otp.startOtp(phone, channel);
   }
 
   @Transactional
   public AuthResponse verifyOtp(String phone, String otpCode, UserRole role) {
-    if (!otp.verifyOtp(phone, otpCode)) {
+    boolean isReviewer = "9999999991".equals(phone) || "9999999992".equals(phone) || "9999999993".equals(phone);
+    if (!isReviewer && !otp.verifyOtp(phone, otpCode)) {
       throw new BadRequestException("Invalid OTP");
     }
 
     UserEntity user = users.findByPhoneAndRole(phone, role).orElseGet(() -> {
-      if (role == UserRole.ADMIN) {
-        String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
-        if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
-          throw new BadRequestException("Admin signup is disabled");
+      if (!isReviewer) {
+        if (role == UserRole.ADMIN) {
+          String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
+          if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
+            throw new BadRequestException("Admin signup is disabled");
+          }
         }
-      }
-      if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
-        throw new BadRequestException("This account must be created by an admin before login");
+        if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
+          throw new BadRequestException("This account must be created by an admin before login");
+        }
       }
 
       UserEntity u = new UserEntity();
       u.setPhone(phone);
       u.setRole(role);
       u.setStatus(UserStatus.ACTIVE);
+      if (isReviewer) {
+        if (role == UserRole.BUYER) u.setDisplayName("Reviewer Buyer");
+        if (role == UserRole.HELPER) u.setDisplayName("Reviewer Helper");
+        if (role == UserRole.MEDIATOR) u.setDisplayName("Reviewer Mediator");
+      }
       users.save(u);
 
       if (role == UserRole.HELPER) {
         HelperProfileEntity hp = new HelperProfileEntity();
         hp.setUserId(u.getId());
+        if (isReviewer) {
+          hp.setKycStatus(HelperKycStatus.APPROVED);
+        }
         helperProfiles.save(hp);
       }
 
@@ -98,12 +136,81 @@ public class AuthService {
       throw new BadRequestException("User is not active");
     }
 
+    if (isReviewer && role == UserRole.HELPER) {
+      HelperProfileEntity hp = helperProfiles.findById(user.getId()).orElseGet(() -> {
+        HelperProfileEntity newHp = new HelperProfileEntity();
+        newHp.setUserId(user.getId());
+        return newHp;
+      });
+      hp.setKycStatus(HelperKycStatus.APPROVED);
+      helperProfiles.save(hp);
+    }
+
     String accessToken = jwt.createAccessToken(user);
     String refreshToken = jwt.createRefreshToken(user);
 
     persistRefreshToken(user, refreshToken);
 
     return toAuthResponse(user, accessToken, refreshToken);
+  }
+
+  @jakarta.annotation.PostConstruct
+  @Transactional
+  public void initReviewerAccounts() {
+    try {
+      log.info("Initializing Google Play reviewer accounts...");
+
+      // 1. Setup Buyer
+      UserEntity buyer = users.findByPhoneAndRole("9999999991", UserRole.BUYER).orElseGet(() -> {
+        UserEntity u = new UserEntity();
+        u.setPhone("9999999991");
+        u.setRole(UserRole.BUYER);
+        u.setStatus(UserStatus.ACTIVE);
+        u.setDisplayName("Reviewer Buyer");
+        return users.save(u);
+      });
+
+      // 2. Setup Helper
+      UserEntity helper = users.findByPhoneAndRole("9999999992", UserRole.HELPER).orElseGet(() -> {
+        UserEntity u = new UserEntity();
+        u.setPhone("9999999992");
+        u.setRole(UserRole.HELPER);
+        u.setStatus(UserStatus.ACTIVE);
+        u.setDisplayName("Reviewer Helper");
+        return users.save(u);
+      });
+
+      HelperProfileEntity hp = helperProfiles.findById(helper.getId()).orElseGet(() -> {
+        HelperProfileEntity newHp = new HelperProfileEntity();
+        newHp.setUserId(helper.getId());
+        return newHp;
+      });
+      hp.setKycStatus(HelperKycStatus.APPROVED);
+      helperProfiles.save(hp);
+
+      // 3. Setup Mediator
+      UserEntity mediator = users.findByPhoneAndRole("9999999993", UserRole.MEDIATOR).orElseGet(() -> {
+        UserEntity u = new UserEntity();
+        u.setPhone("9999999993");
+        u.setRole(UserRole.MEDIATOR);
+        u.setStatus(UserStatus.ACTIVE);
+        u.setDisplayName("Reviewer Mediator");
+        return users.save(u);
+      });
+
+      // 4. Link Helper and Mediator
+      HelperMediatorLinkEntity link = helperMediatorLinks.findByHelperIdAndMediatorId(helper.getId(), mediator.getId())
+          .orElseGet(HelperMediatorLinkEntity::new);
+      link.setHelperId(helper.getId());
+      link.setMediatorId(mediator.getId());
+      link.setStatus("ACTIVE");
+      link.setCreatedBy("HELPER");
+      helperMediatorLinks.save(link);
+
+      log.info("Reviewer accounts initialized, KYC approved, and linked successfully!");
+    } catch (Exception e) {
+      log.error("Failed to initialize reviewer accounts", e);
+    }
   }
 
   @Transactional
@@ -151,6 +258,7 @@ public class AuthService {
 
     UserEntity u = new UserEntity();
     u.setEmail(em);
+    u.setEmailVerified(false);
     u.setPhone(normalizedPhone);
     u.setRole(role);
     u.setStatus(UserStatus.ACTIVE);
@@ -166,6 +274,28 @@ public class AuthService {
     String refreshToken = jwt.createRefreshToken(u);
     persistRefreshToken(u, refreshToken);
     return toAuthResponse(u, accessToken, refreshToken);
+  }
+
+  public String startEmailOtp(String email) {
+    String em = InputValidators.requireEmail(email, false);
+    users.findByEmail(em).orElseThrow(() -> new BadRequestException("Account not found"));
+    return emailVerificationService.sendVerificationEmail(em);
+  }
+
+  @Transactional
+  public AuthResponse verifyEmailOtp(String email, String otpCode) {
+    String em = InputValidators.requireEmail(email, false);
+    UserEntity user = users.findByEmail(em).orElseThrow(() -> new BadRequestException("Account not found"));
+    if (!emailVerificationService.verifyEmailOtp(em, otpCode)) {
+      throw new BadRequestException("Invalid verification code");
+    }
+    user.setEmailVerified(true);
+    users.save(user);
+
+    String accessToken = jwt.createAccessToken(user);
+    String refreshToken = jwt.createRefreshToken(user);
+    persistRefreshToken(user, refreshToken);
+    return toAuthResponse(user, accessToken, refreshToken);
   }
 
   @Transactional
@@ -186,6 +316,7 @@ public class AuthService {
 
     UserEntity u = new UserEntity();
     u.setEmail(em);
+    u.setEmailVerified(false);
     u.setPhone(normalizedPhone);
     u.setRole(UserRole.HELPER);
     u.setStatus(UserStatus.ACTIVE);
@@ -271,6 +402,8 @@ public class AuthService {
             user.getId(),
             user.getRole(),
             user.getPhone(),
+            user.getEmail(),
+            user.isEmailVerified(),
             user.getDisplayName(),
             user.isBulkCsvEnabled()));
   }

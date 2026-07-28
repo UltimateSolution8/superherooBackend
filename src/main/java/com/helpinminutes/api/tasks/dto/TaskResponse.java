@@ -5,6 +5,7 @@ import com.helpinminutes.api.tasks.model.TaskUrgency;
 import java.time.Instant;
 import java.util.UUID;
 import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.tasks.model.TaskVerificationMode;
 
 public record TaskResponse(
     UUID id,
@@ -54,5 +55,6 @@ public record TaskResponse(
     String landmark,
     UUID recurringTaskId,
     UUID batchId,
-    PaymentCollectionMode paymentCollectionMode
+    PaymentCollectionMode paymentCollectionMode,
+    TaskVerificationMode verificationMode
 ) {}

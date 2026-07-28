@@ -61,6 +61,17 @@ public class AuthController {
     return auth.loginWithPassword(req.email(), req.password());
   }
 
+  @PostMapping("/email/otp/start")
+  public EmailOtpStartResponse startEmailOtp(@Valid @RequestBody EmailOtpStartRequest req) {
+    String otp = auth.startEmailOtp(req.email());
+    return new EmailOtpStartResponse(req.email(), true, props.otp().returnOtpInResponse() ? otp : null);
+  }
+
+  @PostMapping("/email/otp/verify")
+  public AuthResponse verifyEmailOtp(@Valid @RequestBody EmailOtpVerifyRequest req) {
+    return auth.verifyEmailOtp(req.email(), req.otp());
+  }
+
   @PostMapping(value = "/password/signup/helper-kyc", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public AuthResponse helperKycSignup(
       @RequestParam @NotBlank @Email String email,
@@ -77,4 +88,10 @@ public class AuthController {
     HelperKycSignupRequest req = new HelperKycSignupRequest(email, password, phone, displayName, fullName, idNumber);
     return auth.signupHelperWithKyc(req, idFront, idBack, selfie);
   }
+
+  public record EmailOtpStartRequest(@NotBlank @Email String email) {}
+
+  public record EmailOtpStartResponse(String email, boolean sent, String devOtp) {}
+
+  public record EmailOtpVerifyRequest(@NotBlank @Email String email, @NotBlank String otp) {}
 }
