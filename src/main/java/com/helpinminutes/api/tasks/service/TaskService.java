@@ -21,6 +21,7 @@ import com.helpinminutes.api.tasks.model.TaskOfferEntity;
 import com.helpinminutes.api.tasks.model.TaskOfferStatus;
 import com.helpinminutes.api.tasks.model.TaskSelfieStage;
 import com.helpinminutes.api.tasks.model.TaskStatus;
+import com.helpinminutes.api.tasks.model.TaskVerificationMode;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.payments.model.PaymentCollectionMode;
@@ -82,6 +83,7 @@ public class TaskService {
   private final InvoiceEmailService invoiceEmail;
   private final PaymentLifecycleService paymentLifecycle;
   private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+  private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
 
   public TaskService(
       TaskRepository tasks,
@@ -103,7 +105,7 @@ public class TaskService {
       ObjectMapper objectMapper,
       InvoiceEmailService invoiceEmail,
       PaymentLifecycleService paymentLifecycle) {
-    this(tasks, offers, matching, realtime, storage, presence, props, users, helperProfiles, notificationQueue, pushNotifications, taskMapper, recurringTasks, taskModerationService, bookingBatches, bookingBatchItems, objectMapper, invoiceEmail, paymentLifecycle, event -> {});
+    this(tasks, offers, matching, realtime, storage, presence, props, users, helperProfiles, notificationQueue, pushNotifications, taskMapper, recurringTasks, taskModerationService, bookingBatches, bookingBatchItems, objectMapper, invoiceEmail, paymentLifecycle, null, event -> {});
   }
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -127,6 +129,7 @@ public class TaskService {
       ObjectMapper objectMapper,
       InvoiceEmailService invoiceEmail,
       PaymentLifecycleService paymentLifecycle,
+      com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration,
       org.springframework.context.ApplicationEventPublisher eventPublisher) {
     this.tasks = tasks;
     this.offers = offers;
@@ -148,11 +151,16 @@ public class TaskService {
     this.objectMapper = objectMapper;
     this.invoiceEmail = invoiceEmail;
     this.paymentLifecycle = paymentLifecycle;
+    this.aiTaskModeration = aiTaskModeration;
   }
 
   @Transactional
   public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
-    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    UserEntity buyer = users.findById(buyerId)
+        .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+    boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
+    requireVerifiedEmailForLaunchAction(buyer);
+    if (!isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
 
@@ -312,8 +320,10 @@ public class TaskService {
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+    requireVerifiedEmailForLaunchAction(buyer);
+    boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
 
-    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (!isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
 
@@ -328,15 +338,15 @@ public class TaskService {
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
     task.setLandmark(req.landmark());
-    PaymentCollectionMode paymentMode = req.paymentCollectionMode() == null
-        ? PaymentCollectionMode.PAY_AFTER_SERVICE
-        : req.paymentCollectionMode();
+    PaymentCollectionMode paymentMode = req.resolvedPaymentCollectionMode();
     task.setPaymentCollectionMode(paymentMode);
+    task.setVerificationMode(req.resolvedVerificationMode());
     Instant now = Instant.now();
     Instant scheduledAt = req.scheduledAt();
     if (scheduledAt != null) {
       task.setScheduledAt(scheduledAt);
     }
+
     boolean isFutureScheduled = scheduledAt != null && scheduledAt.isAfter(now.plus(java.time.Duration.ofMinutes(1)));
     boolean awaitingPrepayment = paymentMode == PaymentCollectionMode.ONLINE_PREPAID;
     if (awaitingPrepayment) {
@@ -401,6 +411,7 @@ public class TaskService {
 
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
+    requireVerifiedEmailForLaunchAction(buyer);
 
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
@@ -417,6 +428,7 @@ public class TaskService {
     task.setPaymentCollectionMode(req.paymentCollectionMode() == null
         ? PaymentCollectionMode.PAY_AFTER_SERVICE
         : req.paymentCollectionMode());
+    task.setVerificationMode(req.resolvedVerificationMode());
     Instant now = Instant.now();
     task.setScheduledAt(req.scheduledAt() != null ? req.scheduledAt() : now);
     task.setStatus(TaskStatus.ASSIGNED);
@@ -452,8 +464,9 @@ public class TaskService {
 
   @Transactional
   public TaskResponse acceptTask(UUID helperId, UUID taskId) {
-    users.findByIdForUpdate(helperId)
+    UserEntity helperUser = users.findByIdForUpdate(helperId)
         .orElseThrow(() -> new ForbiddenException("Helper not found"));
+    requireVerifiedEmailForLaunchAction(helperUser);
 
     var profile = helperProfiles.findById(helperId)
         .orElseThrow(() -> new ForbiddenException("Helper profile not found"));
@@ -546,7 +559,8 @@ public class TaskService {
       throw new BadRequestException("Invalid status transition: " + current + " -> " + newStatus);
     }
 
-    if (newStatus == TaskStatus.ARRIVED && task.getArrivalSelfieUrl() == null) {
+    boolean requiresPhoto = task.getVerificationMode() != TaskVerificationMode.OTP_ONLY;
+    if (requiresPhoto && newStatus == TaskStatus.ARRIVED && task.getArrivalSelfieUrl() == null) {
       throw new BadRequestException("Arrival selfie is required before marking ARRIVED");
     }
     if (newStatus == TaskStatus.STARTED) {
@@ -560,7 +574,7 @@ public class TaskService {
         }
       }
     }
-    if (newStatus == TaskStatus.COMPLETED && task.getCompletionSelfieUrl() == null) {
+    if (requiresPhoto && newStatus == TaskStatus.COMPLETED && task.getCompletionSelfieUrl() == null) {
       throw new BadRequestException("Completion selfie is required before marking COMPLETED");
     }
     if (newStatus == TaskStatus.COMPLETED) {
@@ -909,6 +923,17 @@ public class TaskService {
       case STARTED -> to == TaskStatus.COMPLETED;
       default -> false;
     };
+  }
+
+  private void requireVerifiedEmailForLaunchAction(UserEntity user) {
+    if (user == null) return;
+    boolean reviewer = "9999999991".equals(user.getPhone())
+        || "9999999992".equals(user.getPhone())
+        || "9999999993".equals(user.getPhone());
+    if (reviewer) return;
+    if (user.getEmail() != null && !user.getEmail().isBlank() && !user.isEmailVerified()) {
+      throw new ForbiddenException("Please verify your email before using launch bookings");
+    }
   }
 
   private static String generateOtp() {

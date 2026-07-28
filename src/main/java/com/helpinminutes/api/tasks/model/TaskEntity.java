@@ -58,6 +58,10 @@ public class TaskEntity {
   @Column(name = "payment_collection_mode", nullable = false, length = 30)
   private PaymentCollectionMode paymentCollectionMode;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "verification_mode", nullable = false, length = 30)
+  private TaskVerificationMode verificationMode;
+
   @Column(name = "arrival_selfie_url")
   private String arrivalSelfieUrl;
 
@@ -150,6 +154,9 @@ public class TaskEntity {
     }
     if (paymentCollectionMode == null) {
       paymentCollectionMode = PaymentCollectionMode.PAY_AFTER_SERVICE;
+    }
+    if (verificationMode == null) {
+      verificationMode = TaskVerificationMode.PHOTO_AND_OTP;
     }
     if (urgency == null) {
       urgency = TaskUrgency.NORMAL;
@@ -274,6 +281,14 @@ public class TaskEntity {
 
   public void setPaymentCollectionMode(PaymentCollectionMode paymentCollectionMode) {
     this.paymentCollectionMode = paymentCollectionMode;
+  }
+
+  public TaskVerificationMode getVerificationMode() {
+    return verificationMode;
+  }
+
+  public void setVerificationMode(TaskVerificationMode verificationMode) {
+    this.verificationMode = verificationMode;
   }
 
   public String getArrivalSelfieUrl() {
