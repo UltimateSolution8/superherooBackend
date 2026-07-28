@@ -27,7 +27,7 @@ public class GeminiLlmClient implements LlmClient {
   @Value("${AI_MODERATION_GEMINI_API_KEY:}")
   private String geminiApiKey;
 
-  @Value("${ai.moderation.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent}")
+  @Value("${ai.moderation.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent}")
   private String geminiEndpoint;
 
   @Value("${AI_MODERATION_GROQ_API_KEY:}")
@@ -36,7 +36,7 @@ public class GeminiLlmClient implements LlmClient {
   @Value("${ai.moderation.groq.endpoint:https://api.groq.com/openai/v1/chat/completions}")
   private String groqEndpoint;
 
-  @Value("${ai.moderation.groq.model:llama3-8b-8192}")
+  @Value("${ai.moderation.groq.model:llama-3.1-8b-instant}")
   private String groqModel;
 
   @Value("${ai.moderation.timeout-seconds:8}")
@@ -139,7 +139,7 @@ public class GeminiLlmClient implements LlmClient {
     String content = textNode.asText();
     long duration = System.currentTimeMillis() - startTime;
 
-    return parseAiJson(content, response.body(), "gemini-1.5-flash", duration);
+    return parseAiJson(content, response.body(), "gemini-flash-latest", duration);
   }
 
   private AIReviewResult callGroq(String systemPrompt, String userPrompt, long startTime) throws Exception {

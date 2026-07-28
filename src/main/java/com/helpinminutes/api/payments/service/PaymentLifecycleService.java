@@ -50,6 +50,8 @@ public class PaymentLifecycleService {
   private final TransactionTemplate transactions;
   private final Executor realtimeDispatchExecutor;
   private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+  private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
+  private final com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService;
 
   @Value("${PAYMENT_PENDING_EXPIRY_MINUTES:30}")
   private long paymentPendingExpiryMinutes = 30;
@@ -65,7 +67,9 @@ public class PaymentLifecycleService {
       RazorpayGateway razorpay,
       PlatformTransactionManager transactionManager,
       @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor,
-      org.springframework.context.ApplicationEventPublisher eventPublisher) {
+      org.springframework.context.ApplicationEventPublisher eventPublisher,
+      com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration,
+      @org.springframework.context.annotation.Lazy com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService) {
     this.payments = payments;
     this.tasks = tasks;
     this.batches = batches;
@@ -77,6 +81,8 @@ public class PaymentLifecycleService {
     this.transactions = new TransactionTemplate(transactionManager);
     this.realtimeDispatchExecutor = realtimeDispatchExecutor;
     this.eventPublisher = eventPublisher;
+    this.aiTaskModeration = aiTaskModeration;
+    this.bookingBatchService = bookingBatchService;
   }
 
   @Transactional
@@ -103,13 +109,16 @@ public class PaymentLifecycleService {
   private void activateTask(UUID taskId) {
     TaskEntity task = tasks.findByIdForUpdate(taskId).orElse(null);
     if (task == null || task.getStatus() != TaskStatus.PAYMENT_PENDING) return;
-    task.setStatus(TaskStatus.AI_PENDING);
-    tasks.save(task);
+    
+    // Run AI safety check synchronously!
+    TaskStatus finalStatus = aiTaskModeration.moderateTaskSynchronously(task);
 
-    try {
-      eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), true));
-    } catch (Exception e) {
-      log.error("Failed to publish TaskCreatedEvent after payment for task {}", task.getId(), e);
+    if (finalStatus == TaskStatus.SEARCHING) {
+      try {
+        matching.dispatchOffers(task);
+      } catch (Exception e) {
+        log.error("Failed to dispatch offers on payment activation approval for task {}", task.getId(), e);
+      }
     }
     publishTaskActivated(task);
   }
@@ -129,18 +138,7 @@ public class PaymentLifecycleService {
   }
 
   private void activateBatch(UUID batchId) {
-    BookingBatchEntity batch = batches.findAndLockById(batchId).orElse(null);
-    if (batch == null || batch.getStatus() != BookingBatchStatus.PAYMENT_PENDING) return;
-    batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
-    batches.save(batch);
-    try {
-      realtime.publish("mediator.job_pending_audit", Map.of(
-          "batchId", batchId.toString(),
-          "buyerId", batch.getCreatedByUserId().toString(),
-          "helperCount", batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount()));
-    } catch (Exception e) {
-      log.warn("Could not publish paid bulk request {}", batchId, e);
-    }
+    bookingBatchService.activateCapturedBatch(batchId);
   }
 
   @Transactional

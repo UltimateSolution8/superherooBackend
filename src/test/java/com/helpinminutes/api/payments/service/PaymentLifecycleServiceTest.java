@@ -46,6 +46,7 @@ class PaymentLifecycleServiceTest {
   private PaymentLifecycleService service;
   private PlatformTransactionManager transactionManager;
   private org.springframework.context.ApplicationEventPublisher eventPublisher;
+  private com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
 
   @BeforeEach
   void setUp() {
@@ -57,11 +58,13 @@ class PaymentLifecycleServiceTest {
     workers = mock(MediatorJobWorkerRepository.class);
     transactionManager = mock(PlatformTransactionManager.class);
     eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+    aiTaskModeration = mock(com.helpinminutes.api.moderation.service.AiTaskModerationService.class);
     when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+    com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService = mock(com.helpinminutes.api.batches.service.BookingBatchService.class);
     service = new PaymentLifecycleService(
         payments, tasks, batches, workers,
         matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
-        transactionManager, Runnable::run, eventPublisher);
+        transactionManager, Runnable::run, eventPublisher, aiTaskModeration, bookingBatchService);
     when(payments.save(any(PaymentEntity.class))).thenAnswer(call -> call.getArgument(0));
   }
 
@@ -73,11 +76,15 @@ class PaymentLifecycleServiceTest {
     when(tasks.findById(taskId)).thenReturn(Optional.of(task));
     when(tasks.findByIdForUpdate(taskId)).thenReturn(Optional.of(task));
     when(matching.dispatchOffers(task)).thenReturn(List.of());
+    when(aiTaskModeration.moderateTaskSynchronously(task)).thenAnswer(invocation -> {
+      TaskEntity t = invocation.getArgument(0);
+      t.setStatus(TaskStatus.SEARCHING);
+      return TaskStatus.SEARCHING;
+    });
 
     service.activateCapturedPayment(payment);
 
-    assertEquals(TaskStatus.AI_PENDING, task.getStatus());
-    verify(eventPublisher).publishEvent(any(com.helpinminutes.api.tasks.event.TaskCreatedEvent.class));
+    assertEquals(TaskStatus.SEARCHING, task.getStatus());
   }
 
   @Test
@@ -148,11 +155,15 @@ class PaymentLifecycleServiceTest {
     PaymentEntity payment = payment(taskId, PaymentStatus.CAPTURED, PaymentFulfillmentStatus.HELD);
     when(tasks.findById(taskId)).thenReturn(Optional.of(task));
     when(tasks.findByIdForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(aiTaskModeration.moderateTaskSynchronously(task)).thenAnswer(invocation -> {
+      TaskEntity t = invocation.getArgument(0);
+      t.setStatus(TaskStatus.SCHEDULED_PENDING);
+      return TaskStatus.SCHEDULED_PENDING;
+    });
 
     service.activateCapturedPayment(payment);
 
-    assertEquals(TaskStatus.AI_PENDING, task.getStatus());
-    verify(eventPublisher).publishEvent(any(com.helpinminutes.api.tasks.event.TaskCreatedEvent.class));
+    assertEquals(TaskStatus.SCHEDULED_PENDING, task.getStatus());
   }
 
   @Test

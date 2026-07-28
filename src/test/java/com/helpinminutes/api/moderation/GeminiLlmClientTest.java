@@ -29,7 +29,7 @@ class GeminiLlmClientTest {
     ReflectionTestUtils.setField(client, "geminiEndpoint", "https://invalid.endpoint/gemini");
     ReflectionTestUtils.setField(client, "groqApiKey", "invalid-groq-key");
     ReflectionTestUtils.setField(client, "groqEndpoint", "https://invalid.endpoint/groq");
-    ReflectionTestUtils.setField(client, "groqModel", "llama3-8b-8192");
+    ReflectionTestUtils.setField(client, "groqModel", "llama-3.1-8b-instant");
     ReflectionTestUtils.setField(client, "timeoutSeconds", 1);
   }
 

@@ -7,6 +7,7 @@ import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.moderation.dto.*;
 import com.helpinminutes.api.tasks.model.TaskAiReviewEntity;
 import com.helpinminutes.api.tasks.model.TaskAuditLogEntity;
+import com.helpinminutes.api.payments.model.PaymentCollectionMode;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskAiReviewRepository;
@@ -158,7 +159,9 @@ public class AdminModerationService {
     TaskEntity task = taskRepository.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
-    task.setStatus(TaskStatus.SEARCHING); // Mark searching to dispatch to nearby helpers
+    boolean isFutureScheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
+    task.setStatus(isFutureScheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING); // Mark scheduled pending or searching
+    task.setPaymentCollectionMode(PaymentCollectionMode.PAY_AFTER_SERVICE); // Force pay after service for approved tasks
     taskRepository.save(task);
 
     TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
@@ -168,11 +171,13 @@ public class AdminModerationService {
     auditLog.setRemarks(remarks != null ? remarks : "Approved by customer support admin");
     auditLogRepository.save(auditLog);
 
-    // Dispatch offers to helpers
-    try {
-      matchingService.dispatchOffers(task, true);
-    } catch (Exception e) {
-      log.error("Failed to dispatch offers for admin-approved task {}", taskId, e);
+    // Dispatch offers to helpers (only if it's not a future scheduled task)
+    if (!isFutureScheduled) {
+      try {
+        matchingService.dispatchOffers(task, true);
+      } catch (Exception e) {
+        log.error("Failed to dispatch offers for admin-approved task {}", taskId, e);
+      }
     }
 
     return getModerationQueueItem(task);
@@ -210,7 +215,9 @@ public class AdminModerationService {
       task.setDescription(newDescription.trim());
     }
 
-    task.setStatus(TaskStatus.SEARCHING);
+    boolean isFutureScheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
+    task.setStatus(isFutureScheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING);
+    task.setPaymentCollectionMode(PaymentCollectionMode.PAY_AFTER_SERVICE); // Force pay after service for approved tasks
     taskRepository.save(task);
 
     TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
@@ -220,10 +227,12 @@ public class AdminModerationService {
     auditLog.setRemarks("Edited title/description & approved. Remarks: " + (remarks != null ? remarks : "N/A"));
     auditLogRepository.save(auditLog);
 
-    try {
-      matchingService.dispatchOffers(task, true);
-    } catch (Exception e) {
-      log.error("Failed to dispatch offers for edited/approved task {}", taskId, e);
+    if (!isFutureScheduled) {
+      try {
+        matchingService.dispatchOffers(task, true);
+      } catch (Exception e) {
+        log.error("Failed to dispatch offers for edited/approved task {}", taskId, e);
+      }
     }
 
     return getModerationQueueItem(task);
