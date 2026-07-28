@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -28,18 +29,21 @@ public class EmailVerificationService {
       StringRedisTemplate redis,
       AppProperties props,
       MojoAuthClient mojoAuth,
-      JavaMailSender mailSender) {
+      ObjectProvider<JavaMailSender> mailSender) {
     this.redis = redis;
     this.props = props;
     this.mojoAuth = mojoAuth;
-    this.mailSender = mailSender;
+    this.mailSender = mailSender.getIfAvailable();
   }
 
   EmailVerificationService(
       StringRedisTemplate redis,
       AppProperties props,
       MojoAuthClient mojoAuth) {
-    this(redis, props, mojoAuth, null);
+    this.redis = redis;
+    this.props = props;
+    this.mojoAuth = mojoAuth;
+    this.mailSender = null;
   }
 
   public String sendVerificationEmail(String email) {
