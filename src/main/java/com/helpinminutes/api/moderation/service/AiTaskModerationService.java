@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,7 +71,7 @@ public class AiTaskModerationService {
 
   @Async
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-  @Transactional
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void handleTaskCreatedEvent(TaskCreatedEvent event) {
     UUID taskId = event.taskId();
     log.info("Processing async AI moderation for task {}", taskId);
