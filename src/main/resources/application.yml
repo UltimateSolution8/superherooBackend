@@ -125,8 +125,8 @@ app:
 
   otp:
     ttlSeconds: ${OTP_TTL_SECONDS:300}
-    # Keep false in production. Enable only for local/dev test environments.
-    returnOtpInResponse: ${OTP_RETURN_IN_RESPONSE:false}
+    # Return OTP in the API response for demo/prod until SMS provider is wired.
+    returnOtpInResponse: ${OTP_RETURN_IN_RESPONSE:true}
 
   matching:
     h3Resolution: ${MATCH_H3_RESOLUTION:9}
