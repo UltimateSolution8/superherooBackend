@@ -298,38 +298,4 @@ public class AiTaskModerationService {
     }
   }
 
-  public boolean isSafe(String title, String description, boolean isReviewer) {
-    try {
-      List<String> localFlags = decisionEngine.runLocalPreCheck(title, description);
-      if (!localFlags.isEmpty()) {
-        return false;
-      }
-
-      TaskModerationPayload payload = new TaskModerationPayload(
-          UUID.randomUUID(),
-          UUID.randomUUID(),
-          title,
-          description,
-          null,
-          0L,
-          "Hyderabad",
-          Collections.emptyList()
-      );
-
-      AIReviewResult aiResult = llmClient.evaluateTask(payload);
-      if (isReviewer && aiResult != null && (aiResult.riskScore() < 35 || "fallback-fail-safe".equals(aiResult.modelUsed()))) {
-        return true;
-      }
-
-      TaskStatus status = decisionEngine.determineStatus(aiResult, localFlags);
-      return status == TaskStatus.AI_APPROVED;
-    } catch (Exception e) {
-      log.error("Failed to run safety check for batch: {}", e.getMessage(), e);
-      if (isReviewer) {
-        log.info("API call failed, but user is reviewer. Bypassing safety check and returning true.");
-        return true;
-      }
-      return false;
-    }
-  }
 }

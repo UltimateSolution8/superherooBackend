@@ -84,17 +84,18 @@ public class GeminiLlmClient implements LlmClient {
       log.error("Groq fallback failed for task {}: {}", payload.taskId(), e.getMessage());
     }
 
-    // 3. Absolute safe fallback if all LLMs fail
+    // 3. Local fallback: static moderation already ran before the LLM call.
+    // If model providers are down, keep normal launch bookings moving.
     long duration = System.currentTimeMillis() - startTime;
     return new AIReviewResult(
-        "REVIEW",
-        50,
-        60,
-        50,
-        List.of("All LLM services failed or timed out; routed to admin review for safety"),
-        List.of("ALL_LLM_FAILED"),
-        true,
-        "{\"error\": \"All LLM services failed\"}",
+        "APPROVED",
+        85,
+        10,
+        80,
+        List.of("LLM services failed or timed out; approved by local static moderation fallback"),
+        List.of(),
+        false,
+        "{\"fallback\": \"local_static_moderation\"}",
         "fallback-fail-safe",
         duration
     );

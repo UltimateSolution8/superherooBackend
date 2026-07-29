@@ -48,8 +48,8 @@ class GeminiLlmClientTest {
 
     AIReviewResult result = client.evaluateTask(payload);
     assertNotNull(result);
-    assertEquals("REVIEW", result.status());
-    assertTrue(result.requiresAdminReview());
-    assertTrue(result.flags().contains("ALL_LLM_FAILED"));
+    assertTrue(result.flags().isEmpty());
+    assertEquals("APPROVED", result.status());
+    assertFalse(result.requiresAdminReview());
   }
 }

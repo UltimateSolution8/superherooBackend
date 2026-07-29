@@ -27,13 +27,13 @@ class EmailVerificationServiceTest {
     when(redis.opsForValue()).thenReturn(values);
     when(mojo.isConfigured()).thenReturn(true);
     when(mojo.sendEmailOtp("employee@facebook.com")).thenReturn("state-123");
-    when(values.get("him:mojo_state_id:employee@facebook.com")).thenReturn("state-123");
+    when(values.get("him:email_otp:employee@facebook.com")).thenReturn("mojo:state-123");
     when(mojo.verifyEmailOtp("state-123", "123456")).thenReturn(true);
 
     EmailVerificationService service = new EmailVerificationService(redis, props, mojo);
     assertNull(service.sendVerificationEmail("Employee@Facebook.com"));
     verify(values).set(anyString(), anyString(), any(Duration.class));
     assertTrue(service.verifyEmailOtp("employee@facebook.com", "123456"));
-    verify(redis).delete("him:mojo_state_id:employee@facebook.com");
+    verify(redis).delete("him:email_otp:employee@facebook.com");
   }
 }

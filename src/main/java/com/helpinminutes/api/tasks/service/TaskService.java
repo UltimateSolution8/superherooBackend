@@ -158,9 +158,8 @@ public class TaskService {
   public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
-    boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
     requireVerifiedEmailForLaunchAction(buyer);
-    if (!isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (!ServiceArea.isWithinIndia(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
 
@@ -320,9 +319,7 @@ public class TaskService {
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
-    boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
-
-    if (!isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (!ServiceArea.isWithinIndia(req.lat(), req.lng())) {
       throw new BadRequestException("Service is currently live only in India");
     }
     // Safety check will run via AI moderation rather than throwing BadRequestException immediately
@@ -573,7 +570,7 @@ public class TaskService {
         if (otp == null || otp.isBlank()) {
           throw new BadRequestException("Arrival OTP is required to start work");
         }
-        if (!expected.equals(otp.trim()) && !(props.otp().returnOtpInResponse() && ("123456".equals(otp.trim()) || "1234".equals(otp.trim())))) {
+        if (!expected.equals(otp.trim())) {
           throw new BadRequestException("Incorrect OTP");
         }
       }
@@ -587,7 +584,7 @@ public class TaskService {
         if (otp == null || otp.isBlank()) {
           throw new BadRequestException("Completion OTP is required to finish work");
         }
-        if (!expected.equals(otp.trim()) && !(props.otp().returnOtpInResponse() && ("123456".equals(otp.trim()) || "1234".equals(otp.trim())))) {
+        if (!expected.equals(otp.trim())) {
           throw new BadRequestException("Incorrect OTP");
         }
       }
@@ -931,18 +928,15 @@ public class TaskService {
 
   private void requireVerifiedEmailForLaunchAction(UserEntity user) {
     if (user == null) return;
-    boolean reviewer = "9999999991".equals(user.getPhone())
-        || "9999999992".equals(user.getPhone())
-        || "9999999993".equals(user.getPhone());
-    if (reviewer) return;
     if (user.getEmail() != null && !user.getEmail().isBlank() && !user.isEmailVerified()) {
       throw new ForbiddenException("Please verify your email before using launch bookings");
     }
   }
 
+  private static final java.security.SecureRandom OTP_RNG = new java.security.SecureRandom();
+
   private static String generateOtp() {
-    int code = 100000 + (int) (Math.random() * 900000);
-    return String.valueOf(code);
+    return String.valueOf(100000 + OTP_RNG.nextInt(900000));
   }
 
   @Transactional

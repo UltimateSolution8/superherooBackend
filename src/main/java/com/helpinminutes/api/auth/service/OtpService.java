@@ -138,9 +138,6 @@ public class OtpService {
   }
 
   public boolean verifyOtp(String phone, String otp) {
-    if (props.otp().returnOtpInResponse() && ("123456".equals(otp) || "1234".equals(otp))) {
-      return true;
-    }
     String key = key(phone);
     String expected = null;
     try {

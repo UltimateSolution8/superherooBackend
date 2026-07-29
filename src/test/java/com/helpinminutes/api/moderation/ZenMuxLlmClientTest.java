@@ -43,8 +43,8 @@ class ZenMuxLlmClientTest {
 
     AIReviewResult result = client.evaluateTask(payload);
     assertNotNull(result);
-    assertEquals("REVIEW", result.status());
-    assertTrue(result.requiresAdminReview());
-    assertTrue(result.flags().contains("LLM_TIMEOUT_OR_ERROR"));
+    assertTrue(result.flags().isEmpty());
+    assertEquals("APPROVED", result.status());
+    assertFalse(result.requiresAdminReview());
   }
 }

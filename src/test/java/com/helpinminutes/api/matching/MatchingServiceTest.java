@@ -49,7 +49,10 @@ class MatchingServiceTest {
   void setUp() {
     AppProperties properties = new AppProperties(
         "test",
-        new AppProperties.Jwt("access", "refresh", 900, 3600),
+        new AppProperties.Jwt(
+            "test-access-secret-0123456789abcdef0123456789abcdef",
+            "test-refresh-secret-0123456789abcdef0123456789abcdef",
+            900, 3600),
         new AppProperties.Otp(300, true),
         new AppProperties.Matching(9, 3, 5, 120, 120),
         new AppProperties.Realtime("him:rt:events", "", "", 500));

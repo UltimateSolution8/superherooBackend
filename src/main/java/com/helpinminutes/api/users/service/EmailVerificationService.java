@@ -48,8 +48,7 @@ public class EmailVerificationService {
     String normalized = normalize(email);
     if (normalized.isBlank()) throw new BadRequestException("Email is not added");
 
-    boolean isTestEmail = normalized.endsWith("@test.com") || normalized.endsWith("@example.com");
-    if (!isTestEmail && mojoAuth.isConfigured()) {
+    if (mojoAuth.isConfigured()) {
       try {
         String stateId = mojoAuth.sendEmailOtp(normalized);
         if (stateId != null && !stateId.isBlank()) {
@@ -62,7 +61,7 @@ public class EmailVerificationService {
       }
     }
 
-    String otp = isTestEmail ? "123456" : generateOtp();
+    String otp = generateOtp();
     storeState(normalized, "local:" + otp);
     sendLocalOtpEmail(normalized, otp);
     return otp;

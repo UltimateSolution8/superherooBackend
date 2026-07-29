@@ -84,50 +84,35 @@ public class AuthService {
   }
 
   public String startOtp(String phone, String channel) {
-    boolean isReviewer = "9999999991".equals(phone) || "9999999992".equals(phone) || "9999999993".equals(phone);
-    if (isReviewer) {
-      return "123456";
-    }
     return otp.startOtp(phone, channel);
   }
 
   @Transactional
   public AuthResponse verifyOtp(String phone, String otpCode, UserRole role) {
-    boolean isReviewer = "9999999991".equals(phone) || "9999999992".equals(phone) || "9999999993".equals(phone);
-    if (!isReviewer && !otp.verifyOtp(phone, otpCode)) {
+    if (!otp.verifyOtp(phone, otpCode)) {
       throw new BadRequestException("Invalid OTP");
     }
 
     UserEntity user = users.findByPhoneAndRole(phone, role).orElseGet(() -> {
-      if (!isReviewer) {
-        if (role == UserRole.ADMIN) {
-          String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
-          if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
-            throw new BadRequestException("Admin signup is disabled");
-          }
+      if (role == UserRole.ADMIN) {
+        String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
+        if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
+          throw new BadRequestException("Admin signup is disabled");
         }
-        if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
-          throw new BadRequestException("This account must be created by an admin before login");
-        }
+      }
+      if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
+        throw new BadRequestException("This account must be created by an admin before login");
       }
 
       UserEntity u = new UserEntity();
       u.setPhone(phone);
       u.setRole(role);
       u.setStatus(UserStatus.ACTIVE);
-      if (isReviewer) {
-        if (role == UserRole.BUYER) u.setDisplayName("Reviewer Buyer");
-        if (role == UserRole.HELPER) u.setDisplayName("Reviewer Helper");
-        if (role == UserRole.MEDIATOR) u.setDisplayName("Reviewer Mediator");
-      }
       users.save(u);
 
       if (role == UserRole.HELPER) {
         HelperProfileEntity hp = new HelperProfileEntity();
         hp.setUserId(u.getId());
-        if (isReviewer) {
-          hp.setKycStatus(HelperKycStatus.APPROVED);
-        }
         helperProfiles.save(hp);
       }
 
@@ -138,81 +123,12 @@ public class AuthService {
       throw new BadRequestException("User is not active");
     }
 
-    if (isReviewer && role == UserRole.HELPER) {
-      HelperProfileEntity hp = helperProfiles.findById(user.getId()).orElseGet(() -> {
-        HelperProfileEntity newHp = new HelperProfileEntity();
-        newHp.setUserId(user.getId());
-        return newHp;
-      });
-      hp.setKycStatus(HelperKycStatus.APPROVED);
-      helperProfiles.save(hp);
-    }
-
     String accessToken = jwt.createAccessToken(user);
     String refreshToken = jwt.createRefreshToken(user);
 
     persistRefreshToken(user, refreshToken);
 
     return toAuthResponse(user, accessToken, refreshToken);
-  }
-
-  @jakarta.annotation.PostConstruct
-  @Transactional
-  public void initReviewerAccounts() {
-    try {
-      log.info("Initializing Google Play reviewer accounts...");
-
-      // 1. Setup Buyer
-      UserEntity buyer = users.findByPhoneAndRole("9999999991", UserRole.BUYER).orElseGet(() -> {
-        UserEntity u = new UserEntity();
-        u.setPhone("9999999991");
-        u.setRole(UserRole.BUYER);
-        u.setStatus(UserStatus.ACTIVE);
-        u.setDisplayName("Reviewer Buyer");
-        return users.save(u);
-      });
-
-      // 2. Setup Helper
-      UserEntity helper = users.findByPhoneAndRole("9999999992", UserRole.HELPER).orElseGet(() -> {
-        UserEntity u = new UserEntity();
-        u.setPhone("9999999992");
-        u.setRole(UserRole.HELPER);
-        u.setStatus(UserStatus.ACTIVE);
-        u.setDisplayName("Reviewer Helper");
-        return users.save(u);
-      });
-
-      HelperProfileEntity hp = helperProfiles.findById(helper.getId()).orElseGet(() -> {
-        HelperProfileEntity newHp = new HelperProfileEntity();
-        newHp.setUserId(helper.getId());
-        return newHp;
-      });
-      hp.setKycStatus(HelperKycStatus.APPROVED);
-      helperProfiles.save(hp);
-
-      // 3. Setup Mediator
-      UserEntity mediator = users.findByPhoneAndRole("9999999993", UserRole.MEDIATOR).orElseGet(() -> {
-        UserEntity u = new UserEntity();
-        u.setPhone("9999999993");
-        u.setRole(UserRole.MEDIATOR);
-        u.setStatus(UserStatus.ACTIVE);
-        u.setDisplayName("Reviewer Mediator");
-        return users.save(u);
-      });
-
-      // 4. Link Helper and Mediator
-      HelperMediatorLinkEntity link = helperMediatorLinks.findByHelperIdAndMediatorId(helper.getId(), mediator.getId())
-          .orElseGet(HelperMediatorLinkEntity::new);
-      link.setHelperId(helper.getId());
-      link.setMediatorId(mediator.getId());
-      link.setStatus("ACTIVE");
-      link.setCreatedBy("HELPER");
-      helperMediatorLinks.save(link);
-
-      log.info("Reviewer accounts initialized, KYC approved, and linked successfully!");
-    } catch (Exception e) {
-      log.error("Failed to initialize reviewer accounts", e);
-    }
   }
 
   @Transactional

@@ -33,7 +33,9 @@ public class SupportAiService {
     String baseUrl = env("LLM_BASE_URL");
 
     if (apiKey == null || apiKey.isBlank()) {
-      apiKey = "sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e";
+      // No credential configured: AI drafting is simply unavailable. Never fall
+      // back to a key baked into the source.
+      return AiDraftResponse.disabled("LLM_API_KEY is not configured");
     }
     if (provider == null || provider.isBlank()) {
       provider = "zenmux";

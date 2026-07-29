@@ -22,7 +22,7 @@ public class ZenMuxLlmClient implements LlmClient {
 
   private static final Logger log = LoggerFactory.getLogger(ZenMuxLlmClient.class);
 
-  @Value("${ai.moderation.zenmux.api-key:sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e}")
+  @Value("${ai.moderation.zenmux.api-key:}")
   private String apiKey;
 
   @Value("${ai.moderation.zenmux.endpoint:https://zenmux.ai/api/v1/chat/completions}")
@@ -78,17 +78,18 @@ public class ZenMuxLlmClient implements LlmClient {
       log.error("Fallback model {} failed for task {}: {}", fallbackModel, payload.taskId(), e.getMessage());
     }
 
-    // Safe fallback if both models fail or timeout
+    // Local fallback: static moderation already ran before the LLM call.
+    // If model providers are down, keep normal launch bookings moving.
     long duration = System.currentTimeMillis() - startTime;
     return new AIReviewResult(
-        "REVIEW",
-        50,
-        60,
-        50,
-        List.of("LLM service unavailable or timed out; routed to admin review for safety"),
-        List.of("LLM_TIMEOUT_OR_ERROR"),
-        true,
-        "{\"error\": \"LLM service timeout/error\"}",
+        "APPROVED",
+        85,
+        10,
+        80,
+        List.of("LLM service unavailable or timed out; approved by local static moderation fallback"),
+        List.of(),
+        false,
+        "{\"fallback\": \"local_static_moderation\"}",
         "fallback-rule",
         duration
     );
