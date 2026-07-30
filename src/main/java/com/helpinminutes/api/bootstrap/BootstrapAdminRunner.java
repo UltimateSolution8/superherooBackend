@@ -39,9 +39,13 @@ public class BootstrapAdminRunner implements ApplicationRunner {
         existing.setEmail(email.trim().toLowerCase());
         updated = true;
       }
-      if (password != null && !password.isBlank() && (existing.getPasswordHash() == null || existing.getPasswordHash().isBlank())) {
-        existing.setPasswordHash(passwordEncoder.encode(password));
-        updated = true;
+      if (password != null && !password.isBlank()) {
+        String existingHash = existing.getPasswordHash();
+        if (existingHash == null || existingHash.isBlank()
+            || !passwordEncoder.matches(password, existingHash)) {
+          existing.setPasswordHash(passwordEncoder.encode(password));
+          updated = true;
+        }
       }
       if (existing.getDisplayName() == null || existing.getDisplayName().isBlank()) {
         existing.setDisplayName("Platform Admin");
