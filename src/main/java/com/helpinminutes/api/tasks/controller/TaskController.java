@@ -26,6 +26,7 @@ import com.helpinminutes.api.tasks.service.CrewSchedulingPolicy;
 import com.helpinminutes.api.users.model.UserRole;
 import jakarta.validation.Valid;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import com.helpinminutes.api.tasks.dto.RecurringTaskResponse;
@@ -36,6 +37,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -187,6 +189,18 @@ public class TaskController {
       throw new ForbiddenException("Only helpers can accept tasks");
     }
     return tasks.acceptTask(principal.userId(), taskId);
+  }
+
+  /** Declines an offer so the job is re-offered immediately instead of waiting out its TTL. */
+  @PostMapping("/{taskId}/decline")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void decline(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID taskId) {
+    if (principal.role() != UserRole.HELPER) {
+      throw new ForbiddenException("Only helpers can decline tasks");
+    }
+    tasks.declineOffer(principal.userId(), taskId);
   }
 
   @PostMapping("/{taskId}/status")

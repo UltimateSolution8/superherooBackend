@@ -22,7 +22,7 @@ public class WebsiteChatbotService {
 
   private static final Logger log = LoggerFactory.getLogger(WebsiteChatbotService.class);
 
-  @Value("${ai.moderation.zenmux.api-key:sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e}")
+  @Value("${ai.moderation.zenmux.api-key:}")
   private String apiKey;
 
   @Value("${ai.moderation.zenmux.endpoint:https://zenmux.ai/api/v1/chat/completions}")

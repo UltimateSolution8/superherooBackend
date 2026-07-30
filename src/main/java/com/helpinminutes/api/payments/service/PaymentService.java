@@ -81,6 +81,7 @@ public class PaymentService {
   private final ObjectMapper objectMapper;
   private final TransactionTemplate tx;
   private final PaymentLifecycleService lifecycle;
+  private final com.helpinminutes.api.config.AppProperties props;
 
   public PaymentService(
       PaymentRepository payments,
@@ -93,7 +94,8 @@ public class PaymentService {
       RazorpayGateway razorpay,
       ObjectMapper objectMapper,
       PlatformTransactionManager transactionManager,
-      PaymentLifecycleService lifecycle) {
+      PaymentLifecycleService lifecycle,
+      com.helpinminutes.api.config.AppProperties props) {
     this.payments = payments;
     this.attempts = attempts;
     this.webhookEvents = webhookEvents;
@@ -105,6 +107,7 @@ public class PaymentService {
     this.objectMapper = objectMapper;
     this.tx = new TransactionTemplate(transactionManager);
     this.lifecycle = lifecycle;
+    this.props = props;
   }
 
   public CreateOrderResponse createTaskOrder(UUID buyerId, UserRole role, UUID taskId, String rawIdempotencyKey) {
@@ -891,6 +894,12 @@ public class PaymentService {
   }
 
   private void requireConfigured() {
+    // Checked before the credential check so a launch with the gateway switched
+    // off returns a clear 400 rather than a 500 about missing Razorpay keys.
+    if (!props.payments().onlineEnabled()) {
+      throw new BadRequestException(
+          "Online payment is currently unavailable. Please settle in cash or UPI with your partner.");
+    }
     if (!razorpay.isConfigured()) throw new PaymentProviderException("Razorpay credentials are not configured");
   }
 

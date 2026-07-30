@@ -33,8 +33,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 @Service
 public class MatchingService {
+  /** Hard ceiling on how far a partner may be offered a job. */
+  private static final double MAX_OFFER_RADIUS_METERS = 3000d;
+
   private static final List<Double> EXPANSION_RADII_METERS = List.of(100d, 300d, 600d, 1000d, 1500d, 2000d, 2500d,
-      3000d);
+      MAX_OFFER_RADIUS_METERS);
   private static final List<TaskStatus> HELPER_ACTIVE_TASK_STATUSES = List.of(
       TaskStatus.ASSIGNED,
       TaskStatus.ARRIVED,
@@ -87,13 +90,13 @@ public class MatchingService {
     Map<UUID, Double> bestDistanceByHelper = new HashMap<>();
     int geoCandidateLimit = 100;
     Map<UUID, HelperPresenceService.HelperState> nearbyStates = new HashMap<>(presence.getNearbyActiveHelperStates(
-        task.getLat(), task.getLng(), 3000d, geoCandidateLimit));
+        task.getLat(), task.getLng(), MAX_OFFER_RADIUS_METERS, geoCandidateLimit));
     Set<UUID> eligibleNearbyHelpers = eligibleHelpers(nearbyStates.keySet(), task.getBuyerId());
     if (!nearbyStates.isEmpty() && eligibleNearbyHelpers.size() < props.matching().offerFanout()) {
       // Expand only when the nearest window was mostly busy or ineligible. This
       // keeps normal matching cheap while preventing a small top-N cutoff from
       // hiding available partners in dense areas.
-      nearbyStates.putAll(presence.getNearbyActiveHelperStates(task.getLat(), task.getLng(), 3000d, 500));
+      nearbyStates.putAll(presence.getNearbyActiveHelperStates(task.getLat(), task.getLng(), MAX_OFFER_RADIUS_METERS, 500));
       eligibleNearbyHelpers = eligibleHelpers(nearbyStates.keySet(), task.getBuyerId());
     }
 
@@ -102,27 +105,47 @@ public class MatchingService {
     if (nearbyStates.isEmpty()) {
       int resolution = props.matching().h3Resolution();
       double edgeMeters = Math.max(1d, h3.getHexagonEdgeLengthAvg(resolution, com.uber.h3core.LengthUnit.m));
-      int radiusKRing = (int) Math.ceil(3000d / (edgeMeters * 1.5d)) + 1;
-      int maxKRing = Math.max(props.matching().maxKRing(), radiusKRing);
+      int radiusKRing = (int) Math.ceil(MAX_OFFER_RADIUS_METERS / (edgeMeters * 1.5d)) + 1;
+      // Honour the configured ceiling. Taking the max ignored maxKRing entirely:
+      // at resolution 9 that computed k≈13, a gridDisk of ~547 cells and a
+      // SUNION over 547 Redis keys on a single cold dispatch.
+      int kRing = Math.min(props.matching().maxKRing(), radiusKRing);
       long taskCell = h3.latLngToCell(task.getLat(), task.getLng(), resolution);
-      List<Long> nearbyCells = h3.gridDisk(taskCell, maxKRing);
+      List<Long> nearbyCells = h3.gridDisk(taskCell, kRing);
       Set<UUID> h3Helpers = presence.getOnlineHelpersForCells(nearbyCells);
-      for (UUID helperId : h3Helpers) {
-        HelperPresenceService.HelperState state = presence.getHelperState(helperId);
+      // One pipelined read rather than a round trip per helper.
+      presence.getHelperStates(h3Helpers).forEach((helperId, state) -> {
         if (isEligibleOnlineHelper(state)) nearbyStates.put(helperId, state);
-      }
+      });
       eligibleNearbyHelpers = eligibleHelpers(nearbyStates.keySet(), task.getBuyerId());
       log.debug("GEO index cold for task {}; H3 fallback checked {} cells and found {} active helpers",
           task.getId(), nearbyCells.size(), nearbyStates.size());
     }
 
+    Instant dispatchAt = Instant.now();
     List<TaskOfferEntity> existingOffers = offers.findAllByTaskId(task.getId());
-    Set<UUID> alreadyOfferedHelperIds = existingOffers.stream()
+
+    // Only a *live* offer, an acceptance, or an explicit decline should exclude
+    // a helper. Previously any existing row did, so a helper who simply let one
+    // offer lapse was blacklisted from that task forever.
+    Set<UUID> excludedHelperIds = existingOffers.stream()
+        .filter(o -> o.getStatus() == TaskOfferStatus.ACCEPTED
+            || o.getStatus() == TaskOfferStatus.DECLINED
+            || (o.getStatus() == TaskOfferStatus.OFFERED
+                && o.getExpiresAt() != null
+                && o.getExpiresAt().isAfter(dispatchAt)))
         .map(TaskOfferEntity::getHelperId)
         .collect(java.util.stream.Collectors.toSet());
 
+    // Lapsed offers are revived in place: (task_id, helper_id) is unique, so a
+    // second row cannot be inserted for the same pair.
+    Map<UUID, TaskOfferEntity> revivableOffers = existingOffers.stream()
+        .filter(o -> o.getStatus() == TaskOfferStatus.EXPIRED)
+        .collect(java.util.stream.Collectors.toMap(
+            TaskOfferEntity::getHelperId, o -> o, (a, b) -> a));
+
     for (UUID helperId : eligibleNearbyHelpers) {
-      if (alreadyOfferedHelperIds.contains(helperId)) {
+      if (excludedHelperIds.contains(helperId)) {
         continue;
       }
       var state = nearbyStates.get(helperId);
@@ -130,7 +153,7 @@ public class MatchingService {
         continue;
       }
       double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
-      if (distMeters <= 3000d) {
+      if (distMeters <= MAX_OFFER_RADIUS_METERS) {
         bestDistanceByHelper.merge(helperId, distMeters, Math::min);
       }
     }
@@ -163,16 +186,19 @@ public class MatchingService {
     List<UUID> helperIds = new ArrayList<>();
     List<TaskOfferEntity> offerList = new ArrayList<>();
     for (Candidate c : chosen) {
-      TaskOfferEntity offer = new TaskOfferEntity();
-      offer.setTaskId(task.getId());
-      offer.setHelperId(c.helperId());
+      TaskOfferEntity offer = revivableOffers.get(c.helperId());
+      if (offer == null) {
+        offer = new TaskOfferEntity();
+        offer.setTaskId(task.getId());
+        offer.setHelperId(c.helperId());
+      }
       offer.setStatus(TaskOfferStatus.OFFERED);
       offer.setOfferedAt(now);
       offer.setExpiresAt(expires);
+      offer.setRespondedAt(null);
       offerList.add(offer);
 
       helperIds.add(c.helperId());
-
     }
     if (!offerList.isEmpty()) {
       offers.saveAllAndFlush(offerList);

@@ -67,6 +67,23 @@ class PaymentServiceTest {
   private RazorpayGateway gateway;
   private PaymentService service;
 
+  /**
+   * These tests exercise the online gateway, so they need the launch kill-switch
+   * turned on. Production defaults it off — see AppProperties.Payments.
+   */
+  private static com.helpinminutes.api.config.AppProperties onlinePaymentsEnabled() {
+    return new com.helpinminutes.api.config.AppProperties(
+        "test",
+        new com.helpinminutes.api.config.AppProperties.Jwt(
+            "test-access-secret-0123456789abcdef0123456789abcdef",
+            "test-refresh-secret-0123456789abcdef0123456789abcdef",
+            900, 3600),
+        new com.helpinminutes.api.config.AppProperties.Otp(300, false),
+        new com.helpinminutes.api.config.AppProperties.Matching(9, 3, 5, 120, 120),
+        new com.helpinminutes.api.config.AppProperties.Realtime("him:rt:events", "", "", 500),
+        new com.helpinminutes.api.config.AppProperties.Payments(true));
+  }
+
   @Test
   void helperCanConfirmCashOnlyAfterACompletedPayLaterTask() {
     UUID buyerId = UUID.randomUUID();
@@ -112,7 +129,8 @@ class PaymentServiceTest {
         gateway,
         new ObjectMapper(),
         manager,
-        mock(PaymentLifecycleService.class));
+        mock(PaymentLifecycleService.class),
+        onlinePaymentsEnabled());
     when(payments.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
     when(attempts.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
   }

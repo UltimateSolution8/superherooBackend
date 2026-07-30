@@ -126,9 +126,18 @@ public class PushNotificationService {
     }
 
     BulkMeta bulkMeta = resolveBulkMeta(task.getId());
+
+    // One query for every recipient instead of a findById inside the loop.
+    // Offer fan-out runs on the task-create request path, so this was N extra
+    // round trips per booking.
+    Set<UUID> confirmedHelperIds = users.findAllById(helperIds).stream()
+        .filter(u -> u.getRole() == UserRole.HELPER)
+        .map(u -> u.getId())
+        .collect(java.util.stream.Collectors.toSet());
+
     for (UUID helperId : helperIds) {
       // Hard guard: task-created/offered notifications are for helpers only.
-      if (users.findById(helperId).map(u -> u.getRole() != UserRole.HELPER).orElse(true)) {
+      if (!confirmedHelperIds.contains(helperId)) {
         log.info("Skipping task {} push for non-helper user {}", task.getId(), helperId);
         continue;
       }

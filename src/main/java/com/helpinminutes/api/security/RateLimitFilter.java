@@ -32,6 +32,14 @@ public class RateLimitFilter extends OncePerRequestFilter {
   private final int refreshPerMin = intEnv("RATE_LIMIT_REFRESH_PER_MIN", 30);
   private final int paymentOrderPerMin = intEnv("RATE_LIMIT_PAYMENT_ORDER_PER_MIN", 20);
   private final int paymentVerifyPerMin = intEnv("RATE_LIMIT_PAYMENT_VERIFY_PER_MIN", 40);
+  // Every one of these sends an email or spends money if left unmetered.
+  private final int emailOtpStartPerMin = intEnv("RATE_LIMIT_EMAIL_OTP_START_PER_MIN", 4);
+  private final int emailOtpVerifyPerMin = intEnv("RATE_LIMIT_EMAIL_OTP_VERIFY_PER_MIN", 10);
+  private final int forgotPasswordPerMin = intEnv("RATE_LIMIT_FORGOT_PASSWORD_PER_MIN", 4);
+  private final int resetPasswordPerMin = intEnv("RATE_LIMIT_RESET_PASSWORD_PER_MIN", 8);
+  private final int logoutPerMin = intEnv("RATE_LIMIT_LOGOUT_PER_MIN", 30);
+  /** Unauthenticated and backed by a paid LLM — an open cost-amplification target. */
+  private final int chatbotPerMin = intEnv("RATE_LIMIT_CHATBOT_PER_MIN", 8);
 
   public RateLimitFilter() {
     this(null);
@@ -76,6 +84,22 @@ public class RateLimitFilter extends OncePerRequestFilter {
       limit = signupPerMin;
     } else if (path.endsWith("/api/v1/auth/refresh")) {
       limit = refreshPerMin;
+    } else if (path.endsWith("/api/v1/auth/password/forgot")) {
+      limit = forgotPasswordPerMin;
+    } else if (path.endsWith("/api/v1/auth/password/reset")) {
+      limit = resetPasswordPerMin;
+    } else if (path.endsWith("/api/v1/auth/logout")) {
+      limit = logoutPerMin;
+    } else if (path.endsWith("/api/v1/auth/email/otp/start")) {
+      limit = emailOtpStartPerMin;
+    } else if (path.endsWith("/api/v1/auth/email/otp/verify")) {
+      limit = emailOtpVerifyPerMin;
+    } else if (path.endsWith("/api/v1/me/email/verify/send")) {
+      limit = emailOtpStartPerMin;
+    } else if (path.endsWith("/api/v1/me/phone/verify/send")) {
+      limit = otpStartPerMin;
+    } else if (path.endsWith("/api/public/chatbot/chat")) {
+      limit = chatbotPerMin;
     } else if (path.startsWith("/api/v1/payments/tasks/") && path.endsWith("/orders")) {
       limit = paymentOrderPerMin;
       bucket = "/api/v1/payments/tasks/*/orders";

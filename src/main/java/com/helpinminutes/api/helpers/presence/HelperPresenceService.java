@@ -5,6 +5,7 @@ import com.uber.h3core.H3Core;
 import java.util.LinkedHashMap;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -222,6 +223,42 @@ public class HelperPresenceService {
       redis.opsForGeo().remove(ONLINE_HELPERS_GEO_KEY, staleMembers.toArray(String[]::new));
     }
     return active;
+  }
+
+  /**
+   * Bulk-reads helper state in one pipeline.
+   *
+   * The H3 fallback previously called {@link #getHelperState} in a Java loop —
+   * one network round trip per helper against a remote Redis. At the k-ring
+   * sizes that path uses, that was hundreds of sequential round trips inside a
+   * transaction holding a row lock.
+   */
+  public Map<UUID, HelperState> getHelperStates(Collection<UUID> helperIds) {
+    if (helperIds == null || helperIds.isEmpty()) return Map.of();
+    List<UUID> ids = List.copyOf(helperIds);
+    byte[][] fields = List.of("lat", "lng", "h3", "online", "lastSeenEpochMs").stream()
+        .map(redis.getStringSerializer()::serialize)
+        .toArray(byte[][]::new);
+    List<Object> stateRows;
+    try {
+      stateRows = redis.executePipelined((RedisCallback<Object>) connection -> {
+        for (UUID helperId : ids) {
+          connection.hashCommands().hMGet(
+              redis.getStringSerializer().serialize(keyHelperState(helperId)), fields);
+        }
+        return null;
+      });
+    } catch (RuntimeException e) {
+      log.warn("Helper state pipeline failed: {}", e.getMessage());
+      return Map.of();
+    }
+
+    Map<UUID, HelperState> states = new LinkedHashMap<>();
+    for (int i = 0; i < ids.size() && i < stateRows.size(); i++) {
+      HelperState state = stateFromPipeline(stateRows.get(i));
+      if (state != null) states.put(ids.get(i), state);
+    }
+    return states;
   }
 
   private static HelperState stateFromPipeline(Object raw) {

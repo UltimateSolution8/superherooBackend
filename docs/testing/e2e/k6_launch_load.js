@@ -1,0 +1,179 @@
+/**
+ * k6 load test for the Superherooo API.
+ *
+ * Targets the endpoints that actually carry launch traffic:
+ *   - login (auth, bcrypt-bound)
+ *   - /me (the session hydrate every app open performs)
+ *   - task creation (the expensive one: geofence + AI moderation + Redis GEO
+ *     matching + offer dispatch, all synchronous on the request path)
+ *   - the partner marketplace feed
+ *   - partner presence heartbeats (highest-frequency write in the system)
+ *
+ * Thresholds are set against the production host shape: a single 1 vCPU / 1 GB
+ * droplet with a remote Supabase Postgres and Upstash Redis.
+ */
+import http from 'k6/http';
+import { check, group, sleep } from 'k6';
+import { Trend, Rate } from 'k6/metrics';
+
+const BASE = __ENV.BASE_URL || 'http://localhost:8099';
+
+const bookingLatency = new Trend('booking_latency', true);
+const feedLatency = new Trend('marketplace_latency', true);
+const heartbeatLatency = new Trend('presence_heartbeat_latency', true);
+const bookingSuccess = new Rate('booking_success');
+
+export const options = {
+  scenarios: {
+    // Citizens opening the app and browsing.
+    browsing: {
+      executor: 'ramping-vus',
+      exec: 'browse',
+      startVUs: 0,
+      stages: [
+        { duration: '20s', target: 15 },
+        { duration: '40s', target: 15 },
+        { duration: '10s', target: 0 },
+      ],
+    },
+    // Partners heartbeating location — the highest-frequency write.
+    presence: {
+      executor: 'constant-vus',
+      exec: 'heartbeat',
+      vus: 10,
+      duration: '70s',
+    },
+    // The expensive path: booking, which runs matching inline.
+    booking: {
+      executor: 'constant-arrival-rate',
+      exec: 'book',
+      rate: 3,
+      timeUnit: '1s',
+      duration: '60s',
+      preAllocatedVUs: 20,
+      maxVUs: 60,
+    },
+  },
+  thresholds: {
+    // Overall availability. 5xx means a genuine server fault; 4xx here would be
+    // a test-data problem, so this counts only real failures.
+    http_req_failed: ['rate<0.02'],
+    // A booking runs moderation + Redis GEO + offer dispatch synchronously.
+    booking_latency: ['p(95)<3000'],
+    // The marketplace feed is the screen a partner refreshes constantly.
+    marketplace_latency: ['p(95)<1200'],
+    // Heartbeats must stay cheap: every online partner sends one every ~12s.
+    presence_heartbeat_latency: ['p(95)<600'],
+    booking_success: ['rate>0.95'],
+  },
+};
+
+const CITIZEN = { email: 'e2e.citizen@gmail.com', password: 'E2eCitizen2026' };
+const PARTNER = { email: 'e2e.partner@gmail.com', password: 'E2ePartner2026' };
+
+const HYD_LAT = 17.4401;
+const HYD_LNG = 78.3489;
+
+function login(creds) {
+  const res = http.post(`${BASE}/api/v1/auth/password/login`, JSON.stringify(creds), {
+    headers: { 'Content-Type': 'application/json' },
+    tags: { name: 'login' },
+  });
+  if (res.status !== 200) return null;
+  return res.json('accessToken');
+}
+
+function authHeaders(token) {
+  return { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` } };
+}
+
+/**
+ * Logging in per-iteration would swamp the 12/min rate limit and measure bcrypt
+ * rather than the endpoint under test, so each VU authenticates once.
+ */
+export function setup() {
+  const citizenToken = login(CITIZEN);
+  const partnerToken = login(PARTNER);
+  if (!citizenToken || !partnerToken) {
+    throw new Error('Could not authenticate load-test accounts — is the API running and seeded?');
+  }
+  return { citizenToken, partnerToken };
+}
+
+export function browse(data) {
+  group('citizen session hydrate', () => {
+    const me = http.get(`${BASE}/api/v1/me`, {
+      ...authHeaders(data.citizenToken),
+      tags: { name: 'me' },
+    });
+    check(me, { 'me 200': (r) => r.status === 200 });
+
+    const mine = http.get(`${BASE}/api/v1/tasks/mine`, {
+      ...authHeaders(data.citizenToken),
+      tags: { name: 'my-tasks' },
+    });
+    check(mine, { 'my tasks 200': (r) => r.status === 200 });
+  });
+  sleep(1);
+}
+
+export function heartbeat(data) {
+  // Jitter so 10 VUs do not land on the same millisecond.
+  const lat = HYD_LAT + (Math.random() - 0.5) * 0.02;
+  const lng = HYD_LNG + (Math.random() - 0.5) * 0.02;
+
+  const res = http.put(
+    `${BASE}/api/v1/helper/online`,
+    JSON.stringify({ online: true, lat, lng }),
+    { ...authHeaders(data.partnerToken), tags: { name: 'presence' } },
+  );
+  heartbeatLatency.add(res.timings.duration);
+  check(res, { 'presence accepted': (r) => r.status === 200 || r.status === 204 });
+
+  const feed = http.get(`${BASE}/api/v1/tasks/available`, {
+    ...authHeaders(data.partnerToken),
+    tags: { name: 'marketplace' },
+  });
+  feedLatency.add(feed.timings.duration);
+  check(feed, { 'marketplace 200': (r) => r.status === 200 });
+
+  sleep(2);
+}
+
+export function book(data) {
+  const payload = JSON.stringify({
+    title: 'Load test delivery help',
+    description: 'Synthetic booking generated by the k6 load test suite.',
+    urgency: 'NORMAL',
+    timeMinutes: 30,
+    budgetPaise: 30000,
+    lat: HYD_LAT + (Math.random() - 0.5) * 0.01,
+    lng: HYD_LNG + (Math.random() - 0.5) * 0.01,
+    addressText: 'Hitech City, Hyderabad',
+    paymentCollectionMode: 'PAY_AFTER_SERVICE',
+  });
+
+  const res = http.post(`${BASE}/api/v1/tasks`, payload, {
+    ...authHeaders(data.citizenToken),
+    tags: { name: 'create-task' },
+  });
+  bookingLatency.add(res.timings.duration);
+
+  const ok = res.status === 200;
+  bookingSuccess.add(ok);
+  check(res, {
+    'booking accepted': (r) => r.status === 200,
+    'booking not a server error': (r) => r.status < 500,
+  });
+
+  // Cancel so the matching engine is not left with a growing SEARCHING backlog
+  // that would distort later iterations.
+  if (ok) {
+    const taskId = res.json('taskId');
+    http.post(
+      `${BASE}/api/v1/tasks/${taskId}/cancel`,
+      JSON.stringify({ reason: 'load test cleanup' }),
+      { ...authHeaders(data.citizenToken), tags: { name: 'cancel-task' } },
+    );
+  }
+}

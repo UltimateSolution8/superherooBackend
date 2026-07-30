@@ -32,7 +32,7 @@ public class BookingBatchController {
     if (principal.role() != UserRole.BUYER && principal.role() != UserRole.ADMIN) {
       throw new com.helpinminutes.api.errors.ForbiddenException("Not allowed");
     }
-    return service.preview(req);
+    return service.preview(principal.userId(), req);
   }
 
   @PostMapping

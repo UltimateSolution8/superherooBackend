@@ -1,7 +1,11 @@
 package com.helpinminutes.api.auth.controller;
 
 import com.helpinminutes.api.auth.dto.AuthResponse;
+import com.helpinminutes.api.auth.dto.ForgotPasswordRequest;
+import com.helpinminutes.api.auth.dto.ForgotPasswordResponse;
 import com.helpinminutes.api.auth.dto.HelperKycSignupRequest;
+import com.helpinminutes.api.auth.dto.LogoutRequest;
+import com.helpinminutes.api.auth.dto.ResetPasswordRequest;
 import com.helpinminutes.api.auth.dto.OtpStartRequest;
 import com.helpinminutes.api.auth.dto.OtpStartResponse;
 import com.helpinminutes.api.auth.dto.OtpVerifyRequest;
@@ -14,8 +18,10 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -59,6 +65,28 @@ public class AuthController {
   @PostMapping("/password/login")
   public AuthResponse passwordLogin(@Valid @RequestBody PasswordLoginRequest req) {
     return auth.loginWithPassword(req.email(), req.password());
+  }
+
+  /**
+   * Emails a reset code. Always reports success — see {@link ForgotPasswordResponse}.
+   */
+  @PostMapping("/password/forgot")
+  public ForgotPasswordResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest req) {
+    String otp = auth.startPasswordReset(req.email());
+    return new ForgotPasswordResponse(
+        req.email(), true, props.otp().returnOtpInResponse() ? otp : null);
+  }
+
+  @PostMapping("/password/reset")
+  public AuthResponse resetPassword(@Valid @RequestBody ResetPasswordRequest req) {
+    return auth.resetPassword(req.email(), req.otp(), req.newPassword());
+  }
+
+  /** Revokes the refresh token. Public because the access token may already have expired. */
+  @PostMapping("/logout")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void logout(@Valid @RequestBody LogoutRequest req) {
+    auth.logout(req.refreshToken());
   }
 
   @PostMapping("/email/otp/start")

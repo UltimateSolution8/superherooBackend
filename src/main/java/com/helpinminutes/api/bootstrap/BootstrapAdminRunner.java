@@ -49,7 +49,8 @@ public class BootstrapAdminRunner implements ApplicationRunner {
       }
       if (updated) {
         users.save(existing);
-        log.info("Updated bootstrapped admin credentials for phone={}", phone);
+        // Phone is PII and logs ship to Sentry — record the action, not the number.
+        log.info("Updated bootstrapped admin credentials");
       }
     }, () -> {
       UserEntity admin = new UserEntity();
@@ -64,7 +65,7 @@ public class BootstrapAdminRunner implements ApplicationRunner {
         admin.setPasswordHash(passwordEncoder.encode(password));
       }
       users.save(admin);
-      log.info("Bootstrapped admin user for phone={}", phone);
+      log.info("Bootstrapped admin user");
     });
   }
 }

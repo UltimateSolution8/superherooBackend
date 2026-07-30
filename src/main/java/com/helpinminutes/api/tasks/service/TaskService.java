@@ -39,7 +39,6 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.helpinminutes.api.tasks.model.RecurringTaskEntity;
@@ -85,8 +84,6 @@ public class TaskService {
   private final PaymentLifecycleService paymentLifecycle;
   private final org.springframework.context.ApplicationEventPublisher eventPublisher;
   private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
-  @Value("${app.service-area.enforce-hyderabad:false}")
-  private boolean enforceHyderabadServiceArea;
 
   public TaskService(
       TaskRepository tasks,
@@ -161,10 +158,10 @@ public class TaskService {
   public CreateRecurringTaskResponse createRecurringTask(UUID buyerId, CreateRecurringTaskRequest req) {
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
-    boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
     requireVerifiedEmailForLaunchAction(buyer);
-    if (enforceHyderabadServiceArea && !isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
-      throw new BadRequestException("Service is currently live only in India");
+    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+      throw new BadRequestException(
+          "Superherooo is currently available in Hyderabad only. Pick a location within the city to book.");
     }
 
     LocalTime time;
@@ -323,12 +320,11 @@ public class TaskService {
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
-    requireVerifiedEmailForLaunchAction(buyer);
-    boolean isReviewer = "9999999991".equals(buyer.getPhone()) || "9999999992".equals(buyer.getPhone()) || "9999999993".equals(buyer.getPhone());
-
-    if (enforceHyderabadServiceArea && !isReviewer && !ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
-      throw new BadRequestException("Service is currently live only in India");
+    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+      throw new BadRequestException(
+          "Superherooo is currently available in Hyderabad only. Pick a location within the city to book.");
     }
+    // Safety check will run via AI moderation rather than throwing BadRequestException immediately
 
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
@@ -341,7 +337,7 @@ public class TaskService {
     task.setLng(req.lng());
     task.setAddressText(req.addressText());
     task.setLandmark(req.landmark());
-    PaymentCollectionMode paymentMode = req.resolvedPaymentCollectionMode();
+    PaymentCollectionMode paymentMode = requireSupportedPaymentMode(req.resolvedPaymentCollectionMode());
     task.setPaymentCollectionMode(paymentMode);
     task.setVerificationMode(req.resolvedVerificationMode());
     Instant now = Instant.now();
@@ -350,34 +346,30 @@ public class TaskService {
       task.setScheduledAt(scheduledAt);
     }
 
-    boolean isFutureScheduled = scheduledAt != null && scheduledAt.isAfter(now.plus(java.time.Duration.ofMinutes(1)));
     boolean awaitingPrepayment = paymentMode == PaymentCollectionMode.ONLINE_PREPAID;
-    if (awaitingPrepayment) {
-      task.setStatus(TaskStatus.PAYMENT_PENDING);
-    } else if (isFutureScheduled) {
-      task.setStatus(TaskStatus.SCHEDULED_PENDING);
-    } else {
-      task.setStatus(TaskStatus.AI_PENDING);
-    }
+    TaskStatus finalStatus = TaskStatus.AI_PENDING;
+
     task.setArrivalOtp(generateOtp());
     task.setCompletionOtp(generateOtp());
 
-    tasks.save(task);
+    if (awaitingPrepayment) {
+      task.setStatus(TaskStatus.PAYMENT_PENDING);
+      tasks.save(task);
+    } else {
+      tasks.save(task);
+      // Run AI safety check synchronously!
+      finalStatus = aiTaskModeration.moderateTaskSynchronously(task);
+    }
 
     List<UUID> offeredTo = new ArrayList<>();
-    if (isReviewer && !awaitingPrepayment && !isFutureScheduled) {
-      task.setStatus(TaskStatus.SEARCHING);
-      tasks.save(task);
-      try {
-        offeredTo = matching.dispatchOffers(task, resolvedOptions.sendOfferNotifications());
-      } catch (Exception e) {
-        log.error("Failed to dispatch offers for reviewer task {}", task.getId(), e);
+    if (!awaitingPrepayment) {
+      if (finalStatus == TaskStatus.SEARCHING) {
+        try {
+          offeredTo = matching.dispatchOffers(task);
+        } catch (Exception e) {
+          log.error("Failed to dispatch offers on synchronous approval for task {}", task.getId(), e);
+        }
       }
-    } else if (!awaitingPrepayment && !isFutureScheduled) {
-      // Publish event for Async AI Moderation (AI will dispatch offers if approved)
-      eventPublisher.publishEvent(new com.helpinminutes.api.tasks.event.TaskCreatedEvent(task.getId(), resolvedOptions.sendOfferNotifications()));
-    } else if (!awaitingPrepayment) {
-      log.info("Task {} scheduled for {}. Skipping immediate dispatch.", task.getId(), scheduledAt);
     }
 
     if (!awaitingPrepayment) try {
@@ -405,7 +397,11 @@ public class TaskService {
 
   @Transactional
   public TaskEntity createTaskForHelper(UUID buyerId, UUID helperId, CreateTaskRequest req) {
-    UserEntity helper = users.findById(helperId)
+    // Row lock on the helper, matching acceptTask. The "already busy" check
+    // below is a plain read followed by a write, so without serialising per
+    // helper this path could assign a second concurrent task to someone who is
+    // simultaneously accepting one through the normal offer flow.
+    UserEntity helper = users.findByIdForUpdate(helperId)
         .orElseThrow(() -> new BadRequestException("Helper not found"));
     if (helper.getRole() != UserRole.HELPER) {
       throw new BadRequestException("User is not a helper");
@@ -556,6 +552,38 @@ public class TaskService {
     return taskMapper.toResponse(task, false);
   }
 
+  /**
+   * Declines an offer.
+   *
+   * TaskOfferStatus.DECLINED existed but nothing ever wrote it — a partner could
+   * only ignore an offer and wait out its TTL, which held a dispatch slot for
+   * the full window. Declining frees the slot immediately and re-offers the job
+   * to the next-nearest partner.
+   */
+  @Transactional
+  public void declineOffer(UUID helperId, UUID taskId) {
+    TaskEntity task = tasks.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    int responded = offers.respond(
+        taskId, helperId, TaskOfferStatus.OFFERED, TaskOfferStatus.DECLINED, Instant.now());
+    if (responded == 0) {
+      // Already accepted, expired or declined. Idempotent by design: a partner
+      // double-tapping decline should not see an error.
+      return;
+    }
+
+    // Only worth re-offering while the job is still looking for someone.
+    if (task.getStatus() == TaskStatus.SEARCHING && task.getAssignedHelperId() == null) {
+      try {
+        matching.dispatchOffers(task);
+      } catch (Exception e) {
+        // The scheduled re-dispatch pass will pick this up shortly.
+        log.warn("Re-dispatch after decline failed for task {}", taskId, e);
+      }
+    }
+  }
+
   @Transactional
   public TaskResponse updateStatusAsHelper(UUID helperId, UUID taskId, TaskStatus newStatus, String otp) {
     TaskEntity task = tasks.findById(taskId)
@@ -580,7 +608,7 @@ public class TaskService {
         if (otp == null || otp.isBlank()) {
           throw new BadRequestException("Arrival OTP is required to start work");
         }
-        if (!expected.equals(otp.trim()) && !(props.otp().returnOtpInResponse() && ("123456".equals(otp.trim()) || "1234".equals(otp.trim())))) {
+        if (!expected.equals(otp.trim())) {
           throw new BadRequestException("Incorrect OTP");
         }
       }
@@ -594,7 +622,7 @@ public class TaskService {
         if (otp == null || otp.isBlank()) {
           throw new BadRequestException("Completion OTP is required to finish work");
         }
-        if (!expected.equals(otp.trim()) && !(props.otp().returnOtpInResponse() && ("123456".equals(otp.trim()) || "1234".equals(otp.trim())))) {
+        if (!expected.equals(otp.trim())) {
           throw new BadRequestException("Incorrect OTP");
         }
       }
@@ -669,8 +697,14 @@ public class TaskService {
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
     TaskStatus status = task.getStatus();
+    // AI_PENDING / ADMIN_REVIEW are included deliberately. A booking routed to
+    // moderation review previously could not be cancelled by the citizen at
+    // all — they were stuck waiting on a human with no way out. Load testing
+    // surfaced this: every task the moderator queued became uncancellable.
     if (status != TaskStatus.PAYMENT_PENDING && status != TaskStatus.SCHEDULED_PENDING
-        && status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED) {
+        && status != TaskStatus.SEARCHING && status != TaskStatus.ASSIGNED
+        && status != TaskStatus.AI_PENDING && status != TaskStatus.ADMIN_REVIEW
+        && status != TaskStatus.AI_APPROVED && status != TaskStatus.ADMIN_APPROVED) {
       throw new BadRequestException("Task can only be cancelled before arrival");
     }
 
@@ -907,8 +941,22 @@ public class TaskService {
 
   @Transactional
   public TaskEntity updateStatusAsAdmin(UUID taskId, TaskStatus newStatus) {
-    TaskEntity task = tasks.findById(taskId)
+    // Lock the row: this can release money, so it must not interleave with a
+    // concurrent completion coming through the normal partner flow.
+    TaskEntity task = tasks.findByIdForUpdate(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    TaskStatus current = task.getStatus();
+    if (current == newStatus) {
+      // Idempotent. Critically, this stops a repeated "mark completed" from
+      // calling releaseTaskEarning twice and paying a partner twice.
+      return task;
+    }
+    if (!isValidAdminTransition(current, newStatus)) {
+      throw new BadRequestException(
+          "Cannot move a task from " + current + " to " + newStatus);
+    }
+
     task.setStatus(newStatus);
     tasks.save(task);
 
@@ -927,6 +975,38 @@ public class TaskService {
     return task;
   }
 
+  /**
+   * Transitions an operator may force.
+   *
+   * Admins legitimately need to unstick tasks, so this is deliberately broader
+   * than the partner state machine — but not unconstrained. Previously ANY
+   * status could be applied from ANY other, including reviving a cancelled task
+   * or re-completing a completed one (which released the earning again).
+   */
+  private static boolean isValidAdminTransition(TaskStatus from, TaskStatus to) {
+    // Terminal states are terminal. Reopening them corrupts payment state.
+    if (from == TaskStatus.CANCELLED || from == TaskStatus.COMPLETED) {
+      return false;
+    }
+    // Cancelling is always allowed — it is the primary operator escape hatch.
+    if (to == TaskStatus.CANCELLED) {
+      return true;
+    }
+    return switch (from) {
+      case AI_PENDING, ADMIN_REVIEW ->
+          to == TaskStatus.AI_APPROVED || to == TaskStatus.ADMIN_APPROVED
+              || to == TaskStatus.ADMIN_REJECTED || to == TaskStatus.SEARCHING;
+      case AI_APPROVED, ADMIN_APPROVED, PAYMENT_PENDING, SCHEDULED_PENDING ->
+          to == TaskStatus.SEARCHING;
+      // An unassigned task cannot jump straight to work-in-progress states.
+      case SEARCHING -> to == TaskStatus.SCHEDULED_PENDING;
+      case ASSIGNED -> to == TaskStatus.ARRIVED || to == TaskStatus.STARTED;
+      case ARRIVED -> to == TaskStatus.STARTED || to == TaskStatus.COMPLETED;
+      case STARTED -> to == TaskStatus.COMPLETED;
+      default -> false;
+    };
+  }
+
   private static boolean isValidHelperTransition(TaskStatus from, TaskStatus to) {
     return switch (from) {
       case ASSIGNED -> to == TaskStatus.ARRIVED;
@@ -938,18 +1018,31 @@ public class TaskService {
 
   private void requireVerifiedEmailForLaunchAction(UserEntity user) {
     if (user == null) return;
-    boolean reviewer = "9999999991".equals(user.getPhone())
-        || "9999999992".equals(user.getPhone())
-        || "9999999993".equals(user.getPhone());
-    if (reviewer) return;
     if (user.getEmail() != null && !user.getEmail().isBlank() && !user.isEmailVerified()) {
       throw new ForbiddenException("Please verify your email before using launch bookings");
     }
   }
 
+  private static final java.security.SecureRandom OTP_RNG = new java.security.SecureRandom();
+
   private static String generateOtp() {
-    int code = 100000 + (int) (Math.random() * 900000);
-    return String.valueOf(code);
+    return String.valueOf(100000 + OTP_RNG.nextInt(900000));
+  }
+
+  /**
+   * Rejects prepaid bookings while the online gateway is switched off.
+   *
+   * Enforced server-side rather than only hidden in the app: the client must not
+   * be the thing that decides whether money can be taken. Fails with a clean 400
+   * instead of the 500 the gateway would raise on missing credentials.
+   */
+  private PaymentCollectionMode requireSupportedPaymentMode(PaymentCollectionMode mode) {
+    if (mode == PaymentCollectionMode.ONLINE_PREPAID && !props.payments().onlineEnabled()) {
+      throw new BadRequestException(
+          "Online payment is currently unavailable. Please choose pay after service "
+              + "and settle in cash or UPI with your partner.");
+    }
+    return mode;
   }
 
   @Transactional

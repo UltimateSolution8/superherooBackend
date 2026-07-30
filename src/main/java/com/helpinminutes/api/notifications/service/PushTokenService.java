@@ -41,6 +41,25 @@ public class PushTokenService {
     log.info("Push token registered user={} platform={} tokenPrefix={}", userId, platform, tokenPrefix(safeToken));
   }
 
+  /**
+   * Removes a device token at sign-out.
+   *
+   * Ownership is checked so one user cannot unregister another's device. Without
+   * this the token stays bound to the signed-out account and the device keeps
+   * receiving that person's notifications — including to whoever signs in next.
+   */
+  @Transactional
+  public void unregister(UUID userId, String token) {
+    String safeToken = token == null ? "" : token.trim();
+    if (safeToken.isEmpty()) return;
+    tokens.findByToken(safeToken)
+        .filter(existing -> existing.getUserId().equals(userId))
+        .ifPresent(existing -> {
+          tokens.delete(existing);
+          log.info("Push token unregistered user={} tokenPrefix={}", userId, tokenPrefix(safeToken));
+        });
+  }
+
   public List<PushTokenEntity> getTokensForUsers(List<UUID> userIds) {
     if (userIds == null || userIds.isEmpty()) return List.of();
     return tokens.findAllByUserIdIn(userIds);

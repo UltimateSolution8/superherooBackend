@@ -28,16 +28,16 @@ public class MojoAuthClient {
     this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(4)).build();
   }
 
-  boolean isConfigured() {
+  public boolean isConfigured() {
     return !apiKey.isBlank();
   }
 
-  String sendEmailOtp(String email) throws Exception {
+  public String sendEmailOtp(String email) throws Exception {
     JsonNode body = post(SEND_URI, Map.of("email", email));
     return body.path("state_id").asText("");
   }
 
-  boolean verifyEmailOtp(String stateId, String otp) throws Exception {
+  public boolean verifyEmailOtp(String stateId, String otp) throws Exception {
     JsonNode body = post(VERIFY_URI, Map.of("state_id", stateId, "otp", otp));
     // Current MojoAuth responses include authenticated=true. Preserve
     // compatibility with older successful responses where this field is absent.

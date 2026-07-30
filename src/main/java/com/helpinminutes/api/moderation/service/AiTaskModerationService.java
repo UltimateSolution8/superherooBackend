@@ -23,13 +23,13 @@ import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AiTaskModerationService {
@@ -46,8 +46,6 @@ public class AiTaskModerationService {
   private final PushNotificationService pushNotifications;
   private final ObjectMapper objectMapper;
   private final MeterRegistry meterRegistry;
-  @Value("${ai.moderation.llm-enabled:false}")
-  private boolean llmModerationEnabled;
 
   public AiTaskModerationService(
       TaskRepository taskRepository,
@@ -73,7 +71,7 @@ public class AiTaskModerationService {
   }
 
   @Async
-  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void handleTaskCreatedEvent(TaskCreatedEvent event) {
     UUID taskId = event.taskId();
@@ -84,6 +82,11 @@ public class AiTaskModerationService {
       TaskEntity task = taskRepository.findById(taskId).orElse(null);
       if (task == null) {
         log.warn("Task {} not found for AI moderation", taskId);
+        return;
+      }
+
+      if (task.getStatus() != TaskStatus.AI_PENDING) {
+        log.info("Task {} is already in status {}, skipping async AI moderation", taskId, task.getStatus());
         return;
       }
 
@@ -102,36 +105,7 @@ public class AiTaskModerationService {
           Collections.emptyList()
       );
 
-      AIReviewResult aiResult;
-      if (localFlags != null && !localFlags.isEmpty()) {
-        aiResult = new AIReviewResult(
-            "REVIEW",
-            100,
-            90,
-            20,
-            List.of("Restricted content matched local regex/static moderation"),
-            List.of(),
-            true,
-            "{\"fallback\":\"local-precheck\"}",
-            "local-regex",
-            0L
-        );
-      } else if (!llmModerationEnabled) {
-        aiResult = new AIReviewResult(
-            "APPROVED",
-            90,
-            8,
-            82,
-            List.of("Approved by local regex/static moderation fallback"),
-            List.of(),
-            false,
-            "{\"fallback\":\"local-regex\"}",
-            "local-regex",
-            0L
-        );
-      } else {
-        aiResult = llmClient.evaluateTask(payload);
-      }
+      AIReviewResult aiResult = llmClient.evaluateTask(payload);
 
       // 3. Determine final status
       TaskStatus finalStatus = decisionEngine.determineStatus(aiResult, localFlags);
@@ -161,19 +135,22 @@ public class AiTaskModerationService {
       auditLog.setTaskId(taskId);
 
       if (finalStatus == TaskStatus.AI_APPROVED) {
-        task.setStatus(TaskStatus.SEARCHING); // Mark live for helper dispatch
+        boolean scheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
+        task.setStatus(scheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING);
         taskRepository.save(task);
 
         auditLog.setAction("AI_APPROVED");
         auditLog.setPerformedBy("AI_AGENT:" + aiResult.modelUsed());
-        auditLog.setRemarks("Auto-approved with confidence " + aiResult.confidence() + "%");
+        auditLog.setRemarks("Auto-approved with confidence " + aiResult.confidence() + "%. Status set to " + task.getStatus());
         auditLogRepository.save(auditLog);
 
-        // Dispatch offers to helpers
-        try {
-          matchingService.dispatchOffers(task, event.sendOfferNotifications());
-        } catch (Exception e) {
-          log.error("Failed to dispatch offers after AI approval for task {}", taskId, e);
+        if (!scheduled) {
+          // Dispatch offers to helpers
+          try {
+            matchingService.dispatchOffers(task, event.sendOfferNotifications());
+          } catch (Exception e) {
+            log.error("Failed to dispatch offers after AI approval for task {}", taskId, e);
+          }
         }
 
         meterRegistry.counter("ai.review.approved").increment();
@@ -211,4 +188,114 @@ public class AiTaskModerationService {
       timerSample.stop(meterRegistry.timer("ai.review.duration"));
     }
   }
+
+  @Transactional
+  public TaskStatus moderateTaskSynchronously(TaskEntity task) {
+    UUID taskId = task.getId();
+    log.info("Processing synchronous AI safety moderation for task {}", taskId);
+    Timer.Sample timerSample = Timer.start(meterRegistry);
+
+    try {
+      // 1. Run local pre-check
+      List<String> localFlags = decisionEngine.runLocalPreCheck(task.getTitle(), task.getDescription());
+
+      // 2. Prepare payload and call LLM
+      TaskModerationPayload payload = new TaskModerationPayload(
+          task.getId(),
+          task.getBuyerId(),
+          task.getTitle(),
+          task.getDescription(),
+          null,
+          task.getBudgetPaise(),
+          task.getAddressText(),
+          Collections.emptyList()
+      );
+
+      AIReviewResult aiResult = llmClient.evaluateTask(payload);
+
+      // 3. Determine final status
+      TaskStatus finalStatus = decisionEngine.determineStatus(aiResult, localFlags);
+
+      // 4. Save AI Review Entity
+      TaskAiReviewEntity reviewEntity = new TaskAiReviewEntity();
+      reviewEntity.setTaskId(taskId);
+      reviewEntity.setModel(aiResult.modelUsed());
+      reviewEntity.setStatus(aiResult.status());
+      reviewEntity.setConfidence(aiResult.confidence());
+      reviewEntity.setRiskScore(aiResult.riskScore());
+      reviewEntity.setQualityScore(aiResult.qualityScore());
+      reviewEntity.setReviewDurationMs(aiResult.durationMs());
+
+      List<String> combinedReasons = new ArrayList<>(aiResult.reasons());
+      List<String> combinedFlags = new ArrayList<>(aiResult.flags());
+      combinedFlags.addAll(localFlags);
+
+      reviewEntity.setReasons(objectMapper.writeValueAsString(combinedReasons));
+      reviewEntity.setFlags(objectMapper.writeValueAsString(combinedFlags));
+      reviewEntity.setRawResponse(aiResult.rawResponse());
+
+      aiReviewRepository.save(reviewEntity);
+
+      // 5. Save Audit Log
+      TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
+      auditLog.setTaskId(taskId);
+
+      if (finalStatus == TaskStatus.AI_APPROVED) {
+        boolean scheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
+        TaskStatus targetStatus = scheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING;
+        task.setStatus(targetStatus);
+        taskRepository.save(task);
+
+        auditLog.setAction("AI_APPROVED");
+        auditLog.setPerformedBy("AI_AGENT:" + aiResult.modelUsed());
+        auditLog.setRemarks("Auto-approved synchronously with confidence " + aiResult.confidence() + "%. Status set to " + targetStatus);
+        auditLogRepository.save(auditLog);
+
+        meterRegistry.counter("ai.review.approved").increment();
+        return targetStatus;
+      } else {
+        task.setStatus(TaskStatus.ADMIN_REVIEW);
+        taskRepository.save(task);
+
+        auditLog.setAction("SENT_TO_ADMIN_REVIEW");
+        auditLog.setPerformedBy("AI_AGENT:" + aiResult.modelUsed());
+        auditLog.setRemarks("Flagged synchronously by AI with risk score " + aiResult.riskScore() + ". Routing to ADMIN_REVIEW.");
+        auditLogRepository.save(auditLog);
+
+        meterRegistry.counter("ai.review.reviewed").increment();
+
+        try {
+          realtime.publish(
+              "admin_moderation_required",
+              java.util.Map.of(
+                  "taskId", taskId.toString(),
+                  "riskScore", aiResult.riskScore(),
+                  "flags", combinedFlags
+              )
+          );
+        } catch (Exception ignored) {}
+
+        return TaskStatus.ADMIN_REVIEW;
+      }
+    } catch (Exception e) {
+      log.error("Error during synchronous AI moderation for task {}", taskId, e);
+      meterRegistry.counter("ai.review.failed").increment();
+      
+      // Safe fallback to ADMIN_REVIEW
+      task.setStatus(TaskStatus.ADMIN_REVIEW);
+      taskRepository.save(task);
+
+      TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
+      auditLog.setTaskId(taskId);
+      auditLog.setAction("AI_FAILED");
+      auditLog.setPerformedBy("SYSTEM");
+      auditLog.setRemarks("AI Moderation error occurred, falling back to manual admin review: " + e.getMessage());
+      auditLogRepository.save(auditLog);
+
+      return TaskStatus.ADMIN_REVIEW;
+    } finally {
+      timerSample.stop(meterRegistry.timer("ai.review.duration"));
+    }
+  }
+
 }

@@ -273,6 +273,11 @@ public class AdminController {
       @PathVariable UUID taskId,
       @Valid @RequestBody UpdateTaskStatusRequest req) {
     requireAdmin(principal);
+    // Completing a task releases the partner's earning, so it needs full admin
+    // rather than the SUPPORT/KYC roles requireAdmin also admits.
+    if (req.status() == com.helpinminutes.api.tasks.model.TaskStatus.COMPLETED) {
+      requireFullAdmin(principal);
+    }
     return toTaskResponses(List.of(tasks.updateStatusAsAdmin(taskId, req.status()))).get(0);
   }
 
@@ -281,6 +286,9 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkTaskStatusRequest req) {
     requireAdmin(principal);
+    if (req.status() == com.helpinminutes.api.tasks.model.TaskStatus.COMPLETED) {
+      requireFullAdmin(principal);
+    }
     if (req.taskIds() == null || req.taskIds().isEmpty()) {
       throw new com.helpinminutes.api.errors.BadRequestException("At least one task id is required");
     }

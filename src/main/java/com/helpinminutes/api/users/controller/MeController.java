@@ -168,7 +168,7 @@ public class MeController {
     return new MeResponse(
         u.getId(), u.getRole().name(), u.getPhone(), u.getEmail(), u.isEmailVerified(),
         u.getDisplayName(), u.isBulkCsvEnabled(), u.getDob(), u.getBloodGroup(), u.getGender(),
-        u.getProfileImageUrl(), u.getCreatedAt());
+        u.getProfileImageUrl(), u.getCreatedAt(), props.payments().onlineEnabled());
   }
 
   public record UpdateMeRequest(String displayName, String email, String dob, String bloodGroup, String gender) {}
@@ -185,7 +185,10 @@ public class MeController {
       String bloodGroup,
       String gender,
       String profileImageUrl,
-      java.time.Instant createdAt) {}
+      java.time.Instant createdAt,
+      // Additive: lets the app hide online checkout without shipping a build.
+      // Older clients simply ignore the field.
+      boolean onlinePaymentsEnabled) {}
 
   public record SendEmailOtpResponse(boolean success, String otp) {}
 

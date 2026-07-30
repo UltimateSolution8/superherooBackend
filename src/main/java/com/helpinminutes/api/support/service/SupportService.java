@@ -166,24 +166,28 @@ public class SupportService {
 
   private void applyEscalationRules(SupportTicketEntity ticket, String message) {
     String text = message == null ? "" : message.toLowerCase(Locale.ROOT);
+    boolean accountDeletion = ticket.getCategory() == SupportTicketCategory.ACCOUNT_DELETION;
     boolean safety = ticket.getCategory() == SupportTicketCategory.SAFETY;
     boolean risky = text.contains("sos") || text.contains("emergency") || text.contains("unsafe")
         || text.contains("threat") || text.contains("harass");
-    if (safety || risky) {
+    if (accountDeletion || safety || risky) {
       ticket.setPriority(SupportTicketPriority.HIGH);
       ticket.setStatus(SupportTicketStatus.IN_PROGRESS);
       SupportMessageEntity systemMsg = new SupportMessageEntity();
       systemMsg.setTicketId(ticket.getId());
       systemMsg.setAuthorType(SupportAuthorType.SYSTEM);
       systemMsg.setAuthorUserId(null);
-      systemMsg.setMessage("Auto-escalated to human support due to safety/emergency signal.");
+      systemMsg.setMessage(accountDeletion
+          ? "Account deletion request routed directly to admin support. No AI auto-reply will be sent."
+          : "Auto-escalated to human support due to safety/emergency signal.");
       messages.save(systemMsg);
       ticket.setLastMessageAt(systemMsg.getCreatedAt());
     }
   }
 
   private void maybeAutoReply(SupportTicketEntity ticket) {
-    if (ticket.getStatus() != SupportTicketStatus.OPEN) {
+    if (ticket.getCategory() == SupportTicketCategory.ACCOUNT_DELETION
+        || ticket.getStatus() != SupportTicketStatus.OPEN) {
       return;
     }
     String enabled = System.getenv("SUPPORT_AI_AUTOREPLY");

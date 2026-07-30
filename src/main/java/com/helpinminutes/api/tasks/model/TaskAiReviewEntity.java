@@ -32,12 +32,20 @@ public class TaskAiReviewEntity {
   @Column(name = "quality_score", nullable = false)
   private int qualityScore;
 
+  // @JdbcTypeCode(JSON) is required: with a plain String field Hibernate binds
+  // this as varchar, and Postgres refuses the implicit varchar->jsonb cast in
+  // extended query mode. It only appeared to work because the production JDBC
+  // URL forces preferQueryMode=simple, which inlines the literal. Removing that
+  // parameter would have broken every write to this table.
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
   @Column(name = "reasons", columnDefinition = "jsonb")
   private String reasons;
 
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
   @Column(name = "flags", columnDefinition = "jsonb")
   private String flags;
 
+  @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
   @Column(name = "raw_response", columnDefinition = "jsonb")
   private String rawResponse;
 

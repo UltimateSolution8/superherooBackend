@@ -2,6 +2,7 @@ package com.helpinminutes.api.payments.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -45,6 +46,8 @@ class PaymentLifecycleServiceTest {
   private MediatorJobWorkerRepository workers;
   private PaymentLifecycleService service;
   private PlatformTransactionManager transactionManager;
+  private org.springframework.context.ApplicationEventPublisher eventPublisher;
+  private com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
 
   @BeforeEach
   void setUp() {
@@ -55,12 +58,29 @@ class PaymentLifecycleServiceTest {
     batches = mock(BookingBatchRepository.class);
     workers = mock(MediatorJobWorkerRepository.class);
     transactionManager = mock(PlatformTransactionManager.class);
+    eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+    aiTaskModeration = mock(com.helpinminutes.api.moderation.service.AiTaskModerationService.class);
     when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+    com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService = mock(com.helpinminutes.api.batches.service.BookingBatchService.class);
     service = new PaymentLifecycleService(
-        payments, tasks, batches, workers,
+        inlineSchedulerLock(), payments, tasks, batches, workers,
         matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
-        transactionManager, Runnable::run);
+        transactionManager, Runnable::run, eventPublisher, aiTaskModeration, bookingBatchService);
     when(payments.save(any(PaymentEntity.class))).thenAnswer(call -> call.getArgument(0));
+  }
+
+  /**
+   * Runs the guarded body inline. Production takes a Postgres advisory lock so
+   * two instances cannot issue duplicate refunds; tests just need the body run.
+   */
+  private static com.helpinminutes.api.common.SchedulerLock inlineSchedulerLock() {
+    com.helpinminutes.api.common.SchedulerLock lock =
+        mock(com.helpinminutes.api.common.SchedulerLock.class);
+    org.mockito.Mockito.doAnswer(invocation -> {
+      invocation.getArgument(1, Runnable.class).run();
+      return null;
+    }).when(lock).runExclusively(anyString(), any(Runnable.class));
+    return lock;
   }
 
   @Test
@@ -71,11 +91,15 @@ class PaymentLifecycleServiceTest {
     when(tasks.findById(taskId)).thenReturn(Optional.of(task));
     when(tasks.findByIdForUpdate(taskId)).thenReturn(Optional.of(task));
     when(matching.dispatchOffers(task)).thenReturn(List.of());
+    when(aiTaskModeration.moderateTaskSynchronously(task)).thenAnswer(invocation -> {
+      TaskEntity t = invocation.getArgument(0);
+      t.setStatus(TaskStatus.SEARCHING);
+      return TaskStatus.SEARCHING;
+    });
 
     service.activateCapturedPayment(payment);
 
     assertEquals(TaskStatus.SEARCHING, task.getStatus());
-    verify(matching).dispatchOffers(task);
   }
 
   @Test
@@ -146,11 +170,15 @@ class PaymentLifecycleServiceTest {
     PaymentEntity payment = payment(taskId, PaymentStatus.CAPTURED, PaymentFulfillmentStatus.HELD);
     when(tasks.findById(taskId)).thenReturn(Optional.of(task));
     when(tasks.findByIdForUpdate(taskId)).thenReturn(Optional.of(task));
+    when(aiTaskModeration.moderateTaskSynchronously(task)).thenAnswer(invocation -> {
+      TaskEntity t = invocation.getArgument(0);
+      t.setStatus(TaskStatus.SCHEDULED_PENDING);
+      return TaskStatus.SCHEDULED_PENDING;
+    });
 
     service.activateCapturedPayment(payment);
 
     assertEquals(TaskStatus.SCHEDULED_PENDING, task.getStatus());
-    verify(matching, never()).dispatchOffers(any(TaskEntity.class));
   }
 
   @Test

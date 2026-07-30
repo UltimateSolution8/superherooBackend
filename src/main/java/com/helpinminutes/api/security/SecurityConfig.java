@@ -1,5 +1,7 @@
 package com.helpinminutes.api.security;
 
+import java.util.Arrays;
+import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -39,8 +41,6 @@ public class SecurityConfig {
             .requestMatchers("/api/v1/auth/**").permitAll()
             .requestMatchers("/api/public/**").permitAll()
             .requestMatchers("/api/v1/payments/webhooks/razorpay").permitAll()
-            .requestMatchers("/api/v1/skills").permitAll()
-            .requestMatchers("/api/v1/tasks/unassigned").permitAll()
             .requestMatchers("/api/v1/kyc/recording/**").permitAll()
             .anyRequest().authenticated())
         .addFilterBefore(new RateLimitFilter(redis), UsernamePasswordAuthenticationFilter.class)
@@ -52,7 +52,19 @@ public class SecurityConfig {
   @Bean
   public CorsConfigurationSource corsConfigurationSource() {
     CorsConfiguration cfg = new CorsConfiguration();
-    cfg.addAllowedOriginPattern("*");
+    // Was addAllowedOriginPattern("*"). The mobile apps do not send an Origin
+    // header at all, so the wildcard only ever served the web clients — and
+    // served every other site on the internet at the same time.
+    String configured = System.getenv("CORS_ALLOWED_ORIGINS");
+    List<String> origins = (configured == null || configured.isBlank())
+        ? List.of(
+            "https://mysuperhero.xyz",
+            "https://www.mysuperhero.xyz",
+            "https://admin.mysuperhero.xyz",
+            "http://localhost:5173",
+            "http://localhost:3000")
+        : Arrays.stream(configured.split(",")).map(String::trim).filter(o -> !o.isBlank()).toList();
+    origins.forEach(cfg::addAllowedOriginPattern);
     cfg.addAllowedHeader("*");
     cfg.addAllowedMethod("*");
     cfg.setAllowCredentials(false);

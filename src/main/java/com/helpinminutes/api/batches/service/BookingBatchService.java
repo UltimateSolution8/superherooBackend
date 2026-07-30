@@ -46,7 +46,6 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.beans.factory.annotation.Value;
 
 @Service
 public class BookingBatchService {
@@ -64,8 +63,7 @@ public class BookingBatchService {
   private final PushNotificationService pushNotifications;
   private final MediatorJobWorkerRepository mediatorWorkers;
   private final PaymentLifecycleService paymentLifecycle;
-  @Value("${app.service-area.enforce-hyderabad:false}")
-  private boolean enforceHyderabadServiceArea;
+  private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
 
   public BookingBatchService(
       BookingBatchRepository batches,
@@ -80,7 +78,8 @@ public class BookingBatchService {
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
       MediatorJobWorkerRepository mediatorWorkers,
-      PaymentLifecycleService paymentLifecycle) {
+      PaymentLifecycleService paymentLifecycle,
+      com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration) {
     this.batches = batches;
     this.items = items;
     this.events = events;
@@ -94,9 +93,10 @@ public class BookingBatchService {
     this.pushNotifications = pushNotifications;
     this.mediatorWorkers = mediatorWorkers;
     this.paymentLifecycle = paymentLifecycle;
+    this.aiTaskModeration = aiTaskModeration;
   }
 
-  public BatchDtos.PreviewResponse preview(BatchDtos.PreviewRequest req) {
+  public BatchDtos.PreviewResponse preview(UUID actorUserId, BatchDtos.PreviewRequest req) {
     List<BatchDtos.PreviewItemResult> out = new ArrayList<>();
     int valid = 0;
     for (int i = 0; i < req.items().size(); i++) {
@@ -129,7 +129,7 @@ public class BookingBatchService {
       }
     }
 
-    users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
+    UserEntity buyer = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
 
     BookingBatchEntity batch = new BookingBatchEntity();
     batch.setCreatedByUserId(buyerId);
@@ -465,8 +465,11 @@ public class BookingBatchService {
     if (line.budgetPaise() == null || line.budgetPaise() < 100) errors.add("budgetPaise must be at least 100");
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
-    if (enforceHyderabadServiceArea && line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
-      errors.add("location outside service area (India only)");
+    if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
+      // Rejected up front rather than accepted and left unmatchable: there are no
+      // partners outside Hyderabad, so such a task would sit in SEARCHING until
+      // the stale-cleanup job cancelled it.
+      errors.add("location outside service area (Hyderabad only)");
     }
     if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofHours(1)))) {
       errors.add("scheduledAt must be at least 1 hour in the future");
@@ -602,9 +605,17 @@ public class BookingBatchService {
     batch.setNotes("Created from buyer app bulk request (Mediator Routed)");
     PaymentCollectionMode collectionMode = req.resolvedPaymentCollectionMode();
     batch.setPaymentCollectionMode(collectionMode);
-    batch.setStatus(collectionMode == PaymentCollectionMode.ONLINE_PREPAID
-        ? BookingBatchStatus.PAYMENT_PENDING
-        : BookingBatchStatus.PENDING_AUDIT);
+
+    boolean autoApprove = false;
+
+    if (autoApprove) {
+      batch.setStatus(BookingBatchStatus.PENDING_MEDIATOR);
+    } else {
+      batch.setStatus(collectionMode == PaymentCollectionMode.ONLINE_PREPAID
+          ? BookingBatchStatus.PAYMENT_PENDING
+          : BookingBatchStatus.PENDING_AUDIT);
+    }
+
     if (collectionMode == PaymentCollectionMode.ONLINE_PREPAID) {
       batch.setPaymentMode(req.paymentMode() == null ? BatchPaymentMode.PER_HELPER : req.paymentMode());
     }
@@ -638,7 +649,40 @@ public class BookingBatchService {
     writeEvent(saved.getId(), "BATCH_CREATED", "{\"status\":\"" + saved.getStatus().name()
         + "\",\"requested\":" + req.helperCount() + "}");
 
+    if (saved.getStatus() == BookingBatchStatus.PENDING_MEDIATOR) {
+      writeEvent(saved.getId(), "MEDIATOR_AUDIT_APPROVED", "{\"status\":\"PENDING_MEDIATOR\"}");
+      publishMediatorJobAvailable(saved);
+    }
+
     return saved;
+  }
+
+  @Transactional
+  public void activateCapturedBatch(UUID batchId) {
+    BookingBatchEntity batch = batches.findAndLockById(batchId).orElse(null);
+    if (batch == null || batch.getStatus() != BookingBatchStatus.PAYMENT_PENDING) return;
+
+    boolean autoApprove = false;
+
+    if (autoApprove) {
+      batch.setStatus(BookingBatchStatus.PENDING_MEDIATOR);
+      batches.save(batch);
+      writeEvent(batch.getId(), "MEDIATOR_AUDIT_APPROVED", "{\"status\":\"PENDING_MEDIATOR\"}");
+      publishMediatorJobAvailable(batch);
+      try {
+        pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Bulk request approved", "Your bulk request has been verified. A mediator is being assigned.", batch.getId());
+      } catch (Exception ignored) {}
+    } else {
+      batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
+      batches.save(batch);
+      try {
+        realtime.publish("mediator.job_pending_audit", Map.of(
+            "batchId", batchId.toString(),
+            "buyerId", batch.getCreatedByUserId().toString(),
+            "status", "PENDING_AUDIT"
+        ));
+      } catch (Exception ignored) {}
+    }
   }
 
   private void publishMediatorJobAvailable(BookingBatchEntity batch) {

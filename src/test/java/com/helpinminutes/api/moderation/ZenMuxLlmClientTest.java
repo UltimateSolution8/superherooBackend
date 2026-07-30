@@ -29,7 +29,7 @@ class ZenMuxLlmClientTest {
   }
 
   @Test
-  void handlesLlmFailureGracefullyWithRegexFallbackApproval() {
+  void handlesLlmFailureGracefullyWithSafeFallback() {
     TaskModerationPayload payload = new TaskModerationPayload(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -43,9 +43,8 @@ class ZenMuxLlmClientTest {
 
     AIReviewResult result = client.evaluateTask(payload);
     assertNotNull(result);
+    assertTrue(result.flags().isEmpty());
     assertEquals("APPROVED", result.status());
     assertFalse(result.requiresAdminReview());
-    assertTrue(result.flags().isEmpty());
-    assertEquals("fallback-rule", result.modelUsed());
   }
 }

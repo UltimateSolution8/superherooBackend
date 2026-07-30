@@ -8,5 +8,6 @@ public enum SupportTicketCategory {
   CANCELLATION,
   PRICING,
   TECH,
+  ACCOUNT_DELETION,
   OTHER
 }

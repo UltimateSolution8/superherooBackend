@@ -14,14 +14,63 @@ public record AppProperties(
     @NotNull Jwt jwt,
     @NotNull Otp otp,
     @NotNull Matching matching,
-    @NotNull Realtime realtime
+    @NotNull Realtime realtime,
+    Payments payments
 ) {
+  public AppProperties {
+    if (payments == null) {
+      payments = new Payments(false);
+    }
+  }
+
+  /**
+   * @param onlineEnabled whether the online gateway (Razorpay) may be used.
+   *     Off at launch: jobs are settled in cash or UPI between citizen and
+   *     partner, and the partner confirms collection in-app. Turning this on
+   *     with live keys re-enables the prepaid flow — no code changes needed.
+   */
+  public record Payments(boolean onlineEnabled) {}
   public record Jwt(
       @NotBlank String accessSecret,
       @NotBlank String refreshSecret,
       @Min(60) long accessTtlSeconds,
       @Min(300) long refreshTtlSeconds
-  ) {}
+  ) {
+    /** Secrets that shipped as defaults at some point and are therefore public knowledge. */
+    private static final java.util.Set<String> KNOWN_WEAK_SECRETS = java.util.Set.of(
+        "dev_access_secret_change_me", "dev_refresh_secret_change_me", "changeme", "secret");
+
+    private static final int MIN_SECRET_LENGTH = 32;
+
+    public Jwt {
+      requireStrongSecret("app.jwt.accessSecret", "JWT_ACCESS_SECRET", accessSecret);
+      requireStrongSecret("app.jwt.refreshSecret", "JWT_REFRESH_SECRET", refreshSecret);
+      if (accessSecret != null && accessSecret.equals(refreshSecret)) {
+        throw new IllegalStateException(
+            "JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must differ, otherwise a refresh token "
+                + "can be replayed as an access token.");
+      }
+    }
+
+    private static void requireStrongSecret(String property, String envVar, String value) {
+      // @NotBlank already rejects null/empty, but bean validation runs after the
+      // canonical constructor, so re-check here to keep the message actionable.
+      if (value == null || value.isBlank()) {
+        throw new IllegalStateException(
+            envVar + " is not set. Refusing to start: there is no safe default for a signing key.");
+      }
+      if (KNOWN_WEAK_SECRETS.contains(value)) {
+        throw new IllegalStateException(
+            envVar + " is set to a publicly-known placeholder value. Generate a new secret, e.g. "
+                + "`openssl rand -hex 32`.");
+      }
+      if (value.length() < MIN_SECRET_LENGTH) {
+        throw new IllegalStateException(
+            envVar + " must be at least " + MIN_SECRET_LENGTH + " characters (got " + value.length()
+                + "). Generate one with `openssl rand -hex 32`.");
+      }
+    }
+  }
 
   public record Otp(
       @Min(60) @Max(3600) long ttlSeconds,

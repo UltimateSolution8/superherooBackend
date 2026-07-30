@@ -1,5 +1,6 @@
 package com.helpinminutes.api.auth.service;
 
+import com.helpinminutes.api.common.LogMasking;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.config.ExotelProperties;
 import com.helpinminutes.api.config.TwilioProperties;
@@ -29,6 +30,8 @@ import org.springframework.stereotype.Service;
 public class OtpService {
   private static final SecureRandom RNG = new SecureRandom();
   private static final Logger log = LoggerFactory.getLogger(OtpService.class);
+  /** Guesses allowed against a single issued code before it is burned. */
+  private static final int MAX_VERIFY_ATTEMPTS = 5;
 
   private final StringRedisTemplate redis;
   private final AppProperties props;
@@ -71,7 +74,7 @@ public class OtpService {
     } catch (BadRequestException e) {
       throw e;
     } catch (Exception e) {
-      log.warn("Redis OTP rate limiting failed for {}: {}", phone, e.getMessage());
+      log.warn("Redis OTP rate limiting failed for {}: {}", LogMasking.phone(phone), e.getMessage());
     }
 
     if (exotel != null && exotel.enabled()) {
@@ -82,7 +85,7 @@ public class OtpService {
           // best-effort and dev OTP remains available as the configured fallback.
           otpDeliveryExecutor.execute(() -> sendExotelOtp(phone, otp));
         } catch (RejectedExecutionException e) {
-          log.warn("Exotel OTP delivery queue is full for {}. Using dev/local OTP.", phone);
+          log.warn("Exotel OTP delivery queue is full for {}. Using dev/local OTP.", LogMasking.phone(phone));
         }
       } else {
         log.warn("Exotel OTP is enabled but SMS is not sent because EXOTEL_FROM or credentials are missing. Using dev/local OTP.");
@@ -99,13 +102,13 @@ public class OtpService {
           try {
             Twilio.init(twilio.accountSid(), twilio.authToken());
             Verification.creator(twilio.verifyServiceSid(), recipient, chosen).create();
-            log.info("Twilio OTP request sent asynchronously for {}", recipient);
+            log.info("Twilio OTP request sent asynchronously for {}", LogMasking.phone(recipient));
           } catch (Exception ex) {
-            log.warn("Twilio OTP async start failed for {}: {}", recipient, ex.getMessage());
+            log.warn("Twilio OTP async start failed for {}: {}", LogMasking.phone(recipient), ex.getMessage());
           }
         });
       } catch (Exception e) {
-        log.warn("Failed to queue Twilio OTP request for {}: {}", recipient, e.getMessage());
+        log.warn("Failed to queue Twilio OTP request for {}: {}", LogMasking.phone(recipient), e.getMessage());
       }
       return localOtp;
     }
@@ -130,18 +133,27 @@ public class OtpService {
           .build();
       HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
       if (res.statusCode() < 200 || res.statusCode() >= 300) {
-        log.warn("Exotel OTP SMS failed for {} status={} body={}", to, res.statusCode(), safeLogBody(res.body()));
+        // Body is deliberately not logged: an Exotel error can echo the message
+        // text, which contains the OTP.
+        log.warn("Exotel OTP SMS failed for {} status={}", LogMasking.phone(to), res.statusCode());
       }
     } catch (Exception e) {
-      log.warn("Exotel OTP SMS failed for {}: {}", phone, e.getMessage());
+      log.warn("Exotel OTP SMS failed for {}: {}", LogMasking.phone(phone), e.getMessage());
     }
   }
 
   public boolean verifyOtp(String phone, String otp) {
-    if (props.otp().returnOtpInResponse() && ("123456".equals(otp) || "1234".equals(otp))) {
-      return true;
-    }
     String key = key(phone);
+
+    // A 6-digit code with a 5-minute TTL is trivially brute-forceable without a
+    // cap on guesses. The IP-keyed RateLimitFilter does not help here: an
+    // attacker rotating IPs still gets unlimited attempts at one phone number.
+    if (registerVerifyAttempt(phone) > MAX_VERIFY_ATTEMPTS) {
+      clearLocalOtp(key);
+      log.warn("OTP invalidated after {} failed verification attempts", MAX_VERIFY_ATTEMPTS);
+      return false;
+    }
+
     String expected = null;
     try {
       expected = redis.opsForValue().get(key);
@@ -157,9 +169,12 @@ public class OtpService {
       }
     }
     if (expected != null) {
-      boolean ok = expected.equals(otp);
+      boolean ok = java.security.MessageDigest.isEqual(
+          expected.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+          otp == null ? new byte[0] : otp.getBytes(java.nio.charset.StandardCharsets.UTF_8));
       if (ok) {
         clearLocalOtp(key);
+        clearVerifyAttempts(phone);
       }
       return ok;
     }
@@ -196,6 +211,34 @@ public class OtpService {
       return "whatsapp";
     }
     return "sms";
+  }
+
+  /** @return the attempt number just consumed, starting at 1. */
+  private long registerVerifyAttempt(String phone) {
+    String key = attemptsKey(phone);
+    try {
+      Long count = redis.opsForValue().increment(key);
+      if (count != null && count == 1L) {
+        redis.expire(key, java.time.Duration.ofSeconds(props.otp().ttlSeconds()));
+      }
+      return count == null ? 1L : count;
+    } catch (Exception e) {
+      // Never lock a user out because Redis is having a bad day.
+      log.warn("Redis OTP attempt counter unavailable: {}", e.getMessage());
+      return 1L;
+    }
+  }
+
+  private void clearVerifyAttempts(String phone) {
+    try {
+      redis.delete(attemptsKey(phone));
+    } catch (Exception ignored) {
+      // Counter expires on its own TTL.
+    }
+  }
+
+  private static String attemptsKey(String phone) {
+    return "him:otp_attempts:" + phone;
   }
 
   private static String key(String phone) {

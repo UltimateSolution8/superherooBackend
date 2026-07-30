@@ -1,12 +1,16 @@
 package com.helpinminutes.api.batches;
 
 import com.helpinminutes.api.batches.dto.BatchDtos;
+import com.helpinminutes.api.batches.service.BookingBatchService;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -49,7 +53,7 @@ class BookingBatchServiceTest {
         var errors = validate("Valid title here", "Valid description long enough",
                 "NORMAL", 30, 10000L, 40.7128, -74.0060, null, null);
         assertTrue(errors.stream().anyMatch(e -> e.contains("service area")),
-                "Location outside India should fail");
+                "Location outside the service area should fail");
     }
 
     @Test
@@ -135,42 +139,59 @@ class BookingBatchServiceTest {
     }
 
     @Test
-    void validateLine_zeroBudget_noError() {
+    void validateLine_zeroBudget_returnsError() {
+        // A task must carry a real budget: partners are paid from it. The minimum
+        // is 100 paise (₹1). The previous expectation here ("zero is allowed")
+        // came from the test's own duplicate of the rules, not from the service.
         var errors = validate("Valid title here", "Valid description long enough",
                 "NORMAL", 30, 0L, 17.3850, 78.4867, null, null);
-        assertFalse(errors.stream().anyMatch(e -> e.contains("budget")),
-                "Zero budget should be allowed");
+        assertTrue(errors.stream().anyMatch(e -> e.contains("budgetPaise")),
+                "Zero budget must be rejected");
     }
 
     // ─── Helper: invoke validateLine via reflection ───────────────────────────
+    /**
+     * Invokes the real {@link BookingBatchService#validateLine} by reflection.
+     *
+     * This previously reimplemented the validation rules inline. That made the
+     * suite green while testing nothing: the copy checked isWithinHyderabad
+     * while production checked isWithinIndia, so a Mumbai booking was accepted
+     * in production and rejected only in the test's private duplicate.
+     */
     @SuppressWarnings("unchecked")
     private List<String> validate(String title, String description, String urgency,
                                    Integer timeMinutes, Long budgetPaise,
                                    Double lat, Double lng, String address, Instant scheduledAt) {
-        // Build a PreviewItem and call validateLine via reflection
         var item = new BatchDtos.PreviewItem(
                 title, description,
                 urgency == null ? null : TaskUrgency.valueOf(urgency),
                 timeMinutes, budgetPaise, lat, lng, address, scheduledAt);
         try {
-            // We invoke the static logic directly since it's in an inner class pattern
-            // For now test the DTOs are correct
-            List<String> errors = new java.util.ArrayList<>();
-            if (title == null || title.trim().length() < 3) errors.add("title too short");
-            if (description == null || description.trim().length() < 10) errors.add("description too short");
-            if (timeMinutes == null || timeMinutes < 1 || timeMinutes > 480) errors.add("timeMinutes out of range");
-            if (budgetPaise == null || budgetPaise < 0) errors.add("budgetPaise invalid");
-            if (lat == null || lat < -90 || lat > 90) errors.add("lat invalid");
-            if (lng == null || lng < -180 || lng > 180) errors.add("lng invalid");
-            if (lat != null && lng != null && !com.helpinminutes.api.common.ServiceArea.isWithinHyderabad(lat, lng)) {
-                errors.add("location outside service area");
-            }
-            if (scheduledAt != null && scheduledAt.isBefore(Instant.now().plus(1, ChronoUnit.HOURS))) {
-                errors.add("scheduledAt must be at least 1 hour in the future");
-            }
-            return errors;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+            BookingBatchService service = newServiceWithMockedDependencies();
+            Method m = BookingBatchService.class
+                    .getDeclaredMethod("validateLine", BatchDtos.PreviewItem.class);
+            m.setAccessible(true);
+            return (List<String>) m.invoke(service, item);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(
+                    "validateLine signature changed — update this test rather than duplicating its logic", e);
+        }
+    }
+
+    /**
+     * Builds a BookingBatchService with every collaborator mocked. validateLine
+     * only touches taskModerationService, which is lenient by default.
+     */
+    private BookingBatchService newServiceWithMockedDependencies() {
+        Constructor<?> ctor = BookingBatchService.class.getDeclaredConstructors()[0];
+        Object[] args = Arrays.stream(ctor.getParameterTypes())
+                .map(Mockito::mock)
+                .toArray();
+        ctor.setAccessible(true);
+        try {
+            return (BookingBatchService) ctor.newInstance(args);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not construct BookingBatchService for test", e);
         }
     }
 }

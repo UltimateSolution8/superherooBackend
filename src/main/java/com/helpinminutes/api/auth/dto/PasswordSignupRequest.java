@@ -9,7 +9,13 @@ import jakarta.validation.constraints.Pattern;
 public record PasswordSignupRequest(
     @NotBlank @Email String email,
     @NotBlank String password,
+    // Mandatory at launch: partners are dispatched to a citizen's location and
+    // both sides need a reachable number if something goes wrong on site.
+    @NotBlank(message = "Phone number is required")
+    @Pattern(
+        regexp = "^([6-9]\\d{9}|91[6-9]\\d{9}|0[6-9]\\d{9})$",
+        message = "Enter a valid 10-digit Indian mobile number")
     String phone,
-    String displayName,
+    @NotBlank(message = "Name is required") String displayName,
     @NotNull UserRole role
 ) {}

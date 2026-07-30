@@ -49,11 +49,16 @@ public class PaymentLifecycleService {
   private final RazorpayGateway razorpay;
   private final TransactionTemplate transactions;
   private final Executor realtimeDispatchExecutor;
+  private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+  private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
+  private final com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService;
+  private final com.helpinminutes.api.common.SchedulerLock schedulerLock;
 
   @Value("${PAYMENT_PENDING_EXPIRY_MINUTES:30}")
   private long paymentPendingExpiryMinutes = 30;
 
   public PaymentLifecycleService(
+      com.helpinminutes.api.common.SchedulerLock schedulerLock,
       PaymentRepository payments,
       TaskRepository tasks,
       BookingBatchRepository batches,
@@ -63,7 +68,10 @@ public class PaymentLifecycleService {
       PushNotificationService pushNotifications,
       RazorpayGateway razorpay,
       PlatformTransactionManager transactionManager,
-      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor) {
+      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor,
+      org.springframework.context.ApplicationEventPublisher eventPublisher,
+      com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration,
+      @org.springframework.context.annotation.Lazy com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService) {
     this.payments = payments;
     this.tasks = tasks;
     this.batches = batches;
@@ -74,6 +82,10 @@ public class PaymentLifecycleService {
     this.razorpay = razorpay;
     this.transactions = new TransactionTemplate(transactionManager);
     this.realtimeDispatchExecutor = realtimeDispatchExecutor;
+    this.eventPublisher = eventPublisher;
+    this.aiTaskModeration = aiTaskModeration;
+    this.bookingBatchService = bookingBatchService;
+    this.schedulerLock = schedulerLock;
   }
 
   @Transactional
@@ -100,21 +112,16 @@ public class PaymentLifecycleService {
   private void activateTask(UUID taskId) {
     TaskEntity task = tasks.findByIdForUpdate(taskId).orElse(null);
     if (task == null || task.getStatus() != TaskStatus.PAYMENT_PENDING) return;
-    Instant now = Instant.now();
-    boolean scheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(now.plusSeconds(60));
-    task.setStatus(scheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING);
-    tasks.save(task);
+    
+    // Run AI safety check synchronously!
+    TaskStatus finalStatus = aiTaskModeration.moderateTaskSynchronously(task);
 
-    if (!scheduled) {
-      runAfterCommit(() -> {
-        try {
-          matching.dispatchOffers(task);
-        } catch (Exception e) {
-          // The task is already SEARCHING and remains visible through the
-          // marketplace REST fallback even if realtime dispatch is delayed.
-          log.error("Captured task {} could not be dispatched", taskId, e);
-        }
-      });
+    if (finalStatus == TaskStatus.SEARCHING) {
+      try {
+        matching.dispatchOffers(task);
+      } catch (Exception e) {
+        log.error("Failed to dispatch offers on payment activation approval for task {}", task.getId(), e);
+      }
     }
     publishTaskActivated(task);
   }
@@ -134,18 +141,7 @@ public class PaymentLifecycleService {
   }
 
   private void activateBatch(UUID batchId) {
-    BookingBatchEntity batch = batches.findAndLockById(batchId).orElse(null);
-    if (batch == null || batch.getStatus() != BookingBatchStatus.PAYMENT_PENDING) return;
-    batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
-    batches.save(batch);
-    try {
-      realtime.publish("mediator.job_pending_audit", Map.of(
-          "batchId", batchId.toString(),
-          "buyerId", batch.getCreatedByUserId().toString(),
-          "helperCount", batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount()));
-    } catch (Exception e) {
-      log.warn("Could not publish paid bulk request {}", batchId, e);
-    }
+    bookingBatchService.activateCapturedBatch(batchId);
   }
 
   @Transactional
@@ -234,6 +230,12 @@ public class PaymentLifecycleService {
 
   @Scheduled(fixedDelayString = "${PAYMENT_REFUND_RETRY_MS:60000}")
   public void processPendingRefunds() {
+    // Guarded: two instances running this concurrently would issue duplicate
+    // Razorpay refunds for the same payment.
+    schedulerLock.runExclusively("payments.refund-retry", this::processPendingRefundsLocked);
+  }
+
+  private void processPendingRefundsLocked() {
     for (PaymentEntity row : payments.findTop50ByFulfillmentStatusAndRefundAttemptsLessThanOrderByUpdatedAtAsc(
         PaymentFulfillmentStatus.REFUND_PENDING, MAX_REFUND_ATTEMPTS)) {
       // Scheduled calls do not pass through this bean's transactional proxy.
@@ -290,8 +292,12 @@ public class PaymentLifecycleService {
   }
 
   @Scheduled(fixedDelayString = "${PAYMENT_PENDING_CLEANUP_MS:60000}")
-  @Transactional
   public void expireUnpaidBookings() {
+    schedulerLock.runExclusively("payments.expire-unpaid", this::expireUnpaidBookingsLocked);
+  }
+
+  /** Transaction is provided by SchedulerLock; see the note there. */
+  public void expireUnpaidBookingsLocked() {
     Instant cutoff = Instant.now().minusSeconds(Math.max(10L, paymentPendingExpiryMinutes) * 60L);
     for (TaskEntity task : tasks.findTop100ByStatusAndCreatedAtBefore(TaskStatus.PAYMENT_PENDING, cutoff)) {
       task.setStatus(TaskStatus.CANCELLED);

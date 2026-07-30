@@ -22,4 +22,12 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshTokenEntity
   @Modifying
   @Query("update RefreshTokenEntity rt set rt.revokedAt = :revokedAt where rt.tokenHash = :hash and rt.revokedAt is null")
   int revokeAllByHash(@Param("hash") String hash, @Param("revokedAt") Instant revokedAt);
+
+  /**
+   * Signs every device out. Used on password reset — if the account may have
+   * been compromised, leaving other sessions alive defeats the reset.
+   */
+  @Modifying
+  @Query("update RefreshTokenEntity rt set rt.revokedAt = :revokedAt where rt.userId = :userId and rt.revokedAt is null")
+  int revokeAllByUserId(@Param("userId") UUID userId, @Param("revokedAt") Instant revokedAt);
 }

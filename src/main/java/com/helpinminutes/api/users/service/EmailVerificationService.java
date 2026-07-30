@@ -2,137 +2,180 @@ package com.helpinminutes.api.users.service;
 
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.errors.BadRequestException;
-import java.security.SecureRandom;
+import com.helpinminutes.api.users.service.email.EmailOtpDispatch;
+import com.helpinminutes.api.users.service.email.EmailOtpSender;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
+/**
+ * Issues and verifies email one-time passcodes.
+ *
+ * Providers are tried in {@code @Order} sequence (MojoAuth, then SMTP) so a
+ * new provider such as Amazon SES can be slotted in without touching this class
+ * — see {@link EmailOtpSender}.
+ *
+ * State is stored as {@code <providerId>:<state>} under a purpose-scoped Redis
+ * key. Scoping by purpose matters: without it a code issued to verify an email
+ * address could be replayed to reset that account's password.
+ */
 @Service
 public class EmailVerificationService {
   private static final Logger log = LoggerFactory.getLogger(EmailVerificationService.class);
-  private static final SecureRandom RNG = new SecureRandom();
+
+  /** A 6-digit code is brute-forceable without a cap on guesses. */
+  private static final int MAX_VERIFY_ATTEMPTS = 5;
+
+  public enum Purpose {
+    /** Confirming ownership of an address. Key kept as-is for backward compatibility. */
+    VERIFY_EMAIL("him:email_otp:"),
+    /** Authorising a password reset. */
+    PASSWORD_RESET("him:pwd_reset_otp:");
+
+    private final String keyPrefix;
+
+    Purpose(String keyPrefix) {
+      this.keyPrefix = keyPrefix;
+    }
+  }
 
   private final StringRedisTemplate redis;
   private final AppProperties props;
-  private final MojoAuthClient mojoAuth;
-  private final JavaMailSender mailSender;
+  private final List<EmailOtpSender> senders;
   private final Map<String, LocalState> localFallback = new ConcurrentHashMap<>();
 
-  @Autowired
   public EmailVerificationService(
-      StringRedisTemplate redis,
-      AppProperties props,
-      MojoAuthClient mojoAuth,
-      ObjectProvider<JavaMailSender> mailSender) {
+      StringRedisTemplate redis, AppProperties props, List<EmailOtpSender> senders) {
     this.redis = redis;
     this.props = props;
-    this.mojoAuth = mojoAuth;
-    this.mailSender = mailSender.getIfAvailable();
+    this.senders = senders;
   }
 
-  EmailVerificationService(
-      StringRedisTemplate redis,
-      AppProperties props,
-      MojoAuthClient mojoAuth) {
-    this.redis = redis;
-    this.props = props;
-    this.mojoAuth = mojoAuth;
-    this.mailSender = null;
-  }
-
+  /**
+   * @return the plaintext code when the active provider verifies locally, so the
+   *     controller can echo it under {@code app.otp.returnOtpInResponse} in
+   *     local development. {@code null} for delegated providers.
+   */
   public String sendVerificationEmail(String email) {
-    String normalized = normalize(email);
-    if (normalized.isBlank()) throw new BadRequestException("Email is not added");
-
-    if (mojoAuth.isConfigured()) {
-      try {
-        String stateId = mojoAuth.sendEmailOtp(normalized);
-        if (stateId != null && !stateId.isBlank()) {
-          storeState(normalized, "mojo:" + stateId);
-          log.info("MojoAuth email verification started");
-          return null;
-        }
-      } catch (Exception e) {
-        log.warn("MojoAuth email OTP delivery failed; falling back to SMTP/local OTP: {}", e.getMessage());
-      }
-    }
-
-    String otp = generateOtp();
-    storeState(normalized, "local:" + otp);
-    sendLocalOtpEmail(normalized, otp);
-    return otp;
+    return send(email, Purpose.VERIFY_EMAIL);
   }
 
-  private void storeState(String email, String stateValue) {
-    String key = stateKey(email);
-    try {
-      redis.opsForValue().set(key, stateValue, Duration.ofSeconds(props.otp().ttlSeconds()));
-    } catch (Exception e) {
-      log.warn("Redis email verification state write failed; using process-local fallback");
-      localFallback.put(key, new LocalState(stateValue, System.currentTimeMillis() + props.otp().ttlSeconds() * 1000L));
-    }
+  public String sendPasswordResetEmail(String email) {
+    return send(email, Purpose.PASSWORD_RESET);
   }
 
   public boolean verifyEmailOtp(String email, String otp) {
+    return verify(email, otp, Purpose.VERIFY_EMAIL);
+  }
+
+  public boolean verifyPasswordResetOtp(String email, String otp) {
+    return verify(email, otp, Purpose.PASSWORD_RESET);
+  }
+
+  private String send(String email, Purpose purpose) {
+    String normalized = normalize(email);
+    if (normalized.isBlank()) throw new BadRequestException("Email is not added");
+
+    for (EmailOtpSender sender : senders) {
+      if (!sender.isConfigured()) continue;
+      EmailOtpDispatch dispatch = sender.send(normalized);
+      if (dispatch == null) continue; // provider failed; try the next one
+      storeState(normalized, purpose, sender.providerId() + ":" + dispatch.state());
+      resetAttempts(normalized, purpose);
+      log.info("Email OTP issued provider={} purpose={}", sender.providerId(), purpose);
+      return dispatch.plaintextOtp();
+    }
+
+    // Unreachable in practice: SmtpEmailOtpSender is always "configured".
+    throw new BadRequestException("Email delivery is temporarily unavailable. Please try again.");
+  }
+
+  private boolean verify(String email, String otp, Purpose purpose) {
     String normalized = normalize(email);
     String candidate = otp == null ? "" : otp.trim();
     if (normalized.isBlank() || !candidate.matches("\\d{4,8}")) return false;
 
-    String key = stateKey(normalized);
-    String stateValue = null;
-    try {
-      stateValue = redis.opsForValue().get(key);
-    } catch (Exception e) {
-      log.warn("Redis email verification state read failed; trying process-local fallback");
-    }
-    if (stateValue == null) {
-      LocalState local = localFallback.get(key);
-      if (local != null && local.expiresAtMillis() > System.currentTimeMillis()) stateValue = local.stateValue();
-    }
+    String key = stateKey(normalized, purpose);
+    String stateValue = readState(key);
     if (stateValue == null) return false;
 
-    if (stateValue.startsWith("local:")) {
-      boolean ok = stateValue.substring("local:".length()).equals(candidate);
-      if (ok) deleteState(key);
-      return ok;
-    }
-    if (!stateValue.startsWith("mojo:") || !mojoAuth.isConfigured()) return false;
-    String stateId = stateValue.substring("mojo:".length());
-
-    try {
-      if (!mojoAuth.verifyEmailOtp(stateId, candidate)) return false;
+    if (registerAttempt(normalized, purpose) > MAX_VERIFY_ATTEMPTS) {
+      // Burn the code rather than let an attacker keep guessing.
       deleteState(key);
-      log.info("MojoAuth email verification completed");
-      return true;
-    } catch (Exception e) {
-      log.warn("MojoAuth email OTP verification failed: {}", e.getMessage());
+      resetAttempts(normalized, purpose);
+      log.warn("Email OTP invalidated after {} failed attempts purpose={}", MAX_VERIFY_ATTEMPTS, purpose);
       return false;
+    }
+
+    int split = stateValue.indexOf(':');
+    if (split <= 0) return false;
+    String providerId = stateValue.substring(0, split);
+    String state = stateValue.substring(split + 1);
+
+    for (EmailOtpSender sender : senders) {
+      if (!sender.providerId().equals(providerId)) continue;
+      if (!sender.verify(normalized, state, candidate)) return false;
+      deleteState(key);
+      resetAttempts(normalized, purpose);
+      log.info("Email OTP verified provider={} purpose={}", providerId, purpose);
+      return true;
+    }
+
+    log.warn("No email OTP provider registered for stored provider id '{}'", providerId);
+    return false;
+  }
+
+  private void storeState(String email, Purpose purpose, String stateValue) {
+    String key = stateKey(email, purpose);
+    long ttl = props.otp().ttlSeconds();
+    try {
+      redis.opsForValue().set(key, stateValue, Duration.ofSeconds(ttl));
+    } catch (Exception e) {
+      log.warn("Redis email OTP state write failed; using process-local fallback");
+      localFallback.put(key, new LocalState(stateValue, System.currentTimeMillis() + ttl * 1000L));
     }
   }
 
-  private void sendLocalOtpEmail(String email, String otp) {
-    if (mailSender == null) {
-      log.warn("JavaMailSender is unavailable; email verification OTP generated but not sent");
-      return;
-    }
+  private String readState(String key) {
     try {
-      SimpleMailMessage message = new SimpleMailMessage();
-      message.setTo(email);
-      message.setSubject("Your Superherooo verification code");
-      message.setText("Your Superherooo email verification code is " + otp + ". It is valid for "
-          + Math.max(1, props.otp().ttlSeconds() / 60) + " minutes.");
-      mailSender.send(message);
-      log.info("Superherooo email verification OTP sent");
+      String value = redis.opsForValue().get(key);
+      if (value != null) return value;
     } catch (Exception e) {
-      log.warn("SMTP email OTP delivery failed; dev OTP remains available when enabled: {}", e.getMessage());
+      log.warn("Redis email OTP state read failed; trying process-local fallback");
+    }
+    LocalState local = localFallback.get(key);
+    if (local != null && local.expiresAtMillis() > System.currentTimeMillis()) {
+      return local.stateValue();
+    }
+    return null;
+  }
+
+  /** @return the attempt number just consumed, starting at 1. */
+  private long registerAttempt(String email, Purpose purpose) {
+    String key = attemptsKey(email, purpose);
+    try {
+      Long count = redis.opsForValue().increment(key);
+      if (count != null && count == 1L) {
+        redis.expire(key, Duration.ofSeconds(props.otp().ttlSeconds()));
+      }
+      return count == null ? 1L : count;
+    } catch (Exception e) {
+      // Redis unavailable: do not lock the user out on infrastructure trouble.
+      log.warn("Redis OTP attempt counter unavailable: {}", e.getMessage());
+      return 1L;
+    }
+  }
+
+  private void resetAttempts(String email, Purpose purpose) {
+    try {
+      redis.delete(attemptsKey(email, purpose));
+    } catch (Exception ignored) {
+      // Counter expires on its own TTL.
     }
   }
 
@@ -149,12 +192,12 @@ public class EmailVerificationService {
     return email == null ? "" : email.trim().toLowerCase();
   }
 
-  private static String stateKey(String email) {
-    return "him:email_otp:" + email;
+  private static String stateKey(String email, Purpose purpose) {
+    return purpose.keyPrefix + email;
   }
 
-  private static String generateOtp() {
-    return String.valueOf(100000 + RNG.nextInt(900000));
+  private static String attemptsKey(String email, Purpose purpose) {
+    return purpose.keyPrefix + "attempts:" + email;
   }
 
   private record LocalState(String stateValue, long expiresAtMillis) {}

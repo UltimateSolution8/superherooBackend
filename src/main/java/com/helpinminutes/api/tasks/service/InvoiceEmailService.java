@@ -1,5 +1,6 @@
 package com.helpinminutes.api.tasks.service;
 
+import com.helpinminutes.api.common.LogMasking;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -92,9 +93,9 @@ public class InvoiceEmailService {
         log.warn("Failed to attach inline logo: {}", e.getMessage());
       }
 
-      log.info("Sending asynchronously completed task invoice email to: {}", recipientEmail);
+      log.info("Sending completed-task invoice email to {}", LogMasking.email(recipientEmail));
       mailSender.send(mimeMessage);
-      log.info("Invoice email successfully sent to {}", recipientEmail);
+      log.info("Invoice email sent to {}", LogMasking.email(recipientEmail));
 
     } catch (Exception e) {
       log.error("Failed to send invoice email for task {}: {}", task.getId(), e.getMessage());

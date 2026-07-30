@@ -23,6 +23,7 @@ import com.helpinminutes.api.mediator.model.HelperMediatorLinkEntity;
 import com.helpinminutes.api.mediator.repo.HelperMediatorLinkRepository;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,64 +84,36 @@ public class AuthService {
         helperMediatorLinks, null);
   }
 
-  AuthService(
-      AppProperties props,
-      OtpService otp,
-      UserRepository users,
-      HelperProfileRepository helperProfiles,
-      JwtService jwt,
-      RefreshTokenRepository refreshTokens,
-      PasswordEncoder passwordEncoder,
-      SupabaseStorageService storage) {
-    this(props, otp, users, helperProfiles, jwt, refreshTokens, passwordEncoder, storage,
-        null, null);
-  }
-
   public String startOtp(String phone, String channel) {
-    boolean isReviewer = "9999999991".equals(phone) || "9999999992".equals(phone) || "9999999993".equals(phone);
-    if (isReviewer) {
-      return "123456";
-    }
     return otp.startOtp(phone, channel);
   }
 
   @Transactional
   public AuthResponse verifyOtp(String phone, String otpCode, UserRole role) {
-    boolean isReviewer = "9999999991".equals(phone) || "9999999992".equals(phone) || "9999999993".equals(phone);
-    if (!isReviewer && !otp.verifyOtp(phone, otpCode)) {
+    if (!otp.verifyOtp(phone, otpCode)) {
       throw new BadRequestException("Invalid OTP");
     }
 
     UserEntity user = users.findByPhoneAndRole(phone, role).orElseGet(() -> {
-      if (!isReviewer) {
-        if (role == UserRole.ADMIN) {
-          String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
-          if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
-            throw new BadRequestException("Admin signup is disabled");
-          }
+      if (role == UserRole.ADMIN) {
+        String bootstrapAdminPhone = System.getenv("BOOTSTRAP_ADMIN_PHONE");
+        if (bootstrapAdminPhone == null || !bootstrapAdminPhone.equals(phone)) {
+          throw new BadRequestException("Admin signup is disabled");
         }
-        if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
-          throw new BadRequestException("This account must be created by an admin before login");
-        }
+      }
+      if (role == UserRole.KYC || role == UserRole.SUPPORT || role == UserRole.MEDIATOR) {
+        throw new BadRequestException("This account must be created by an admin before login");
       }
 
       UserEntity u = new UserEntity();
       u.setPhone(phone);
       u.setRole(role);
       u.setStatus(UserStatus.ACTIVE);
-      if (isReviewer) {
-        if (role == UserRole.BUYER) u.setDisplayName("Reviewer Buyer");
-        if (role == UserRole.HELPER) u.setDisplayName("Reviewer Helper");
-        if (role == UserRole.MEDIATOR) u.setDisplayName("Reviewer Mediator");
-      }
       users.save(u);
 
       if (role == UserRole.HELPER) {
         HelperProfileEntity hp = new HelperProfileEntity();
         hp.setUserId(u.getId());
-        if (isReviewer) {
-          hp.setKycStatus(HelperKycStatus.APPROVED);
-        }
         helperProfiles.save(hp);
       }
 
@@ -151,81 +124,12 @@ public class AuthService {
       throw new BadRequestException("User is not active");
     }
 
-    if (isReviewer && role == UserRole.HELPER) {
-      HelperProfileEntity hp = helperProfiles.findById(user.getId()).orElseGet(() -> {
-        HelperProfileEntity newHp = new HelperProfileEntity();
-        newHp.setUserId(user.getId());
-        return newHp;
-      });
-      hp.setKycStatus(HelperKycStatus.APPROVED);
-      helperProfiles.save(hp);
-    }
-
     String accessToken = jwt.createAccessToken(user);
     String refreshToken = jwt.createRefreshToken(user);
 
     persistRefreshToken(user, refreshToken);
 
     return toAuthResponse(user, accessToken, refreshToken);
-  }
-
-  @jakarta.annotation.PostConstruct
-  @Transactional
-  public void initReviewerAccounts() {
-    try {
-      log.info("Initializing Google Play reviewer accounts...");
-
-      // 1. Setup Buyer
-      UserEntity buyer = users.findByPhoneAndRole("9999999991", UserRole.BUYER).orElseGet(() -> {
-        UserEntity u = new UserEntity();
-        u.setPhone("9999999991");
-        u.setRole(UserRole.BUYER);
-        u.setStatus(UserStatus.ACTIVE);
-        u.setDisplayName("Reviewer Buyer");
-        return users.save(u);
-      });
-
-      // 2. Setup Helper
-      UserEntity helper = users.findByPhoneAndRole("9999999992", UserRole.HELPER).orElseGet(() -> {
-        UserEntity u = new UserEntity();
-        u.setPhone("9999999992");
-        u.setRole(UserRole.HELPER);
-        u.setStatus(UserStatus.ACTIVE);
-        u.setDisplayName("Reviewer Helper");
-        return users.save(u);
-      });
-
-      HelperProfileEntity hp = helperProfiles.findById(helper.getId()).orElseGet(() -> {
-        HelperProfileEntity newHp = new HelperProfileEntity();
-        newHp.setUserId(helper.getId());
-        return newHp;
-      });
-      hp.setKycStatus(HelperKycStatus.APPROVED);
-      helperProfiles.save(hp);
-
-      // 3. Setup Mediator
-      UserEntity mediator = users.findByPhoneAndRole("9999999993", UserRole.MEDIATOR).orElseGet(() -> {
-        UserEntity u = new UserEntity();
-        u.setPhone("9999999993");
-        u.setRole(UserRole.MEDIATOR);
-        u.setStatus(UserStatus.ACTIVE);
-        u.setDisplayName("Reviewer Mediator");
-        return users.save(u);
-      });
-
-      // 4. Link Helper and Mediator
-      HelperMediatorLinkEntity link = helperMediatorLinks.findByHelperIdAndMediatorId(helper.getId(), mediator.getId())
-          .orElseGet(HelperMediatorLinkEntity::new);
-      link.setHelperId(helper.getId());
-      link.setMediatorId(mediator.getId());
-      link.setStatus("ACTIVE");
-      link.setCreatedBy("HELPER");
-      helperMediatorLinks.save(link);
-
-      log.info("Reviewer accounts initialized, KYC approved, and linked successfully!");
-    } catch (Exception e) {
-      log.error("Failed to initialize reviewer accounts", e);
-    }
   }
 
   @Transactional
@@ -262,12 +166,16 @@ public class AuthService {
       throw new BadRequestException("This account must be created by an admin");
     }
     String em = InputValidators.requireEmail(email);
+    InputValidators.requirePassword(password);
     if (users.findByEmail(em).isPresent()) {
       throw new BadRequestException("Email already in use");
     }
 
     String normalizedPhone = InputValidators.normalizeIndianPhoneOrNull(phone);
-    if (normalizedPhone != null && users.findByPhoneAndRole(normalizedPhone, role).isPresent()) {
+    if (normalizedPhone == null) {
+      throw new BadRequestException("Phone number is required");
+    }
+    if (users.findByPhoneAndRole(normalizedPhone, role).isPresent()) {
       throw new BadRequestException("Phone already in use");
     }
 
@@ -289,6 +197,78 @@ public class AuthService {
     String refreshToken = jwt.createRefreshToken(u);
     persistRefreshToken(u, refreshToken);
     return toAuthResponse(u, accessToken, refreshToken);
+  }
+
+  /**
+   * Starts a password reset.
+   *
+   * Deliberately succeeds whether or not the address is registered: responding
+   * differently would turn this endpoint into an account-enumeration oracle.
+   *
+   * @return the plaintext code only when the configured provider verifies
+   *     locally AND app.otp.returnOtpInResponse is on (local development).
+   */
+  public String startPasswordReset(String email) {
+    String em = InputValidators.normalizeEmailOrNull(email);
+    if (em == null) {
+      throw new BadRequestException("Email is required");
+    }
+    Optional<UserEntity> user = users.findByEmail(em);
+    if (user.isEmpty()) {
+      log.info("Password reset requested for an address with no account");
+      return null;
+    }
+    if (user.get().getStatus() != UserStatus.ACTIVE) {
+      log.info("Password reset requested for a non-active account");
+      return null;
+    }
+    return emailVerificationService.sendPasswordResetEmail(em);
+  }
+
+  /**
+   * Completes a password reset and signs the user in.
+   *
+   * All existing sessions are revoked: the account may have been compromised,
+   * and leaving other refresh tokens alive would defeat the reset.
+   */
+  @Transactional
+  public AuthResponse resetPassword(String email, String otpCode, String newPassword) {
+    String em = InputValidators.requireEmail(email, false);
+    InputValidators.requirePassword(newPassword);
+
+    UserEntity user = users.findByEmail(em)
+        .orElseThrow(() -> new BadRequestException("Invalid or expired reset code"));
+
+    if (!emailVerificationService.verifyPasswordResetOtp(em, otpCode)) {
+      throw new BadRequestException("Invalid or expired reset code");
+    }
+    if (user.getStatus() != UserStatus.ACTIVE) {
+      throw new BadRequestException("User is not active");
+    }
+
+    user.setPasswordHash(passwordEncoder.encode(newPassword));
+    // Completing an emailed challenge proves control of the address.
+    user.setEmailVerified(true);
+    users.save(user);
+
+    refreshTokens.revokeAllByUserId(user.getId(), Instant.now());
+
+    String accessToken = jwt.createAccessToken(user);
+    String refreshToken = jwt.createRefreshToken(user);
+    persistRefreshToken(user, refreshToken);
+    return toAuthResponse(user, accessToken, refreshToken);
+  }
+
+  /**
+   * Revokes the presented refresh token.
+   *
+   * The access token is stateless and stays valid for the rest of its (15 min)
+   * TTL; the client discards it. Idempotent — signing out twice is not an error.
+   */
+  @Transactional
+  public void logout(String refreshToken) {
+    if (refreshToken == null || refreshToken.isBlank()) return;
+    refreshTokens.revokeAllByHash(HashUtils.sha256Hex(refreshToken), Instant.now());
   }
 
   public String startEmailOtp(String email) {
@@ -320,6 +300,7 @@ public class AuthService {
       MultipartFile idBack,
       MultipartFile selfie) {
     String em = InputValidators.requireEmail(req.email());
+    InputValidators.requirePassword(req.password());
     if (users.findByEmail(em).isPresent()) {
       throw new BadRequestException("Email already in use");
     }
@@ -387,11 +368,9 @@ public class AuthService {
     rt.setTokenHash(HashUtils.sha256Hex(refreshToken));
     rt.setIssuedAt(now);
     rt.setExpiresAt(now.plusSeconds(props.jwt().refreshTtlSeconds()));
-    try {
-      refreshTokens.save(rt);
-    } catch (Exception ex) {
-      log.warn("Failed to persist refresh token for user {}: {}", user.getId(), ex.getMessage());
-    }
+    // Must not be swallowed: an unpersisted refresh token can never be redeemed,
+    // so the user is silently signed out when the access token expires.
+    refreshTokens.save(rt);
   }
 
   private HelperProfileEntity ensureHelperProfile(java.util.UUID helperId) {

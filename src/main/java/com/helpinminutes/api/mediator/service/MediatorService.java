@@ -880,7 +880,7 @@ public class MediatorService {
     if (provided == null || provided.isBlank()) {
       throw new BadRequestException(message);
     }
-    if (!expected.equals(provided.trim()) && !(props.otp().returnOtpInResponse() && ("123456".equals(provided.trim()) || "1234".equals(provided.trim())))) {
+    if (!expected.equals(provided.trim())) {
       throw new BadRequestException("Incorrect OTP");
     }
   }

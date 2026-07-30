@@ -6,8 +6,11 @@ import com.helpinminutes.api.security.UserPrincipal;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -39,6 +42,15 @@ public class PushTokenController {
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody RegisterPushTokenRequest req) {
     register(principal, req);
+  }
+
+  /** Called on sign-out so the device stops receiving this account's pushes. */
+  @DeleteMapping("/token")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void unregister(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody RegisterPushTokenRequest req) {
+    tokens.unregister(principal.userId(), req.token());
   }
 }
 

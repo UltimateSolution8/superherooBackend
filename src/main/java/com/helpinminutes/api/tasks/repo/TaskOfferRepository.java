@@ -44,4 +44,32 @@ public interface TaskOfferRepository extends JpaRepository<TaskOfferEntity, UUID
       @Param("expectedStatus") TaskOfferStatus expectedStatus,
       @Param("newStatus") TaskOfferStatus newStatus,
       @Param("winnerId") UUID winnerId);
+
+  /**
+   * Sweeps offers whose acceptance window has closed.
+   *
+   * Nothing did this before: offers expired only by wall-clock comparison at
+   * read time, so rows stayed OFFERED forever. Because dispatch skipped any
+   * helper with an existing offer row, every helper ever offered a task was
+   * permanently excluded from it.
+   */
+  @Modifying
+  @Query(
+      "update TaskOfferEntity o set o.status = com.helpinminutes.api.tasks.model.TaskOfferStatus.EXPIRED "
+          + "where o.status = com.helpinminutes.api.tasks.model.TaskOfferStatus.OFFERED "
+          + "and o.expiresAt <= :now")
+  int expireLapsedOffers(@Param("now") Instant now);
+
+  /** Offers still within their acceptance window. */
+  @Query("select o from TaskOfferEntity o where o.taskId = :taskId "
+      + "and o.status = com.helpinminutes.api.tasks.model.TaskOfferStatus.OFFERED "
+      + "and o.expiresAt > :now")
+  List<TaskOfferEntity> findLiveOffers(@Param("taskId") UUID taskId, @Param("now") Instant now);
+
+  /** Tasks still searching that have no live offer — candidates for re-dispatch. */
+  @Query("select distinct o.taskId from TaskOfferEntity o where o.taskId in :taskIds "
+      + "and o.status = com.helpinminutes.api.tasks.model.TaskOfferStatus.OFFERED "
+      + "and o.expiresAt > :now")
+  List<UUID> findTaskIdsWithLiveOffers(
+      @Param("taskIds") java.util.Collection<UUID> taskIds, @Param("now") Instant now);
 }

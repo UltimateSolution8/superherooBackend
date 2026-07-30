@@ -48,7 +48,7 @@ spring:
       idle-timeout: ${HIKARI_IDLE_TIMEOUT_MS:30000}
       max-lifetime: ${HIKARI_MAX_LIFETIME_MS:1800000}
       validation-timeout: ${HIKARI_VALIDATION_TIMEOUT_MS:5000}
-      leak-detection-threshold: ${HIKARI_LEAK_DETECTION_MS:2000}
+      leak-detection-threshold: ${HIKARI_LEAK_DETECTION_MS:20000}
       # In Docker, Postgres can take a few seconds to accept connections. Don't crash-loop.
       initialization-fail-timeout: -1
       data-source-properties:
@@ -106,29 +106,46 @@ management:
       exposure:
         include: health,info,metrics,prometheus
   health:
+    # With every indicator off, /actuator/health returned UP even with the
+    # database down — so load balancer and restart checks were blind.
     defaults:
-      enabled: ${MANAGEMENT_HEALTH_DEFAULTS_ENABLED:false}
+      enabled: ${MANAGEMENT_HEALTH_DEFAULTS_ENABLED:true}
+    db:
+      enabled: ${MANAGEMENT_HEALTH_DB_ENABLED:true}
     redis:
-      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:false}
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:true}
+    # SMTP is optional and email flows degrade gracefully; a provider outage
+    # must not remove the API from service while DB and Redis are healthy.
+    mail:
+      enabled: ${MANAGEMENT_HEALTH_MAIL_ENABLED:false}
+    # RabbitMQ is optional: notifications fall back to direct push when it is
+    # unavailable, so it must not mark the whole service unhealthy.
     rabbit:
       enabled: ${MANAGEMENT_HEALTH_RABBIT_ENABLED:false}
-    db:
-      enabled: ${MANAGEMENT_HEALTH_DB_ENABLED:false}
 
 app:
   env: ${APP_ENV:dev}
   service-area:
     enforce-hyderabad: ${SERVICE_AREA_ENFORCE_HYDERABAD:false}
   jwt:
-    accessSecret: ${JWT_ACCESS_SECRET:dev_access_secret_change_me}
-    refreshSecret: ${JWT_REFRESH_SECRET:dev_refresh_secret_change_me}
+    # No defaults on purpose: a missing secret must fail startup, never fall back
+    # to a publicly-known key. Validated in AppProperties.
+    accessSecret: ${JWT_ACCESS_SECRET:}
+    refreshSecret: ${JWT_REFRESH_SECRET:}
     accessTtlSeconds: ${JWT_ACCESS_TTL_SECONDS:900}
     refreshTtlSeconds: ${JWT_REFRESH_TTL_SECONDS:2592000}
 
   otp:
     ttlSeconds: ${OTP_TTL_SECONDS:300}
-    # Return OTP in the API response for demo/prod until SMS provider is wired.
-    returnOtpInResponse: ${OTP_RETURN_IN_RESPONSE:true}
+    # Local development only. Returning the OTP in the API response is an
+    # authentication bypass and must stay false in every deployed environment.
+    returnOtpInResponse: ${OTP_RETURN_IN_RESPONSE:false}
+
+  payments:
+    # Online card/UPI checkout is disabled at launch. Cash and UPI are collected
+    # offline and confirmed in-app by the partner. Flip to true (with live
+    # Razorpay keys) to re-enable prepaid checkout.
+    onlineEnabled: ${PAYMENTS_ONLINE_ENABLED:false}
 
   matching:
     h3Resolution: ${MATCH_H3_RESOLUTION:9}
@@ -194,7 +211,7 @@ ai:
   moderation:
     llm-enabled: ${AI_MODERATION_LLM_ENABLED:false}
     zenmux:
-      api-key: ${ZENMUX_API_KEY:sk-ai-v1-d399b9ba9d811b555ff0679b99e57255a03f1bd218590eea87d342270f82451e}
+      api-key: ${ZENMUX_API_KEY:}
       endpoint: ${ZENMUX_ENDPOINT:https://zenmux.ai/api/v1/chat/completions}
       primary-model: ${ZENMUX_PRIMARY_MODEL:moonshotai/kimi-k3-free}
       fallback-model: ${ZENMUX_FALLBACK_MODEL:z-ai/glm-4.7-flash-free}

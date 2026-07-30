@@ -55,11 +55,6 @@ public class ZenMuxLlmClient implements LlmClient {
     String systemPrompt = promptBuilder.buildSystemPrompt();
     String userPrompt = promptBuilder.buildUserPrompt(payload);
 
-    if (apiKey == null || apiKey.isBlank()) {
-      log.warn("AI moderation API key is not configured; approving task {} using regex fallback", payload.taskId());
-      return regexFallbackApproval(startTime, "AI moderation key not configured; approved by local regex fallback");
-    }
-
     // Try Primary Model
     try {
       log.info("Evaluating task {} using primary model {}", payload.taskId(), primaryModel);
@@ -83,22 +78,18 @@ public class ZenMuxLlmClient implements LlmClient {
       log.error("Fallback model {} failed for task {}: {}", fallbackModel, payload.taskId(), e.getMessage());
     }
 
-    // Launch-safe fallback if both models fail or timeout. Restricted work is
-    // already caught by TaskModerationService before this client is called.
-    return regexFallbackApproval(startTime, "LLM unavailable; approved by local regex fallback");
-  }
-
-  private AIReviewResult regexFallbackApproval(long startTime, String reason) {
+    // Local fallback: static moderation already ran before the LLM call.
+    // If model providers are down, keep normal launch bookings moving.
     long duration = System.currentTimeMillis() - startTime;
     return new AIReviewResult(
         "APPROVED",
-        82,
+        85,
         10,
-        75,
-        List.of(reason),
+        80,
+        List.of("LLM service unavailable or timed out; approved by local static moderation fallback"),
         List.of(),
         false,
-        "{\"fallback\":\"regex\"}",
+        "{\"fallback\": \"local_static_moderation\"}",
         "fallback-rule",
         duration
     );
@@ -189,7 +180,18 @@ public class ZenMuxLlmClient implements LlmClient {
       );
     } catch (Exception e) {
       log.error("Failed to parse AI JSON content: {}. Error: {}", content, e.getMessage());
-      return regexFallbackApproval(System.currentTimeMillis() - duration, "Unparseable AI response; approved by local regex fallback");
+      return new AIReviewResult(
+          "REVIEW",
+          60,
+          70,
+          40,
+          List.of("Unparseable AI response; sending to admin review for safety"),
+          List.of("UNPARSEABLE_AI_OUTPUT"),
+          true,
+          rawResponse,
+          model,
+          duration
+      );
     }
   }
 
