@@ -20,14 +20,14 @@ public class PublicPartnerKycController {
 
   @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public PublicPartnerKycResponse submit(
-      @RequestParam String fullName,
-      @RequestParam String phone,
-      @RequestParam String email,
+      @RequestParam(required = false) String fullName,
+      @RequestParam(required = false) String phone,
+      @RequestParam(required = false) String email,
       @RequestParam(required = false) String docType,
-      @RequestParam String idNumber,
-      @RequestParam MultipartFile idFront,
+      @RequestParam(required = false) String idNumber,
+      @RequestParam(required = false) MultipartFile idFront,
       @RequestParam(required = false) MultipartFile idBack,
-      @RequestParam MultipartFile selfie,
+      @RequestParam(required = false) MultipartFile selfie,
       @RequestParam(required = false) String accountHolderName,
       @RequestParam(required = false) String bankName,
       @RequestParam(required = false) String bankAccountLast4,
