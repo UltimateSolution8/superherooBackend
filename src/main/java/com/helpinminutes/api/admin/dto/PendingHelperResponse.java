@@ -6,7 +6,9 @@ import java.util.UUID;
 
 public record PendingHelperResponse(
     UUID helperId,
+    String displayName,
     String phone,
+    String email,
     HelperKycStatus kycStatus,
     String kycFullName,
     String kycIdNumber,
@@ -14,5 +16,10 @@ public record PendingHelperResponse(
     String kycDocBackUrl,
     String kycSelfieUrl,
     Instant kycSubmittedAt,
-    Instant createdAt
+    Instant createdAt,
+    String payoutAccountHolderName,
+    String payoutBankName,
+    String payoutBankAccountLast4,
+    String payoutIfscCode,
+    String payoutUpiIdMasked
 ) {}

@@ -14,5 +14,6 @@ public record HelperProfileResponse(
     Instant kycSubmittedAt,
     String kycTokenNumber,
     Integer kycQueuePosition,
-    Integer kycEstimatedWaitMinutes
+    Integer kycEstimatedWaitMinutes,
+    HelperBankDetailsResponse bankDetails
 ) {}

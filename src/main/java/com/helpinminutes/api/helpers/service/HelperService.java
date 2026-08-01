@@ -4,10 +4,14 @@ import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
+import com.helpinminutes.api.helpers.dto.HelperBankDetailsResponse;
+import com.helpinminutes.api.helpers.dto.HelperPayoutAccountRequest;
 import com.helpinminutes.api.helpers.dto.HelperProfileResponse;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
+import com.helpinminutes.api.helpers.model.HelperPayoutAccountEntity;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
+import com.helpinminutes.api.helpers.repo.HelperPayoutAccountRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -34,6 +38,7 @@ public class HelperService {
   private final TaskRepository tasks;
   private final MatchingService matching;
   private final Executor realtimeDispatchExecutor;
+  private final HelperPayoutAccountRepository payoutAccounts;
 
   public HelperService(
       HelperProfileRepository profiles,
@@ -42,7 +47,8 @@ public class HelperService {
       UserRepository users,
       TaskRepository tasks,
       MatchingService matching,
-      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor) {
+      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor,
+      HelperPayoutAccountRepository payoutAccounts) {
     this.profiles = profiles;
     this.presence = presence;
     this.storage = storage;
@@ -50,6 +56,7 @@ public class HelperService {
     this.tasks = tasks;
     this.matching = matching;
     this.realtimeDispatchExecutor = realtimeDispatchExecutor;
+    this.payoutAccounts = payoutAccounts;
   }
 
   public void setOnline(UUID helperId, double lat, double lng) {
@@ -99,6 +106,26 @@ public class HelperService {
   public HelperProfileResponse getProfile(UUID helperId) {
     HelperProfileEntity p = profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
     return toResponse(p);
+  }
+
+  @Transactional
+  public HelperBankDetailsResponse savePayoutAccount(UUID helperId, HelperPayoutAccountRequest req) {
+    profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
+    HelperPayoutAccountEntity account = payoutAccounts
+        .findByHelperIdAndProvider(helperId, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
+        .orElseGet(() -> {
+          HelperPayoutAccountEntity created = new HelperPayoutAccountEntity();
+          created.setHelperId(helperId);
+          created.setProvider(HelperPayoutAccountEntity.DEFAULT_PROVIDER);
+          created.setStatus("PENDING_KYC");
+          return created;
+        });
+    account.setAccountHolderName(trimToNull(req.accountHolderName()));
+    account.setBankName(trimToNull(req.bankName()));
+    account.setBankAccountLast4(req.bankAccountLast4());
+    account.setIfscCode(req.ifscCode().trim().toUpperCase());
+    account.setUpiIdMasked(trimToNull(req.upiIdMasked()));
+    return toBankDetails(payoutAccounts.save(account));
   }
 
   public HelperIdCardResponse getIdCard(UUID helperId) {
@@ -179,7 +206,27 @@ public class HelperService {
         p.getKycSubmittedAt(),
         buildKycTokenNumber(p),
         position,
-        estimatedWaitMinutes(position));
+        estimatedWaitMinutes(position),
+        payoutAccounts.findByHelperIdAndProvider(p.getUserId(), HelperPayoutAccountEntity.DEFAULT_PROVIDER)
+            .map(HelperService::toBankDetails)
+            .orElse(null));
+  }
+
+  public static HelperBankDetailsResponse toBankDetails(HelperPayoutAccountEntity account) {
+    if (account == null) return null;
+    return new HelperBankDetailsResponse(
+        account.getAccountHolderName(),
+        account.getBankName(),
+        account.getBankAccountLast4(),
+        account.getIfscCode(),
+        account.getUpiIdMasked(),
+        account.getUpdatedAt());
+  }
+
+  private static String trimToNull(String value) {
+    if (value == null) return null;
+    String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
   }
 
   private static String buildKycTokenNumber(HelperProfileEntity p) {

@@ -11,7 +11,9 @@ import com.helpinminutes.api.common.InputValidators;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
+import com.helpinminutes.api.helpers.model.HelperPayoutAccountEntity;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
+import com.helpinminutes.api.helpers.repo.HelperPayoutAccountRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.tasks.model.TaskStatus;
@@ -38,18 +40,21 @@ public class AdminService {
   private final PasswordEncoder passwordEncoder;
   private final TaskRepository tasks;
   private final NotificationQueueService notificationQueue;
+  private final HelperPayoutAccountRepository payoutAccounts;
 
   public AdminService(
       HelperProfileRepository helperProfiles,
       UserRepository users,
       PasswordEncoder passwordEncoder,
       TaskRepository tasks,
-      NotificationQueueService notificationQueue) {
+      NotificationQueueService notificationQueue,
+      HelperPayoutAccountRepository payoutAccounts) {
     this.helperProfiles = helperProfiles;
     this.users = users;
     this.passwordEncoder = passwordEncoder;
     this.tasks = tasks;
     this.notificationQueue = notificationQueue;
+    this.payoutAccounts = payoutAccounts;
   }
 
   public List<PendingHelperResponse> listPendingHelpers() {
@@ -58,14 +63,20 @@ public class AdminService {
       return List.of();
     }
     List<UUID> userIds = pending.stream().map(HelperProfileEntity::getUserId).toList();
-    Map<UUID, String> phoneByUserId = new HashMap<>();
-    users.findAllById(userIds).forEach(u -> phoneByUserId.put(u.getId(), u.getPhone()));
+    Map<UUID, UserEntity> userById = new HashMap<>();
+    users.findAllById(userIds).forEach(u -> userById.put(u.getId(), u));
+    Map<UUID, HelperPayoutAccountEntity> payoutByHelperId = new HashMap<>();
+    payoutAccounts.findByHelperIdInAndProvider(userIds, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
+        .forEach(account -> payoutByHelperId.put(account.getHelperId(), account));
     return pending.stream()
         .map(hp -> {
-          String phone = phoneByUserId.get(hp.getUserId());
+          UserEntity user = userById.get(hp.getUserId());
+          HelperPayoutAccountEntity payout = payoutByHelperId.get(hp.getUserId());
           return new PendingHelperResponse(
               hp.getUserId(),
-              phone,
+              user == null ? null : user.getDisplayName(),
+              user == null ? null : user.getPhone(),
+              user == null ? null : user.getEmail(),
               hp.getKycStatus(),
               hp.getKycFullName(),
               hp.getKycIdNumber(),
@@ -73,7 +84,12 @@ public class AdminService {
               hp.getKycDocBackUrl(),
               hp.getKycSelfieUrl(),
               hp.getKycSubmittedAt(),
-              hp.getCreatedAt());
+              hp.getCreatedAt(),
+              payout == null ? null : payout.getAccountHolderName(),
+              payout == null ? null : payout.getBankName(),
+              payout == null ? null : payout.getBankAccountLast4(),
+              payout == null ? null : payout.getIfscCode(),
+              payout == null ? null : payout.getUpiIdMasked());
         })
         .toList();
   }

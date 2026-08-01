@@ -1,7 +1,9 @@
 package com.helpinminutes.api.helpers.controller;
 
+import com.helpinminutes.api.helpers.dto.HelperBankDetailsResponse;
 import com.helpinminutes.api.helpers.dto.SetOnlineRequest;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
+import com.helpinminutes.api.helpers.dto.HelperPayoutAccountRequest;
 import com.helpinminutes.api.helpers.dto.HelperProfileResponse;
 import com.helpinminutes.api.helpers.service.HelperService;
 import com.helpinminutes.api.security.UserPrincipal;
@@ -83,5 +85,15 @@ public class HelperController {
       throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
     }
     return helpers.submitKyc(principal.userId(), fullName, docType, idNumber, idFront, idBack, selfie);
+  }
+
+  @PutMapping("/payout-account")
+  public HelperBankDetailsResponse savePayoutAccount(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody HelperPayoutAccountRequest req) {
+    if (principal.role() != UserRole.HELPER) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
+    }
+    return helpers.savePayoutAccount(principal.userId(), req);
   }
 }
