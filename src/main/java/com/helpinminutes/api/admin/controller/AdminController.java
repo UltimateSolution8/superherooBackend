@@ -112,6 +112,23 @@ public class AdminController {
     admin.rejectHelper(helperId, req.reason());
   }
 
+  @PostMapping("/public-partner-kyc/{submissionId}/approve")
+  public void approvePublicPartnerKyc(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID submissionId) {
+    requireAdmin(principal);
+    admin.approvePublicPartnerKyc(submissionId, principal.userId());
+  }
+
+  @PostMapping("/public-partner-kyc/{submissionId}/reject")
+  public void rejectPublicPartnerKyc(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID submissionId,
+      @Valid @RequestBody RejectHelperRequest req) {
+    requireAdmin(principal);
+    admin.rejectPublicPartnerKyc(submissionId, principal.userId(), req.reason());
+  }
+
   @PostMapping("/helpers/{helperId}/reopen-kyc")
   public void reopenKyc(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID helperId) {
     requireAdmin(principal);

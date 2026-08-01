@@ -13,8 +13,10 @@ import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperPayoutAccountEntity;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
+import com.helpinminutes.api.helpers.model.PublicPartnerKycSubmissionEntity;
 import com.helpinminutes.api.helpers.repo.HelperPayoutAccountRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.helpers.repo.PublicPartnerKycSubmissionRepository;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
@@ -41,6 +43,7 @@ public class AdminService {
   private final TaskRepository tasks;
   private final NotificationQueueService notificationQueue;
   private final HelperPayoutAccountRepository payoutAccounts;
+  private final PublicPartnerKycSubmissionRepository publicPartnerKycSubmissions;
 
   public AdminService(
       HelperProfileRepository helperProfiles,
@@ -48,27 +51,29 @@ public class AdminService {
       PasswordEncoder passwordEncoder,
       TaskRepository tasks,
       NotificationQueueService notificationQueue,
-      HelperPayoutAccountRepository payoutAccounts) {
+      HelperPayoutAccountRepository payoutAccounts,
+      PublicPartnerKycSubmissionRepository publicPartnerKycSubmissions) {
     this.helperProfiles = helperProfiles;
     this.users = users;
     this.passwordEncoder = passwordEncoder;
     this.tasks = tasks;
     this.notificationQueue = notificationQueue;
     this.payoutAccounts = payoutAccounts;
+    this.publicPartnerKycSubmissions = publicPartnerKycSubmissions;
   }
 
   public List<PendingHelperResponse> listPendingHelpers() {
     List<HelperProfileEntity> pending = helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING);
-    if (pending.isEmpty()) {
-      return List.of();
-    }
+    List<PendingHelperResponse> responses = new java.util.ArrayList<>();
     List<UUID> userIds = pending.stream().map(HelperProfileEntity::getUserId).toList();
     Map<UUID, UserEntity> userById = new HashMap<>();
-    users.findAllById(userIds).forEach(u -> userById.put(u.getId(), u));
     Map<UUID, HelperPayoutAccountEntity> payoutByHelperId = new HashMap<>();
-    payoutAccounts.findByHelperIdInAndProvider(userIds, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
-        .forEach(account -> payoutByHelperId.put(account.getHelperId(), account));
-    return pending.stream()
+    if (!userIds.isEmpty()) {
+      users.findAllById(userIds).forEach(u -> userById.put(u.getId(), u));
+      payoutAccounts.findByHelperIdInAndProvider(userIds, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
+          .forEach(account -> payoutByHelperId.put(account.getHelperId(), account));
+    }
+    responses.addAll(pending.stream()
         .map(hp -> {
           UserEntity user = userById.get(hp.getUserId());
           HelperPayoutAccountEntity payout = payoutByHelperId.get(hp.getUserId());
@@ -89,13 +94,20 @@ public class AdminService {
               payout == null ? null : payout.getBankName(),
               payout == null ? null : payout.getBankAccountLast4(),
               payout == null ? null : payout.getIfscCode(),
-              payout == null ? null : payout.getUpiIdMasked());
+              payout == null ? null : payout.getUpiIdMasked(),
+              "HELPER_PROFILE",
+              null);
         })
-        .toList();
+        .toList());
+    responses.addAll(publicPartnerKycSubmissions.findAllByStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING).stream()
+        .map(this::toPendingPublicKycResponse)
+        .toList());
+    return responses;
   }
 
   public AdminSummaryResponse summary() {
-    long pendingHelpers = helperProfiles.countByKycStatus(HelperKycStatus.PENDING);
+    long pendingHelpers = helperProfiles.countByKycStatus(HelperKycStatus.PENDING)
+        + publicPartnerKycSubmissions.countByStatus(HelperKycStatus.PENDING);
     long searching = tasks.countByStatus(TaskStatus.SEARCHING);
     long assigned = tasks.countByStatus(TaskStatus.ASSIGNED);
     long arrived = tasks.countByStatus(TaskStatus.ARRIVED);
@@ -129,6 +141,28 @@ public class AdminService {
     hp.setKycStatus(HelperKycStatus.REJECTED);
     hp.setKycRejectionReason(reason);
     helperProfiles.save(hp);
+  }
+
+  @Transactional
+  public void approvePublicPartnerKyc(UUID submissionId, UUID adminId) {
+    PublicPartnerKycSubmissionEntity submission = publicPartnerKycSubmissions.findById(submissionId)
+        .orElseThrow(() -> new NotFoundException("Public KYC submission not found"));
+    submission.setStatus(HelperKycStatus.APPROVED);
+    submission.setRejectionReason(null);
+    submission.setReviewedAt(java.time.Instant.now());
+    submission.setReviewedByAdminId(adminId);
+    publicPartnerKycSubmissions.save(submission);
+  }
+
+  @Transactional
+  public void rejectPublicPartnerKyc(UUID submissionId, UUID adminId, String reason) {
+    PublicPartnerKycSubmissionEntity submission = publicPartnerKycSubmissions.findById(submissionId)
+        .orElseThrow(() -> new NotFoundException("Public KYC submission not found"));
+    submission.setStatus(HelperKycStatus.REJECTED);
+    submission.setRejectionReason(reason == null || reason.isBlank() ? "Incomplete KYC" : reason.trim());
+    submission.setReviewedAt(java.time.Instant.now());
+    submission.setReviewedByAdminId(adminId);
+    publicPartnerKycSubmissions.save(submission);
   }
 
   @Transactional
@@ -349,6 +383,29 @@ public class AdminService {
     u.setEmail(null);
     u.setDisplayName("Deleted user");
     users.save(u);
+  }
+
+  private PendingHelperResponse toPendingPublicKycResponse(PublicPartnerKycSubmissionEntity submission) {
+    return new PendingHelperResponse(
+        submission.getId(),
+        submission.getFullName(),
+        submission.getPhone(),
+        submission.getEmail(),
+        submission.getStatus(),
+        submission.getFullName(),
+        submission.getIdNumber(),
+        submission.getDocFrontUrl(),
+        submission.getDocBackUrl(),
+        submission.getSelfieUrl(),
+        submission.getCreatedAt(),
+        submission.getCreatedAt(),
+        submission.getAccountHolderName(),
+        submission.getBankName(),
+        submission.getBankAccountLast4(),
+        submission.getIfscCode(),
+        submission.getUpiIdMasked(),
+        submission.getSource(),
+        submission.getId());
   }
 
   private AdminManagedUserResponse toManagedResponse(UserEntity u, HelperProfileEntity hp) {

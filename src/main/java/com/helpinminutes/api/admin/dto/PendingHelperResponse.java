@@ -21,5 +21,7 @@ public record PendingHelperResponse(
     String payoutBankName,
     String payoutBankAccountLast4,
     String payoutIfscCode,
-    String payoutUpiIdMasked
+    String payoutUpiIdMasked,
+    String kycSource,
+    UUID publicKycId
 ) {}

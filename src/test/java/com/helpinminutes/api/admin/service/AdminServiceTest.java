@@ -8,8 +8,10 @@ import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperPayoutAccountEntity;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
+import com.helpinminutes.api.helpers.model.PublicPartnerKycSubmissionEntity;
 import com.helpinminutes.api.helpers.repo.HelperPayoutAccountRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
+import com.helpinminutes.api.helpers.repo.PublicPartnerKycSubmissionRepository;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -30,6 +32,7 @@ public class AdminServiceTest {
   private TaskRepository tasks;
   private NotificationQueueService notificationQueue;
   private HelperPayoutAccountRepository payoutAccounts;
+  private PublicPartnerKycSubmissionRepository publicPartnerKycSubmissions;
   private AdminService service;
 
   @BeforeEach
@@ -40,7 +43,9 @@ public class AdminServiceTest {
     tasks = mock(TaskRepository.class);
     notificationQueue = mock(NotificationQueueService.class);
     payoutAccounts = mock(HelperPayoutAccountRepository.class);
-    service = new AdminService(helperProfiles, users, passwordEncoder, tasks, notificationQueue, payoutAccounts);
+    publicPartnerKycSubmissions = mock(PublicPartnerKycSubmissionRepository.class);
+    service = new AdminService(helperProfiles, users, passwordEncoder, tasks, notificationQueue, payoutAccounts, publicPartnerKycSubmissions);
+    when(publicPartnerKycSubmissions.findAllByStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING)).thenReturn(List.of());
   }
 
   @Test
@@ -101,5 +106,39 @@ public class AdminServiceTest {
     assertEquals("HDFC Bank", pending.get(0).payoutBankName());
     assertEquals("1234", pending.get(0).payoutBankAccountLast4());
     assertEquals("tes***@upi", pending.get(0).payoutUpiIdMasked());
+    assertEquals("HELPER_PROFILE", pending.get(0).kycSource());
+  }
+
+  @Test
+  public void pendingHelpersIncludesPublicKycSubmissions() {
+    UUID submissionId = UUID.randomUUID();
+    PublicPartnerKycSubmissionEntity submission = new PublicPartnerKycSubmissionEntity();
+    submission.setId(submissionId);
+    submission.setStatus(HelperKycStatus.PENDING);
+    submission.setFullName("Public Partner");
+    submission.setPhone("9876543210");
+    submission.setEmail("public@example.com");
+    submission.setDocType("PAN");
+    submission.setIdNumber("ABCDE1234F");
+    submission.setDocFrontUrl("https://cdn/front.jpg");
+    submission.setSelfieUrl("https://cdn/selfie.jpg");
+    submission.setAccountHolderName("Public Partner");
+    submission.setBankName("HDFC Bank");
+    submission.setBankAccountLast4("4321");
+    submission.setIfscCode("HDFC0000001");
+    submission.setUpiIdMasked("pub***@upi");
+    submission.prePersist();
+
+    when(helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING)).thenReturn(List.of());
+    when(payoutAccounts.findByHelperIdInAndProvider(List.of(), HelperPayoutAccountEntity.DEFAULT_PROVIDER)).thenReturn(List.of());
+    when(publicPartnerKycSubmissions.findAllByStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING)).thenReturn(List.of(submission));
+
+    var pending = service.listPendingHelpers();
+
+    assertEquals(1, pending.size());
+    assertEquals(submissionId, pending.get(0).publicKycId());
+    assertEquals("WEB_PUBLIC_KYC", pending.get(0).kycSource());
+    assertEquals("public@example.com", pending.get(0).email());
+    assertEquals("4321", pending.get(0).payoutBankAccountLast4());
   }
 }

@@ -40,6 +40,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
   private final int logoutPerMin = intEnv("RATE_LIMIT_LOGOUT_PER_MIN", 30);
   /** Unauthenticated and backed by a paid LLM — an open cost-amplification target. */
   private final int chatbotPerMin = intEnv("RATE_LIMIT_CHATBOT_PER_MIN", 8);
+  private final int publicPartnerKycPerMin = intEnv("RATE_LIMIT_PUBLIC_PARTNER_KYC_PER_MIN", 3);
 
   public RateLimitFilter() {
     this(null);
@@ -100,6 +101,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
       limit = otpStartPerMin;
     } else if (path.endsWith("/api/public/chatbot/chat")) {
       limit = chatbotPerMin;
+    } else if (path.endsWith("/api/public/partner-kyc")) {
+      limit = publicPartnerKycPerMin;
     } else if (path.startsWith("/api/v1/payments/tasks/") && path.endsWith("/orders")) {
       limit = paymentOrderPerMin;
       bucket = "/api/v1/payments/tasks/*/orders";
