@@ -97,6 +97,13 @@ public class GlobalExceptionHandler {
         .body(ApiError.of("SERVICE_UNAVAILABLE", ex.getMessage(), Map.of("path", req.getRequestURI())));
   }
 
+  @ExceptionHandler(LiveKycUnavailableException.class)
+  public ResponseEntity<ApiError> handleLiveKycUnavailable(LiveKycUnavailableException ex, HttpServletRequest req) {
+    log.warn("Live KYC provider unavailable processing {}: {}", req.getRequestURI(), ex.getMessage());
+    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        .body(ApiError.of("LIVE_KYC_UNAVAILABLE", "Live KYC is temporarily unavailable", Map.of("path", req.getRequestURI())));
+  }
+
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
   @ExceptionHandler(Exception.class)

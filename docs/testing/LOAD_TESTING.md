@@ -29,7 +29,7 @@ Optional env overrides:
 
 ```bash
 API_BASE=https://api.mysuperhero.xyz \
-REALTIME_WS='wss://superheroorealtime.onrender.com/socket.io/?EIO=4&transport=websocket' \
+REALTIME_WS='wss://api.mysuperhero.xyz/socket.io/?EIO=4&transport=websocket' \
 BUYER_EMAIL=buyer1@helpinminutes.app \
 BUYER_PASSWORD=Buyer@12345 \
 HELPER_EMAIL=helper.approved@helpinminutes.app \

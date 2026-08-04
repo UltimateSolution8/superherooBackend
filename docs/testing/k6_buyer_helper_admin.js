@@ -4,7 +4,7 @@ import { check, sleep } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
 
 const API_BASE = __ENV.API_BASE || 'https://api.mysuperhero.xyz';
-const REALTIME_WS = __ENV.REALTIME_WS || 'wss://superheroorealtime.onrender.com/socket.io/?EIO=4&transport=websocket';
+const REALTIME_WS = __ENV.REALTIME_WS || 'wss://api.mysuperhero.xyz/socket.io/?EIO=4&transport=websocket';
 
 const BUYER_EMAIL = __ENV.BUYER_EMAIL || 'buyer1@helpinminutes.app';
 const BUYER_PASSWORD = __ENV.BUYER_PASSWORD || 'Buyer@12345';

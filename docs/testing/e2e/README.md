@@ -11,8 +11,9 @@ createdb him_e2e && psql -d him_e2e -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 Start the API with a local Postgres and Redis, `OTP_RETURN_IN_RESPONSE=true`
 (so the script can read codes back), `REVIEWER_SEED_ENABLED=true` and the
-`REVIEWER_*` credentials the scripts expect. Zego properties need dummy values —
-the app will not start without them.
+`REVIEWER_*` credentials the scripts expect. LiveKit properties need dummy
+values for tests that do not start a call; use a local LiveKit instance for
+live-session lifecycle tests.
 
 ## API end-to-end
 

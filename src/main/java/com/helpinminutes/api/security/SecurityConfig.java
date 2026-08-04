@@ -41,7 +41,6 @@ public class SecurityConfig {
             .requestMatchers("/api/v1/auth/**").permitAll()
             .requestMatchers("/api/public/**").permitAll()
             .requestMatchers("/api/v1/payments/webhooks/razorpay").permitAll()
-            .requestMatchers("/api/v1/kyc/recording/**").permitAll()
             .anyRequest().authenticated())
         .addFilterBefore(new RateLimitFilter(redis), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);

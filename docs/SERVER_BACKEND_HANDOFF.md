@@ -109,7 +109,7 @@ Required categories:
 - OTP: `OTP_RETURN_IN_RESPONSE`, Exotel/Twilio provider env vars if enabled
 - Realtime: `REALTIME_HTTP_PUBLISH_URL`, `REALTIME_HTTP_PUBLISH_SECRET`, `REALTIME_REDIS_CHANNEL`
 - Firebase/Push: `FIREBASE_SERVICE_ACCOUNT_JSON` or base64 equivalent
-- Zego: `ZEGO_APP_ID`, `ZEGO_SERVER_SECRET`, `ZEGO_CALLBACK_SECRET`
+- LiveKit: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_TOKEN_TTL_SECONDS=900`
 - Sentry: `SENTRY_DSN`, sampling flags
 
 ## Current Verification Commands Used

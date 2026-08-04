@@ -181,12 +181,11 @@ razorpay:
   key-secret: ${RAZORPAY_KEY_SECRET:}
   webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
 
-zego:
-  appId: ${ZEGO_APP_ID:}
-  serverSecret: ${ZEGO_SERVER_SECRET:}
-  callbackSecret: ${ZEGO_CALLBACK_SECRET:}
-  tokenTtlSeconds: ${ZEGO_TOKEN_TTL_SECONDS:3600}
-  recordApiBaseUrl: ${ZEGO_RECORD_API_BASE_URL:https://cloudrecord-api.zego.im}
+livekit:
+  url: ${LIVEKIT_URL:}
+  apiKey: ${LIVEKIT_API_KEY:}
+  apiSecret: ${LIVEKIT_API_SECRET:}
+  tokenTtlSeconds: ${LIVEKIT_TOKEN_TTL_SECONDS:900}
 
 firebase:
   service-account-json: ${FIREBASE_SERVICE_ACCOUNT_JSON:}

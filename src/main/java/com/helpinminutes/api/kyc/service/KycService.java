@@ -26,9 +26,8 @@ import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
 import com.helpinminutes.api.users.repo.UserRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService.ObjectMeta;
-import com.helpinminutes.api.config.ZegoProperties;
-import com.helpinminutes.api.kyc.zego.ZegoCloudRecordingService;
-import com.helpinminutes.api.kyc.zego.ZegoTokenService;
+import com.helpinminutes.api.kyc.livekit.LiveKitService;
+import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.coremedia.iso.IsoFile;
 import com.coremedia.iso.boxes.MovieHeaderBox;
 import org.slf4j.Logger;
@@ -60,9 +59,8 @@ public class KycService {
     private final SupabaseStorageService storageService;
     private final RabbitTemplate rabbitTemplate;
     private final ObjectMapper objectMapper;
-    private final ZegoTokenService zegoTokenService;
-    private final ZegoCloudRecordingService recordingService;
-    private final ZegoProperties zegoProps;
+    private final LiveKitService liveKitService;
+    private final RealtimePublisher realtime;
 
     private static final String EXCHANGE = "him.kyc";
     private static final String ROUTING_KEY = "kyc.processing";
@@ -75,9 +73,8 @@ public class KycService {
             SupabaseStorageService storageService,
             RabbitTemplate rabbitTemplate,
             ObjectMapper objectMapper,
-            ZegoTokenService zegoTokenService,
-            ZegoCloudRecordingService recordingService,
-            ZegoProperties zegoProps) {
+            LiveKitService liveKitService,
+            RealtimePublisher realtime) {
         this.kycRequestRepository = kycRequestRepository;
         this.auditLogRepository = auditLogRepository;
         this.userRepository = userRepository;
@@ -86,9 +83,8 @@ public class KycService {
         this.storageService = storageService;
         this.rabbitTemplate = rabbitTemplate;
         this.objectMapper = objectMapper;
-        this.zegoTokenService = zegoTokenService;
-        this.recordingService = recordingService;
-        this.zegoProps = zegoProps;
+        this.liveKitService = liveKitService;
+        this.realtime = realtime;
     }
 
     @Transactional
@@ -186,6 +182,10 @@ public class KycService {
         }
 
         auditLog("UPLOADED", entity, entity.getUser(), "Media uploaded");
+        realtime.publish("kyc.request_submitted", Map.of(
+                "kycId", entity.getId().toString(),
+                "helperId", helperId.toString(),
+                "status", entity.getStatus().name()));
     }
 
     public KycStatusResponse getStatus(UUID kycId, UUID helperId) {
@@ -226,31 +226,31 @@ public class KycService {
         }
 
         String roomId = entity.getLiveRoomId();
-        if (roomId == null || roomId.isBlank() || !isZegoSafeId(roomId)) {
-            roomId = "kyc_" + sanitizeZegoId(helperId.toString()) + "_" + System.currentTimeMillis();
+        if (roomId == null || roomId.isBlank() || !isLiveKitSafeId(roomId)) {
+            roomId = "kyc_" + sanitizeLiveKitId(helperId.toString()) + "_" + System.currentTimeMillis();
             entity.setLiveRoomId(roomId);
         }
+        liveKitService.ensureTwoParticipantRoom(roomId);
         entity.setLiveStartedAt(Instant.now());
         entity.setLiveEndedAt(null);
-
-        // Recording is optional; skip to avoid blocking live KYC start.
 
         kycRequestRepository.save(entity);
         auditLog("LIVE_START", entity, admin, "Live KYC started");
 
-        long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
+        long ttl = liveKitService.tokenTtlSeconds();
         Instant expiresAt = Instant.now().plusSeconds(ttl);
-        String userName = sanitizeZegoUserName(resolveHelperName(admin), "Admin");
-        String adminZegoUserId = "admin_" + sanitizeZegoId(adminId.toString());
-        String token = zegoTokenService.generateToken(adminZegoUserId, roomId, userName, ttl);
+        String userName = sanitizeLiveKitUserName(resolveHelperName(admin), "Admin");
+        String adminLiveKitUserId = "admin_" + sanitizeLiveKitId(adminId.toString());
+        String token = liveKitService.createParticipantToken(adminLiveKitUserId, userName, roomId);
 
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
-                sanitizeZegoUserName(resolveHelperName(helper), "Superherooo"),
-                zegoProps.appId(),
+                sanitizeLiveKitUserName(resolveHelperName(helper), "Superherooo"),
+                "LIVEKIT",
+                liveKitService.serverUrl(),
                 roomId,
-                adminZegoUserId,
+                adminLiveKitUserId,
                 userName,
                 token,
                 entity.getStatus().name(),
@@ -269,18 +269,19 @@ public class KycService {
         if (entity.getLiveRoomId() == null || entity.getLiveRoomId().isBlank()) {
             return null;
         }
-        long ttl = Math.max(60, zegoProps.tokenTtlSeconds());
+        long ttl = liveKitService.tokenTtlSeconds();
         Instant expiresAt = Instant.now().plusSeconds(ttl);
-        String userName = sanitizeZegoUserName(resolveHelperName(helper), "Superherooo");
-        String helperZegoUserId = "helper_" + sanitizeZegoId(helperId.toString());
-        String token = zegoTokenService.generateToken(helperZegoUserId, entity.getLiveRoomId(), userName, ttl);
+        String userName = sanitizeLiveKitUserName(resolveHelperName(helper), "Superherooo");
+        String helperLiveKitUserId = "helper_" + sanitizeLiveKitId(helperId.toString());
+        String token = liveKitService.createParticipantToken(helperLiveKitUserId, userName, entity.getLiveRoomId());
         return new LiveKycSessionResponse(
                 entity.getId(),
                 helperId,
                 userName,
-                zegoProps.appId(),
+                "LIVEKIT",
+                liveKitService.serverUrl(),
                 entity.getLiveRoomId(),
-                helperZegoUserId,
+                helperLiveKitUserId,
                 userName,
                 token,
                 entity.getStatus().name(),
@@ -342,30 +343,9 @@ public class KycService {
                 .orElseThrow(() -> new NotFoundException("KYC request not found"));
         UserEntity admin = userRepository.findById(adminId)
                 .orElseThrow(() -> new NotFoundException("Admin not found"));
-        if (entity.getLiveRecordTaskId() != null && !entity.getLiveRecordTaskId().isBlank()) {
-            recordingService.stopRecording(entity.getLiveRecordTaskId());
-        }
+        liveKitService.deleteRoomBestEffort(entity.getLiveRoomId());
         entity.setLiveEndedAt(Instant.now());
         auditLog("LIVE_END", entity, admin, "Live KYC ended");
-    }
-
-    @Transactional
-    public void attachLiveRecording(String roomId, String recordTaskId, String recordingUrl) {
-        KycRequestEntity entity = null;
-        if (recordTaskId != null && !recordTaskId.isBlank()) {
-            entity = kycRequestRepository.findTop1ByLiveRecordTaskId(recordTaskId).orElse(null);
-        }
-        if (entity == null && roomId != null && !roomId.isBlank()) {
-            entity = kycRequestRepository.findTop1ByLiveRoomId(roomId).orElse(null);
-        }
-        if (entity == null) {
-            log.warn("Live recording callback did not match any KYC request (roomId={}, taskId={})", roomId, recordTaskId);
-            return;
-        }
-        if (recordTaskId != null && !recordTaskId.isBlank()) {
-            entity.setLiveRecordTaskId(recordTaskId);
-        }
-        entity.setLiveRecordingUrl(recordingUrl);
     }
 
     // --- Admin API ---
@@ -426,6 +406,10 @@ public class KycService {
 
         String action = req.action().toUpperCase();
         if ("APPROVE".equals(action)) {
+            if (entity.getLiveRoomId() != null &&
+                    (entity.getSelfiePath() == null || entity.getDocFrontPath() == null || entity.getDocBackPath() == null)) {
+                throw new BadRequestException("Selfie, document front, and document back snapshots are required");
+            }
             entity.setStatus(KycRequestStatus.APPROVED);
             helperProfiles.findById(entity.getUser().getId()).ifPresent(profile -> {
                 profile.setKycStatus(HelperKycStatus.APPROVED);
@@ -445,6 +429,8 @@ public class KycService {
                 helperProfiles.save(profile);
             });
             notificationQueue.enqueueKycApproved(entity.getUser().getId());
+            liveKitService.deleteRoomBestEffort(entity.getLiveRoomId());
+            entity.setLiveEndedAt(Instant.now());
         } else if ("REJECT".equals(action)) {
             entity.setStatus(KycRequestStatus.REJECTED);
             helperProfiles.findById(entity.getUser().getId()).ifPresent(profile -> {
@@ -491,17 +477,17 @@ public class KycService {
         throw new BadRequestException("Invalid snapshot kind");
     }
 
-    private boolean isZegoSafeId(String value) {
+    private boolean isLiveKitSafeId(String value) {
         return value != null && value.matches("[A-Za-z0-9_]{1,64}");
     }
 
-    private String sanitizeZegoId(String value) {
+    private String sanitizeLiveKitId(String value) {
         String sanitized = value == null ? "" : value.replaceAll("[^A-Za-z0-9_]", "_");
         if (sanitized.isBlank()) return "user";
         return sanitized.length() <= 58 ? sanitized : sanitized.substring(0, 58);
     }
 
-    private String sanitizeZegoUserName(String value, String fallback) {
+    private String sanitizeLiveKitUserName(String value, String fallback) {
         String sanitized = value == null ? "" : value.replaceAll("[^A-Za-z0-9 _-]", " ").replaceAll("\\s+", " ").trim();
         if (sanitized.isBlank()) sanitized = fallback;
         return sanitized.length() <= 32 ? sanitized : sanitized.substring(0, 32).trim();

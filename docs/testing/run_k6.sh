@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="${ROOT_DIR}/k6_buyer_helper_admin.js"
 
 API_BASE="${API_BASE:-https://api.mysuperhero.xyz}"
-REALTIME_WS="${REALTIME_WS:-wss://superheroorealtime.onrender.com/socket.io/?EIO=4&transport=websocket}"
+REALTIME_WS="${REALTIME_WS:-wss://api.mysuperhero.xyz/socket.io/?EIO=4&transport=websocket}"
 
 echo "== K6 One-Click Runner =="
 echo "API_BASE=${API_BASE}"
