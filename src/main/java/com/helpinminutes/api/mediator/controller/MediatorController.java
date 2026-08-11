@@ -3,6 +3,16 @@ package com.helpinminutes.api.mediator.controller;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.mediator.dto.MediatorDtos.*;
 import com.helpinminutes.api.mediator.service.MediatorService;
+import com.helpinminutes.api.helpers.dto.HelperBankDetailsResponse;
+import com.helpinminutes.api.helpers.dto.PayoutAccountUpdateRequest;
+import com.helpinminutes.api.helpers.dto.BankChangeChallengeResponse;
+import com.helpinminutes.api.helpers.dto.BankChangeOtpVerifyRequest;
+import com.helpinminutes.api.helpers.dto.BankChangeTokenResponse;
+import com.helpinminutes.api.helpers.dto.IfscLookupResponse;
+import com.helpinminutes.api.helpers.service.IfscLookupService;
+import com.helpinminutes.api.helpers.service.PayoutAccountService;
+import com.helpinminutes.api.helpers.service.BankChangeChallengeService;
+import com.helpinminutes.api.security.ClientIpResolver;
 import com.helpinminutes.api.security.UserPrincipal;
 import com.helpinminutes.api.users.model.UserRole;
 import jakarta.validation.Valid;
@@ -10,20 +20,67 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/v1/mediator")
 public class MediatorController {
   private final MediatorService mediatorService;
+  private final PayoutAccountService payoutAccounts;
+  private final IfscLookupService ifscLookup;
+  private final BankChangeChallengeService bankChallenges;
 
-  public MediatorController(MediatorService mediatorService) {
+  public MediatorController(MediatorService mediatorService, PayoutAccountService payoutAccounts,
+      IfscLookupService ifscLookup, BankChangeChallengeService bankChallenges) {
     this.mediatorService = mediatorService;
+    this.payoutAccounts = payoutAccounts;
+    this.ifscLookup = ifscLookup;
+    this.bankChallenges = bankChallenges;
+  }
+
+  @PostMapping("/payout-account/change-challenge")
+  public BankChangeChallengeResponse startBankChange(@AuthenticationPrincipal UserPrincipal principal) {
+    checkMediator(principal);
+    return bankChallenges.start(principal.userId(), UserRole.MEDIATOR);
+  }
+
+  @PostMapping("/payout-account/change-challenge/verify")
+  public BankChangeTokenResponse verifyBankChange(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody BankChangeOtpVerifyRequest req) {
+    checkMediator(principal);
+    return bankChallenges.verify(principal.userId(), UserRole.MEDIATOR, req.challengeId(), req.otp());
   }
 
   private void checkRole(UserPrincipal principal) {
     if (principal.role() != UserRole.MEDIATOR && principal.role() != UserRole.ADMIN) {
       throw new ForbiddenException("Only mediators or admins can access these endpoints");
     }
+  }
+
+  private void checkMediator(UserPrincipal principal) {
+    if (principal.role() != UserRole.MEDIATOR) throw new ForbiddenException("Only mediators can update payout details");
+  }
+
+  @GetMapping("/ifsc/{code}")
+  public IfscLookupResponse lookupIfsc(@AuthenticationPrincipal UserPrincipal principal, @PathVariable String code) {
+    checkMediator(principal);
+    return ifscLookup.lookup(code);
+  }
+
+  @GetMapping("/payout-account")
+  public HelperBankDetailsResponse payoutAccount(@AuthenticationPrincipal UserPrincipal principal) {
+    checkMediator(principal);
+    return payoutAccounts.getCurrent(principal.userId());
+  }
+
+  @PutMapping("/payout-account")
+  public HelperBankDetailsResponse savePayoutAccount(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody PayoutAccountUpdateRequest req,
+      HttpServletRequest httpRequest) {
+    checkMediator(principal);
+    return payoutAccounts.replace(principal.userId(), UserRole.MEDIATOR, req, ClientIpResolver.resolve(httpRequest));
   }
 
   @GetMapping("/jobs")

@@ -48,6 +48,17 @@ import org.springframework.stereotype.Service;
 public class PushNotificationService {
   private static final Logger log = LoggerFactory.getLogger(PushNotificationService.class);
 
+  /** Channel used for task lifecycle pushes, including time-limited job offers. */
+  private static final String TASKS_CHANNEL_ID = "tasks";
+
+  /**
+   * FCM time-to-live for non-urgent pushes (1 hour).
+   *
+   * <p>A "task completed" notice is still worth reading after a while; an offer is
+   * not. Anything longer than this is just clutter on a phone that was off.
+   */
+  private static final long DEFAULT_PUSH_TTL_MILLIS = Duration.ofHours(1).toMillis();
+
   private final PushTokenService tokens;
   private final UserRepository users;
   private final BookingBatchItemRepository batchItems;
@@ -55,6 +66,7 @@ public class PushNotificationService {
   private final ObjectMapper mapper;
   private final FirebaseMessaging messaging;
   private final Executor adminNotificationExecutor;
+  private final com.helpinminutes.api.config.AppProperties props;
   private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
   public PushNotificationService(
@@ -66,13 +78,15 @@ public class PushNotificationService {
       @Qualifier("adminNotificationExecutor") Executor adminNotificationExecutor,
       @Value("${firebase.service-account-json:${FIREBASE_SERVICE_ACCOUNT_JSON:}}") String serviceAccountJson,
       @Value("${firebase.service-account-base64:${FIREBASE_SERVICE_ACCOUNT_BASE64:}}") String serviceAccountBase64,
-      @Value("${firebase.service-account-path:${FIREBASE_SERVICE_ACCOUNT_PATH:firebase-service-account.json}}") String serviceAccountPath) {
+      @Value("${firebase.service-account-path:${FIREBASE_SERVICE_ACCOUNT_PATH:firebase-service-account.json}}") String serviceAccountPath,
+      com.helpinminutes.api.config.AppProperties props) {
     this.tokens = tokens;
     this.users = users;
     this.batchItems = batchItems;
     this.redis = redis;
     this.mapper = mapper;
     this.adminNotificationExecutor = adminNotificationExecutor;
+    this.props = props;
     this.messaging = initFirebase(serviceAccountJson, serviceAccountBase64, serviceAccountPath);
   }
 
@@ -343,6 +357,34 @@ public class PushNotificationService {
     }
   }
 
+  /**
+   * Tells the citizen their booking is being checked by a person.
+   *
+   * <p>Previously nothing was sent: a task routed to moderation just sat in the
+   * citizen's list with no explanation, and this service was injected into
+   * {@code AiTaskModerationService} but never called.
+   */
+  public void notifyBuyerTaskUnderReview(UUID buyerId, TaskEntity task) {
+    if (buyerId == null || task == null) return;
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
+    if (tokenEntities.isEmpty()) return;
+    List<String> tokenList = new ArrayList<>();
+    for (PushTokenEntity t : tokenEntities) {
+      if (t.getToken() != null && !t.getToken().isBlank()) {
+        tokenList.add(t.getToken());
+      }
+    }
+    if (tokenList.isEmpty()) return;
+    try {
+      sendToTokens(task.getId(), buyerId, tokenList,
+          "Checking your request",
+          "A team member is reviewing your booking. We'll start the search shortly.",
+          Map.of("type", "TASK_UNDER_REVIEW", "taskId", task.getId().toString()), "tasks");
+    } catch (Exception e) {
+      log.warn("Failed to send under-review notification for task {}", task.getId(), e);
+    }
+  }
+
   public void notifyBuyerScheduledTaskActivated(UUID buyerId, TaskEntity task) {
     if (buyerId == null || task == null) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(buyerId));
@@ -424,6 +466,23 @@ public class PushNotificationService {
     }
   }
 
+  public void notifyBankAccountChanged(UUID userId, String bankName, String last4) {
+    List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(List.of(userId));
+    List<String> tokenList = tokenEntities.stream()
+        .map(PushTokenEntity::getToken)
+        .filter(value -> value != null && !value.isBlank())
+        .toList();
+    if (tokenList.isEmpty()) return;
+    String bank = bankName == null || bankName.isBlank() ? "Bank account" : bankName;
+    try {
+      sendToTokens(null, userId, tokenList, "Bank account updated",
+          bank + " account ending " + last4 + " is now saved for future payouts.",
+          Map.of("type", "BANK_ACCOUNT_CHANGED"), "default");
+    } catch (Exception e) {
+      log.warn("Failed to send bank-change security notification for user {}", userId, e);
+    }
+  }
+
   public void notifyMediatorBulkJobAvailable(BookingBatchEntity batch, List<UUID> mediatorIds) {
     if (batch == null || mediatorIds == null || mediatorIds.isEmpty()) return;
     List<PushTokenEntity> tokenEntities = tokens.getTokensForUsers(mediatorIds);
@@ -454,6 +513,17 @@ public class PushNotificationService {
         log.warn("Failed mediator bulk push user={} batch={}", entry.getKey(), batch.getId(), e);
       }
     }
+  }
+
+  /**
+   * TTL for task-channel pushes, derived from the offer acceptance window.
+   *
+   * <p>A small grace margin over the offer TTL: an offer that lands after it lapsed
+   * is worse than one that never arrives, because the partner taps it and gets a
+   * "no longer available" error.
+   */
+  private long timeCriticalTtlMillis() {
+    return Duration.ofSeconds(props.matching().offerTtlSeconds() + 15L).toMillis();
   }
 
   private void pruneInvalidTokens(UUID taskId, UUID userId, List<String> tokenList, BatchResponse response) {
@@ -491,14 +561,28 @@ public class PushNotificationService {
         log.info("Firebase not initialized; routing {} FCM token(s) through Expo push API fallback for user {} task {}", fcmTokens.size(), userId, taskId);
         expoTokens.addAll(fcmTokens);
       } else {
+        // HIGH priority and a TTL matched to the message's usefulness.
+        //
+        // Without them, Android Doze and App Standby buffer the message and may
+        // deliver a job offer after its acceptance window has already closed — the
+        // partner gets an alert for work they can no longer take. Channel
+        // importance in the app controls *presentation*; only AndroidConfig
+        // priority controls FCM delivery urgency.
+        //
+        // TTL also stops a stale offer arriving when the phone wakes up an hour
+        // later: FCM drops it instead.
+        boolean timeCritical = TASKS_CHANNEL_ID.equals(channelId);
+        var androidConfig = com.google.firebase.messaging.AndroidConfig.builder()
+            .setPriority(com.google.firebase.messaging.AndroidConfig.Priority.HIGH)
+            .setTtl(timeCritical ? timeCriticalTtlMillis() : DEFAULT_PUSH_TTL_MILLIS)
+            .setNotification(com.google.firebase.messaging.AndroidNotification.builder()
+                .setChannelId(channelId)
+                .build())
+            .build();
         MulticastMessage.Builder builder = MulticastMessage.builder()
             .addAllTokens(fcmTokens)
             .setNotification(Notification.builder().setTitle(title).setBody(body).build())
-            .setAndroidConfig(com.google.firebase.messaging.AndroidConfig.builder()
-                .setNotification(com.google.firebase.messaging.AndroidNotification.builder()
-                    .setChannelId(channelId)
-                    .build())
-                .build());
+            .setAndroidConfig(androidConfig);
         data.forEach(builder::putData);
         try {
           BatchResponse response = messaging.sendEachForMulticast(builder.build());

@@ -75,10 +75,15 @@ public class PushTokenService {
     return tokens.deleteByTokenIn(tokenValues);
   }
 
+  /**
+   * Deletes device tokens not seen since {@code cutoff}. Driven by
+   * {@code RetentionJob}; before that this method existed but had no caller, so
+   * dead device registrations accumulated indefinitely.
+   */
   @Transactional
   public long purgeStaleTokens(Instant cutoff) {
     if (cutoff == null) return 0L;
-    return tokens.deleteByLastSeenAtBefore(cutoff);
+    return tokens.deleteStaleBefore(cutoff);
   }
 
   @Transactional

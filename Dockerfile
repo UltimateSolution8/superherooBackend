@@ -4,6 +4,12 @@ WORKDIR /app
 # Copy the pre-built JAR from the target directory
 COPY target/*.jar app.jar
 
+# NOTE: production does NOT run this image. The API is deployed as a bare jar
+# under systemd — see Backend/deploy/superheroo-api.service, which sets its own
+# absolute -Xmx because MaxRAMPercentage reads total host RAM on a shared
+# droplet. The flags below apply only to container runs, where the percentage
+# form is the correct choice because a cgroup limit exists.
+#
 # Tuned JAVA_OPTS for production:
 # - G1GC for predictable low latency pauses
 # - MaxGCPauseMillis=100 for steady response times

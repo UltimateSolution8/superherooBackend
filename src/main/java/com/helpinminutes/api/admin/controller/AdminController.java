@@ -21,6 +21,8 @@ import com.helpinminutes.api.admin.service.AdminActionCenterService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.security.UserPrincipal;
+import com.helpinminutes.api.helpers.dto.PayoutAccountHistoryResponse;
+import com.helpinminutes.api.helpers.service.PayoutAccountService;
 import com.helpinminutes.api.tasks.controller.TaskController;
 import com.helpinminutes.api.tasks.dto.TaskResponse;
 import com.helpinminutes.api.tasks.dto.UpdateTaskStatusRequest;
@@ -53,18 +55,30 @@ public class AdminController {
   private final UserRepository users;
   private final PushNotificationService pushNotifications;
   private final AdminActionCenterService actionCenter;
+  private final PayoutAccountService payoutAccounts;
 
   public AdminController(
       AdminService admin,
       TaskService tasks,
       UserRepository users,
       PushNotificationService pushNotifications,
-      AdminActionCenterService actionCenter) {
+      AdminActionCenterService actionCenter,
+      PayoutAccountService payoutAccounts) {
     this.admin = admin;
     this.tasks = tasks;
     this.users = users;
     this.pushNotifications = pushNotifications;
     this.actionCenter = actionCenter;
+    this.payoutAccounts = payoutAccounts;
+  }
+
+  @GetMapping("/users/{userId}/payout-account-history")
+  public PayoutAccountHistoryResponse payoutAccountHistory(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID userId,
+      @RequestParam(defaultValue = "50") int limit) {
+    requireFullAdmin(principal);
+    return payoutAccounts.history(userId, limit);
   }
 
   private static void requireAdmin(UserPrincipal principal) {
@@ -392,7 +406,11 @@ public class AdminController {
           t.getRecurringTaskId(),
           null,
           t.getPaymentCollectionMode(),
-          t.getVerificationMode());
+          t.getVerificationMode(),
+          // Distance and ETA are relative to a requesting partner. An admin list
+          // has no viewer position, so there is nothing to report.
+          null,
+          null);
     }).toList();
   }
 

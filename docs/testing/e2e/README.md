@@ -21,9 +21,10 @@ live-session lifecycle tests.
 python3 api_e2e_test.py
 ```
 
-55 checks: auth bypass regressions, signup validation, forgot/reset, session
-revocation, reviewer accounts, geofence, payment-mode enforcement, matching,
-decline, the task lifecycle, and rate limiting. Exits non-zero on any failure.
+65 checks: auth bypass regressions, signup validation, forgot/reset, session
+revocation, reviewer accounts, Madhapur autocomplete and routing, geofence,
+payment-mode enforcement, matching, decline, the complete citizen-to-partner
+task lifecycle, and rate limiting. Exits non-zero on any failure.
 
 ## Load
 

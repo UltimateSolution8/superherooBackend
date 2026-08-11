@@ -84,7 +84,7 @@ public class LearningService {
   @Transactional(readOnly = true)
   public List<TrainingMaterialResponse> listAdminMaterials() {
     List<TrainingMaterialEntity> rows = materials.findAllByOrderByCreatedAtDesc();
-    List<HelperTrainingProgressEntity> allProgress = progress.findAllByOrderByUpdatedAtDesc();
+    List<HelperTrainingProgressEntity> allProgress = progress.findTop500ByOrderByUpdatedAtDesc();
     Map<UUID, Integer> totalByMaterial = new HashMap<>();
     Map<UUID, Integer> completedByMaterial = new HashMap<>();
     for (HelperTrainingProgressEntity p : allProgress) {
@@ -167,7 +167,7 @@ public class LearningService {
     } else if (helperId != null) {
       rows = progress.findByHelperIdOrderByUpdatedAtDesc(helperId);
     } else {
-      rows = progress.findAllByOrderByUpdatedAtDesc();
+      rows = progress.findTop500ByOrderByUpdatedAtDesc();
     }
     if (materialId != null && helperId != null) {
       rows = rows.stream()

@@ -104,6 +104,34 @@ class RateLimitFilterTest {
     }
 
     @Test
+    void ifscLookupGet_isRateLimited() throws Exception {
+        String path = "/api/v1/helper/ifsc/HDFC0000001";
+        String ip = "10.0.2.1";
+        for (int i = 0; i < 30; i++) {
+            HttpServletRequest req = mockRequest(path, ip);
+            when(req.getMethod()).thenReturn("GET");
+            filter.doFilterInternal(req, mockResponse(), chain);
+        }
+        HttpServletRequest blocked = mockRequest(path, ip);
+        when(blocked.getMethod()).thenReturn("GET");
+        HttpServletResponse response = mockResponse();
+        filter.doFilterInternal(blocked, response, chain);
+        verify(response).setStatus(429);
+    }
+
+    @Test
+    void bankChangeChallenge_isRateLimited() throws Exception {
+        String path = "/api/v1/helper/payout-account/change-challenge";
+        String ip = "203.0.113.44";
+        for (int i = 0; i < 3; i++) {
+            filter.doFilterInternal(mockRequest(path, ip), mockResponse(), chain);
+        }
+        HttpServletResponse response = mockResponse();
+        filter.doFilterInternal(mockRequest(path, ip), response, chain);
+        verify(response).setStatus(429);
+    }
+
+    @Test
     void xForwardedFor_usedAsClientIp() throws Exception {
         String path = "/api/v1/auth/otp/verify";
         // Exhaust limit for proxied IP

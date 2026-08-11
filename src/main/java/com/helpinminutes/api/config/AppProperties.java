@@ -3,7 +3,9 @@ package com.helpinminutes.api.config;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -18,6 +20,16 @@ public record AppProperties(
     Payments payments
 ) {
   public AppProperties {
+    // Constructor-bound nested records may be passed as null when an older
+    // deployment environment omits the whole group. Matching has safe,
+    // documented operational defaults, so boot with those instead of taking the
+    // entire API offline. Explicitly configured values still bind normally.
+    if (matching == null) {
+      matching = new Matching(9, 6, 8, 120, 45);
+    }
+    if (realtime == null) {
+      realtime = new Realtime("him:rt:events", null, null, 1500);
+    }
     if (payments == null) {
       payments = new Payments(false);
     }
@@ -77,13 +89,77 @@ public record AppProperties(
       boolean returnOtpInResponse
   ) {}
 
+  /**
+   * Dispatch tuning.
+   *
+   * <p>Offers escalate in waves: wave 0 covers {@code waveRadiiMeters[0]} with a
+   * fanout of {@code waveFanouts[0]}, and each unanswered window widens both. The
+   * last entry in either list is reused for every wave beyond it, so a task in a
+   * thin-supply area ends up offered city-wide rather than cancelled after one
+   * 3km pass.
+   *
+   * <p>{@code offerFanout} remains as the fallback fanout for callers that do not
+   * carry a wave (and as the floor used by candidate-widening heuristics).
+   */
   public record Matching(
       @Min(0) @Max(15) int h3Resolution,
       @Min(0) @Max(10) int maxKRing,
       @Min(1) @Max(50) int offerFanout,
       @Min(5) @Max(300) int helperStaleAfterSeconds,
-      @Min(10) @Max(600) int offerTtlSeconds
-  ) {}
+      @Min(10) @Max(600) int offerTtlSeconds,
+      @NotEmpty List<@Min(200) @Max(60000) Integer> waveRadiiMeters,
+      @NotEmpty List<@Min(1) @Max(200) Integer> waveFanouts,
+      @Min(500) @Max(60000) int pullFeedRadiusMeters,
+      @Min(1) @Max(10) int maxLiveOffersPerHelper
+  ) {
+    /** Wave tiers when unconfigured — kept here so the defaults live in one place. */
+    public static final List<Integer> DEFAULT_WAVE_RADII_METERS = List.of(3000, 6000, 10000);
+    public static final List<Integer> DEFAULT_WAVE_FANOUTS = List.of(8, 15, 25);
+    public static final int DEFAULT_PULL_FEED_RADIUS_METERS = 15_000;
+    public static final int DEFAULT_MAX_LIVE_OFFERS_PER_HELPER = 2;
+
+    public Matching {
+      waveRadiiMeters = waveRadiiMeters == null || waveRadiiMeters.isEmpty()
+          ? DEFAULT_WAVE_RADII_METERS
+          : List.copyOf(waveRadiiMeters);
+      waveFanouts = waveFanouts == null || waveFanouts.isEmpty()
+          ? DEFAULT_WAVE_FANOUTS
+          : List.copyOf(waveFanouts);
+    }
+
+    /**
+     * The core five knobs, with wave and feed settings left at their defaults.
+     *
+     * <p>Convenience for callers and fixtures that only care about the basics.
+     */
+    public Matching(
+        int h3Resolution,
+        int maxKRing,
+        int offerFanout,
+        int helperStaleAfterSeconds,
+        int offerTtlSeconds) {
+      this(h3Resolution, maxKRing, offerFanout, helperStaleAfterSeconds, offerTtlSeconds,
+          DEFAULT_WAVE_RADII_METERS, DEFAULT_WAVE_FANOUTS,
+          DEFAULT_PULL_FEED_RADIUS_METERS, DEFAULT_MAX_LIVE_OFFERS_PER_HELPER);
+    }
+
+    /** Search radius for {@code wave}, clamped to the last configured tier. */
+    public double radiusForWave(int wave) {
+      int index = Math.min(Math.max(wave, 0), waveRadiiMeters.size() - 1);
+      return waveRadiiMeters.get(index);
+    }
+
+    /** Number of partners to offer at {@code wave}, clamped to the last tier. */
+    public int fanoutForWave(int wave) {
+      int index = Math.min(Math.max(wave, 0), waveFanouts.size() - 1);
+      return waveFanouts.get(index);
+    }
+
+    /** Widest radius any wave can reach — the ceiling for a single offer. */
+    public double maxOfferRadiusMeters() {
+      return waveRadiiMeters.stream().mapToInt(Integer::intValue).max().orElse(3000);
+    }
+  }
 
   public record Realtime(
       // the channel used for redis pub/sub.  if the property is absent we fall back

@@ -63,6 +63,15 @@ public class TaskService {
       TaskStatus.ASSIGNED,
       TaskStatus.ARRIVED,
       TaskStatus.STARTED);
+
+  /**
+   * Rows the pull feed reads before distance filtering, and how many it returns.
+   *
+   * <p>The scan limit has to exceed the return limit because the bounding-box query
+   * is a superset of the circle — the corners get discarded.
+   */
+  private static final int PULL_FEED_SCAN_LIMIT = 300;
+  private static final int PULL_FEED_RETURN_LIMIT = 60;
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
   private final MatchingService matching;
@@ -84,6 +93,41 @@ public class TaskService {
   private final PaymentLifecycleService paymentLifecycle;
   private final org.springframework.context.ApplicationEventPublisher eventPublisher;
   private final com.helpinminutes.api.moderation.service.AiTaskModerationService aiTaskModeration;
+
+  /**
+   * Injected by field rather than constructor only because this class already has
+   * a 22-argument constructor plus a legacy overload used by tests. Optional: when
+   * absent (direct construction in a unit test) {@link #dispatchAsync} falls back
+   * to running inline, which keeps test behaviour deterministic.
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  @org.springframework.beans.factory.annotation.Qualifier("realtimeDispatchExecutor")
+  private java.util.concurrent.Executor dispatchExecutor;
+
+  /**
+   * Routing provider, for the ETAs on the pull feed. Field-injected for the same
+   * reason as {@link #dispatchExecutor}: the constructor is already at 22 arguments
+   * with a legacy overload the tests use. Absent in unit tests, where the feed
+   * simply omits ETA rather than failing.
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.helpinminutes.api.geo.GeoProviderChain geo;
+
+  /**
+   * Fire-and-forget side effects (realtime publish, push notification) that must
+   * not extend the request. Explicitly not {@code CompletableFuture.runAsync}:
+   * that lands on the common ForkJoinPool, sized {@code availableProcessors() - 1}
+   * — one thread on 2 vCPU — and these bodies do blocking HTTP and JDBC, so they
+   * serialise behind each other.
+   */
+  private void dispatchAsync(Runnable body) {
+    java.util.concurrent.Executor executor = this.dispatchExecutor;
+    if (executor == null) {
+      body.run();
+      return;
+    }
+    executor.execute(body);
+  }
 
   public TaskService(
       TaskRepository tasks,
@@ -373,7 +417,7 @@ public class TaskService {
     }
 
     if (!awaitingPrepayment) try {
-      java.util.concurrent.CompletableFuture.runAsync(() -> {
+      dispatchAsync(() -> {
         try {
           realtime.publish(
               "task_created",
@@ -446,7 +490,7 @@ public class TaskService {
 
     // Publish realtime event
     try {
-      java.util.concurrent.CompletableFuture.runAsync(() -> {
+      dispatchAsync(() -> {
         try {
           realtime.publish(
               "task_assigned",
@@ -509,14 +553,23 @@ public class TaskService {
       offers.expireOthers(taskId, TaskOfferStatus.OFFERED, TaskOfferStatus.EXPIRED, helperId);
       task.setAssignedHelperId(helperId);
       task.setStatus(TaskStatus.ASSIGNED);
+      // Feeds the acceptance-rate term in candidate ranking. Only counted on the
+      // offer path: a walk-up claim from the pull feed was never offered, so
+      // crediting it would inflate the ratio above 1.
+      profile.setOffersAccepted(profile.getOffersAccepted() + 1);
+      helperProfiles.save(profile);
     } else {
       var state = presence.getHelperState(helperId);
       if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
         throw new ForbiddenException("Helper location is not available");
       }
 
+      // Walk-up claim from the pull feed: no offer row exists, so the distance
+      // check is the only gate. Bounded by the pull-feed radius, not by a push
+      // wave — a partner who can see a job in their list must be able to take it,
+      // otherwise the feed advertises work they cannot accept.
       double distMeters = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
-      if (distMeters > 3000d) {
+      if (distMeters > props.matching().pullFeedRadiusMeters()) {
         throw new ForbiddenException("Helper is too far from this task");
       }
 
@@ -904,39 +957,93 @@ public class TaskService {
     return tasks.avgHelperRatingForBuyer(buyerId);
   }
 
-  public List<TaskEntity> listAvailableTasks(UUID helperId) {
+  /**
+   * The partner's pull feed of open jobs, nearest first, with distance attached.
+   *
+   * <p>Deliberately far wider than a push wave ({@code pullFeedRadiusMeters}, 15km
+   * by default, versus 3km for wave 0). Offers were push-only, so a job's whole
+   * lifetime reached at most a handful of partners and the sixth-nearest never
+   * learned it existed. Listing a job costs nothing per partner — only pushes do —
+   * so the feed covers the service area and lets partners opt in.
+   */
+  public AvailableTasks listAvailableTasks(UUID helperId) {
     var profileOpt = helperProfiles.findById(helperId);
     if (profileOpt.isEmpty() || profileOpt.get().getKycStatus() != HelperKycStatus.APPROVED) {
-      return java.util.List.of();
+      return AvailableTasks.empty();
     }
 
     var state = presence.getHelperState(helperId);
     if (state == null || !"1".equals(state.online()) || state.lastSeenEpochMs() == null) {
-      return java.util.List.of();
+      return AvailableTasks.empty();
     }
 
     if (tasks.existsByAssignedHelperIdAndStatusIn(helperId, HELPER_ACTIVE_TASK_STATUSES)) {
-      return java.util.List.of();
+      return AvailableTasks.empty();
     }
 
     Instant now = Instant.now();
-    double radiusMeters = 3000d;
-    double latDelta = radiusMeters / 111_320d;
-    double cosLat = Math.max(0.1d, Math.abs(Math.cos(Math.toRadians(state.lat()))));
-    double lngDelta = radiusMeters / (111_320d * cosLat);
-    return tasks.findAvailableInBounds(
+    double radiusMeters = props.matching().pullFeedRadiusMeters();
+    GeoUtils.BoundingBox box = GeoUtils.boundingBox(state.lat(), state.lng(), radiusMeters);
+
+    // Bounding box narrows it in the index, then exact distance filters the corners.
+    record Candidate(TaskEntity task, double distanceMeters) {}
+    List<Candidate> nearby = tasks.findAvailableInBounds(
             TaskStatus.SEARCHING,
             helperId,
             now,
-            state.lat() - latDelta,
-            state.lat() + latDelta,
-            state.lng() - lngDelta,
-            state.lng() + lngDelta,
-            org.springframework.data.domain.PageRequest.of(0, 200))
+            box.minLat(),
+            box.maxLat(),
+            box.minLng(),
+            box.maxLng(),
+            org.springframework.data.domain.PageRequest.of(0, PULL_FEED_SCAN_LIMIT))
         .stream()
-        .filter(t -> GeoUtils.distanceMeters(t.getLat(), t.getLng(), state.lat(), state.lng()) <= 3000d)
-        .limit(50)
+        .map(t -> new Candidate(
+            t, GeoUtils.distanceMeters(t.getLat(), t.getLng(), state.lat(), state.lng())))
+        .filter(candidate -> candidate.distanceMeters() <= radiusMeters)
+        .sorted(java.util.Comparator.comparingDouble(Candidate::distanceMeters))
+        .limit(PULL_FEED_RETURN_LIMIT)
         .toList();
+
+    if (nearby.isEmpty()) {
+      return AvailableTasks.empty();
+    }
+
+    java.util.Map<UUID, Double> distanceByTask = new java.util.LinkedHashMap<>();
+    nearby.forEach(candidate -> distanceByTask.put(candidate.task().getId(), candidate.distanceMeters()));
+
+    // One matrix call for the whole page: N route calls on a 20s poll would be the
+    // most expensive thing in the app. Falls back to straight-line inside the chain.
+    java.util.Map<UUID, Integer> etaByTask = new java.util.LinkedHashMap<>();
+    if (geo != null) {
+      List<Integer> etas = geo.etaSecondsToDestination(
+          nearby.stream().map(c -> new double[] {c.task().getLat(), c.task().getLng()}).toList(),
+          state.lat(),
+          state.lng());
+      for (int i = 0; i < nearby.size() && i < etas.size(); i++) {
+        Integer etaSeconds = etas.get(i);
+        if (etaSeconds != null && etaSeconds > 0) {
+          etaByTask.put(nearby.get(i).task().getId(), Math.max(1, Math.round(etaSeconds / 60f)));
+        }
+      }
+    }
+
+    return new AvailableTasks(
+        nearby.stream().map(Candidate::task).toList(), distanceByTask, etaByTask);
+  }
+
+  /**
+   * The pull feed plus the per-task distance and ETA the partner app renders.
+   *
+   * <p>Carried alongside the entities rather than stuffed into them: distance is a
+   * property of the viewer, not of the task.
+   */
+  public record AvailableTasks(
+      List<TaskEntity> tasks,
+      java.util.Map<UUID, Double> distanceMetersByTask,
+      java.util.Map<UUID, Integer> etaMinutesByTask) {
+    public static AvailableTasks empty() {
+      return new AvailableTasks(List.of(), java.util.Map.of(), java.util.Map.of());
+    }
   }
 
   @Transactional

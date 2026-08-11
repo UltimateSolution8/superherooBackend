@@ -27,14 +27,18 @@ public class TaskChatService {
   private final UserRepository users;
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
+  private final java.util.concurrent.Executor dispatchExecutor;
 
   public TaskChatService(TaskRepository tasks, TaskChatMessageRepository messages, UserRepository users,
-      RealtimePublisher realtime, PushNotificationService pushNotifications) {
+      RealtimePublisher realtime, PushNotificationService pushNotifications,
+      @org.springframework.beans.factory.annotation.Qualifier("realtimeDispatchExecutor")
+          java.util.concurrent.Executor dispatchExecutor) {
     this.tasks = tasks;
     this.messages = messages;
     this.users = users;
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
+    this.dispatchExecutor = dispatchExecutor;
   }
 
   @Transactional(readOnly = true)
@@ -75,7 +79,9 @@ public class TaskChatService {
       final UUID finalTaskId = task.getId();
       final String finalSenderName = senderName;
       final String finalMessage = clean;
-      CompletableFuture.runAsync(() -> {
+      // Deliberately not CompletableFuture.runAsync: the common ForkJoinPool has
+      // one thread on 2 vCPU and this body does blocking FCM I/O.
+      dispatchExecutor.execute(() -> {
         try {
           pushNotifications.notifyChatMessage(finalTargetUserId, finalTaskId, finalSenderName, finalMessage);
         } catch (Exception e) {

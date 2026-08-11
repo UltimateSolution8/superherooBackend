@@ -72,4 +72,22 @@ public interface TaskOfferRepository extends JpaRepository<TaskOfferEntity, UUID
       + "and o.expiresAt > :now")
   List<UUID> findTaskIdsWithLiveOffers(
       @Param("taskIds") java.util.Collection<UUID> taskIds, @Param("now") Instant now);
+
+  /**
+   * Partners already holding {@code maxOffers} or more live offers.
+   *
+   * <p>Dispatch excluded partners on an active task but not partners mid-decision
+   * on other offers. During a burst one partner could hold five simultaneous
+   * offers, and since the app has a single offer modal each new one overwrote the
+   * last — so four tasks sat out their full TTL with a locked slot and no alert
+   * anyone had seen.
+   */
+  @Query("select o.helperId from TaskOfferEntity o where o.helperId in :helperIds "
+      + "and o.status = com.helpinminutes.api.tasks.model.TaskOfferStatus.OFFERED "
+      + "and o.expiresAt > :now "
+      + "group by o.helperId having count(o) >= :maxOffers")
+  List<UUID> findHelperIdsAtLiveOfferCap(
+      @Param("helperIds") java.util.Collection<UUID> helperIds,
+      @Param("now") Instant now,
+      @Param("maxOffers") long maxOffers);
 }

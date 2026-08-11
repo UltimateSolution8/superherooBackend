@@ -44,6 +44,22 @@ public class TaskMapper {
     }
 
     public List<TaskResponse> toResponseList(List<TaskEntity> taskEntities, boolean includeOtp) {
+        return toResponseList(taskEntities, includeOtp, Map.of(), Map.of());
+    }
+
+    /**
+     * Maps tasks with per-viewer distance and ETA attached.
+     *
+     * <p>Used by the partner's available-tasks feed. Distance is computed once by
+     * the caller (which already knows the partner's position) rather than in here,
+     * because the mapper is shared by every task view and most of them have no
+     * viewer location at all.
+     */
+    public List<TaskResponse> toResponseList(
+            List<TaskEntity> taskEntities,
+            boolean includeOtp,
+            Map<UUID, Double> distanceMetersByTask,
+            Map<UUID, Integer> etaMinutesByTask) {
         if (taskEntities == null || taskEntities.isEmpty()) {
             return Collections.emptyList();
         }
@@ -77,13 +93,16 @@ public class TaskMapper {
                 batchIdsByTask.putIfAbsent(worker.getTaskId(), worker.getBatchId()));
 
         return taskEntities.stream()
-                .map(t -> mapToResponse(t, includeOtp, userMap, buyerStats, helperStats, batchIdsByTask))
+                .map(t -> mapToResponse(t, includeOtp, userMap, buyerStats, helperStats, batchIdsByTask,
+                        distanceMetersByTask, etaMinutesByTask))
                 .collect(Collectors.toList());
     }
 
     private TaskResponse mapToResponse(TaskEntity t, boolean includeOtp, Map<UUID, UserEntity> userMap,
             Map<UUID, UserStats> buyerStatsMap, Map<UUID, UserStats> helperStatsMap,
-            Map<UUID, UUID> batchIdsByTask) {
+            Map<UUID, UUID> batchIdsByTask,
+            Map<UUID, Double> distanceMetersByTask,
+            Map<UUID, Integer> etaMinutesByTask) {
         UserEntity buyer = userMap.get(t.getBuyerId());
         UserEntity helper = userMap.get(t.getAssignedHelperId());
         UserStats buyerStats = buyerStatsMap.get(t.getBuyerId());
@@ -155,7 +174,9 @@ public class TaskMapper {
                 t.getRecurringTaskId(),
                 batchId,
                 t.getPaymentCollectionMode(),
-                t.getVerificationMode());
+                t.getVerificationMode(),
+                distanceMetersByTask.get(t.getId()),
+                etaMinutesByTask.get(t.getId()));
     }
 
     private String getAcceptLanguageHeader() {

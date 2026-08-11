@@ -71,9 +71,31 @@ public class AdminModerationService {
       }
     }
 
-    List<AdminModerationTaskDto> dtos = tasksPage.getContent().stream().map(task -> {
-      UserEntity buyer = userRepository.findById(task.getBuyerId()).orElse(null);
-      TaskAiReviewEntity aiReview = aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(task.getId()).orElse(null);
+    // Both lookups are batched ahead of the mapping loop. Doing them inside it
+    // cost two queries per row — 101 round trips for a 50-row admin page.
+    List<TaskEntity> pageTasks = tasksPage.getContent();
+
+    java.util.Set<UUID> buyerIds = pageTasks.stream()
+        .map(TaskEntity::getBuyerId)
+        .filter(java.util.Objects::nonNull)
+        .collect(java.util.stream.Collectors.toSet());
+    java.util.Map<UUID, UserEntity> buyersById = buyerIds.isEmpty()
+        ? java.util.Map.of()
+        : userRepository.findAllById(buyerIds).stream()
+            .collect(java.util.stream.Collectors.toMap(UserEntity::getId, u -> u));
+
+    List<UUID> taskIds = pageTasks.stream().map(TaskEntity::getId).toList();
+    // Ordered newest-first, so the merge function keeps the first (latest) review
+    // per task — the same row findTopByTaskIdOrderByCreatedAtDesc would return.
+    java.util.Map<UUID, TaskAiReviewEntity> latestReviewByTaskId = taskIds.isEmpty()
+        ? java.util.Map.of()
+        : aiReviewRepository.findByTaskIdInOrderByCreatedAtDesc(taskIds).stream()
+            .collect(java.util.stream.Collectors.toMap(
+                TaskAiReviewEntity::getTaskId, r -> r, (first, later) -> first));
+
+    List<AdminModerationTaskDto> dtos = pageTasks.stream().map(task -> {
+      UserEntity buyer = buyersById.get(task.getBuyerId());
+      TaskAiReviewEntity aiReview = latestReviewByTaskId.get(task.getId());
 
       List<String> flags = parseJsonList(aiReview != null ? aiReview.getFlags() : null);
       List<String> reasons = parseJsonList(aiReview != null ? aiReview.getReasons() : null);
@@ -160,7 +182,15 @@ public class AdminModerationService {
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
     boolean isFutureScheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
-    task.setStatus(isFutureScheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING); // Mark scheduled pending or searching
+    // beginSearching restarts the search clock. Setting SEARCHING directly left
+    // searchingStartedAt at creation time, so a booking held in review for longer
+    // than TASK_SEARCH_TIMEOUT_SECONDS was auto-cancelled on the very next
+    // cleanup tick — seconds after the admin released it.
+    if (isFutureScheduled) {
+      task.setStatus(TaskStatus.SCHEDULED_PENDING);
+    } else {
+      task.beginSearching(java.time.Instant.now());
+    }
     task.setPaymentCollectionMode(PaymentCollectionMode.PAY_AFTER_SERVICE); // Force pay after service for approved tasks
     taskRepository.save(task);
 
@@ -216,7 +246,11 @@ public class AdminModerationService {
     }
 
     boolean isFutureScheduled = task.getScheduledAt() != null && task.getScheduledAt().isAfter(java.time.Instant.now().plus(java.time.Duration.ofMinutes(1)));
-    task.setStatus(isFutureScheduled ? TaskStatus.SCHEDULED_PENDING : TaskStatus.SEARCHING);
+    if (isFutureScheduled) {
+      task.setStatus(TaskStatus.SCHEDULED_PENDING);
+    } else {
+      task.beginSearching(java.time.Instant.now());
+    }
     task.setPaymentCollectionMode(PaymentCollectionMode.PAY_AFTER_SERVICE); // Force pay after service for approved tasks
     taskRepository.save(task);
 

@@ -278,7 +278,11 @@ public class TaskController {
     if (principal.role() != UserRole.HELPER) {
       throw new ForbiddenException("Only helpers can view available tasks");
     }
-    return taskMapper.toResponseList(tasks.listAvailableTasks(principal.userId()), false);
+    var available = tasks.listAvailableTasks(principal.userId());
+    // Distance and ETA come through as response fields: the partner app sorts and
+    // labels by them, and without them every polled job showed as "0.0 km".
+    return taskMapper.toResponseList(
+        available.tasks(), false, available.distanceMetersByTask(), available.etaMinutesByTask());
   }
 
   @GetMapping("/mine")

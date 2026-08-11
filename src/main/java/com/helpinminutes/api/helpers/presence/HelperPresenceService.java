@@ -23,8 +23,25 @@ import org.springframework.stereotype.Service;
 @Service
 public class HelperPresenceService {
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(HelperPresenceService.class);
-  private static final String ONLINE_HELPERS_KEY = "him:online:helpers";
   private static final String ONLINE_HELPERS_GEO_KEY = "him:online:helpers:geo";
+
+  /**
+   * How long a partner's state hash survives without a heartbeat.
+   *
+   * <p>Comfortably longer than the staleness threshold used for matching, so an
+   * expired hash means "gone", not "briefly quiet".
+   */
+  private static final Duration STATE_TTL = Duration.ofMinutes(10);
+
+  /**
+   * TTL on the per-cell membership sets.
+   *
+   * <p>These previously had none, so every H3 cell any partner ever passed through
+   * left a permanent key behind — unbounded key growth on a per-command-billed
+   * store. They are only a cold-start fallback, so expiry is harmless: the GEO index
+   * is authoritative.
+   */
+  private static final Duration H3_SET_TTL = Duration.ofMinutes(30);
   private final StringRedisTemplate redis;
   private final H3Core h3;
   private final AppProperties props;
@@ -35,12 +52,77 @@ public class HelperPresenceService {
     this.props = props;
   }
 
-  public void setOnline(UUID helperId, double lat, double lng) {
+  /**
+   * Claims the right to run a go-online dispatch sweep for this helper, at most
+   * once per {@code cooldown}.
+   *
+   * <p>Backed by SET NX EX, so the claim is atomic across instances and expires on
+   * its own — nothing has to release it. If Redis is unavailable the caller is
+   * allowed through: suppressing dispatch is worse than occasionally repeating it.
+   *
+   * @return true if the caller should proceed with the sweep
+   */
+  public boolean tryAcquireGoOnlineDispatchLock(UUID helperId, Duration cooldown) {
+    try {
+      Boolean acquired = redis.opsForValue()
+          .setIfAbsent("him:goonline:dispatch:" + helperId, "1", cooldown);
+      return Boolean.TRUE.equals(acquired);
+    } catch (Exception e) {
+      log.warn("Go-online dispatch lock unavailable for helper {}: {}", helperId, e.getMessage());
+      return true;
+    }
+  }
+
+  /**
+   * Result of a presence write.
+   *
+   * @param wasOffline true when this heartbeat flipped the partner from offline to
+   *     online. Callers use it to run once-per-session work — the go-online
+   *     dispatch sweep — instead of on every heartbeat.
+   * @param cellChanged true when the partner moved into a different H3 cell
+   */
+  public record PresenceUpdate(boolean wasOffline, boolean cellChanged) {}
+
+  /**
+   * Writes a partner's heartbeat.
+   *
+   * <h2>Command budget</h2>
+   *
+   * Upstash bills per command, not per round trip, and this is the single hottest
+   * path in the system — every online partner, every heartbeat, all day. It used to
+   * cost 7–8 billable commands; a stationary partner now costs 4:
+   *
+   * <pre>
+   *   HMGET online,h3           1   (needed: we cannot know the previous cell otherwise)
+   *   HMSET state               1
+   *   PEXPIRE state             1
+   *   GEOADD geo index          1
+   *   SREM/SADD h3 sets         0   only when the cell actually changed
+   * </pre>
+   *
+   * Three specific savings, all of them removals rather than tricks:
+   *
+   * <ul>
+   *   <li>The {@code him:online:helpers} SADD is gone. That set was written on every
+   *       heartbeat and read by exactly one method, which had no callers anywhere.
+   *   <li>The h3 set membership is only rewritten when the cell changes. Re-adding
+   *       the same member to the same set every 15s was a billable no-op, and a
+   *       stationary partner is the common case.
+   *   <li>The read is one HMGET of two fields rather than a HGET plus a separate
+   *       transition check, and it is what lets the caller skip the go-online
+   *       dispatch lock (another command) on non-transitions.
+   * </ul>
+   */
+  public PresenceUpdate setOnline(UUID helperId, double lat, double lng) {
     long h3Index = h3.latLngToCell(lat, lng, props.matching().h3Resolution());
     String newCell = Long.toUnsignedString(h3Index);
 
     String stateKey = keyHelperState(helperId);
-    String prevCell = redis.opsForHash().get(stateKey, "h3") instanceof String s ? s : null;
+    List<Object> previous = redis.opsForHash().multiGet(stateKey, List.of("online", "h3"));
+    String prevOnline = previous != null && previous.size() > 0 && previous.get(0) instanceof String s ? s : null;
+    String prevCell = previous != null && previous.size() > 1 && previous.get(1) instanceof String s ? s : null;
+    boolean wasOffline = !"1".equals(prevOnline);
+    boolean cellChanged = prevCell == null || prevCell.isBlank() || !prevCell.equals(newCell);
 
     String member = helperId.toString();
     Map<byte[], byte[]> state = new LinkedHashMap<>();
@@ -50,19 +132,25 @@ public class HelperPresenceService {
     state.put(bytes("online"), bytes("1"));
     state.put(bytes("lastSeenEpochMs"), bytes(Long.toString(Instant.now().toEpochMilli())));
 
-    // Upstash is network-remote in production. Pipeline the heartbeat update so
-    // one online toggle does not incur a separate network round trip per field.
+    // Upstash is network-remote in production. Pipeline the write so one heartbeat
+    // is a single round trip even though it is several commands.
     redis.executePipelined((RedisCallback<Object>) connection -> {
-      if (prevCell != null && !prevCell.isBlank() && !prevCell.equals(newCell)) {
-        connection.setCommands().sRem(bytes(keyOnlineH3(prevCell)), bytes(member));
-      }
       connection.hashCommands().hMSet(bytes(stateKey), state);
-      connection.keyCommands().pExpire(bytes(stateKey), Duration.ofMinutes(10).toMillis());
-      connection.setCommands().sAdd(bytes(keyOnlineH3(newCell)), bytes(member));
-      connection.setCommands().sAdd(bytes(ONLINE_HELPERS_KEY), bytes(member));
+      connection.keyCommands().pExpire(bytes(stateKey), STATE_TTL.toMillis());
       connection.geoCommands().geoAdd(bytes(ONLINE_HELPERS_GEO_KEY), new Point(lng, lat), bytes(member));
+      if (cellChanged) {
+        if (prevCell != null && !prevCell.isBlank()) {
+          connection.setCommands().sRem(bytes(keyOnlineH3(prevCell)), bytes(member));
+        }
+        connection.setCommands().sAdd(bytes(keyOnlineH3(newCell)), bytes(member));
+        // The h3 sets exist only as a cold-start fallback for sessions that predate
+        // the GEO index, so they are allowed to expire. Without a TTL they accrued
+        // one permanent key per cell any partner ever passed through.
+        connection.keyCommands().pExpire(bytes(keyOnlineH3(newCell)), H3_SET_TTL.toMillis());
+      }
       return null;
     });
+    return new PresenceUpdate(wasOffline, cellChanged);
   }
 
   public void setOffline(UUID helperId) {
@@ -77,45 +165,10 @@ public class HelperPresenceService {
         connection.setCommands().sRem(bytes(keyOnlineH3(prevCell)), bytes(member));
       }
       connection.hashCommands().hMSet(bytes(stateKey), state);
-      connection.keyCommands().pExpire(bytes(stateKey), Duration.ofMinutes(10).toMillis());
-      connection.setCommands().sRem(bytes(ONLINE_HELPERS_KEY), bytes(member));
+      connection.keyCommands().pExpire(bytes(stateKey), STATE_TTL.toMillis());
       connection.zSetCommands().zRem(bytes(ONLINE_HELPERS_GEO_KEY), bytes(member));
       return null;
     });
-  }
-
-  private boolean isHelperActive(UUID helperId) {
-    String stateKey = keyHelperState(helperId);
-    List<Object> fields = redis.opsForHash().multiGet(stateKey, List.of("online", "lastSeenEpochMs", "h3"));
-    if (fields == null || fields.size() < 3) {
-      return false;
-    }
-    String online = fields.get(0) instanceof String s ? s : null;
-    String lastSeenStr = fields.get(1) instanceof String s ? s : null;
-    String h3Cell = fields.get(2) instanceof String s ? s : null;
-
-    if (!"1".equals(online) || lastSeenStr == null) {
-      return false;
-    }
-
-    try {
-      long lastSeen = Long.parseLong(lastSeenStr);
-      long now = Instant.now().toEpochMilli();
-      if (now - lastSeen < 300_000) { // 5 minutes activity threshold
-        return true;
-      }
-    } catch (NumberFormatException e) {
-      // ignore
-    }
-
-    // Helper is stale/inactive. Clean up from sets.
-    redis.opsForSet().remove(ONLINE_HELPERS_KEY, helperId.toString());
-    redis.opsForGeo().remove(ONLINE_HELPERS_GEO_KEY, helperId.toString());
-    if (h3Cell != null && !h3Cell.isBlank()) {
-      redis.opsForSet().remove(keyOnlineH3(h3Cell), helperId.toString());
-    }
-    redis.opsForHash().put(stateKey, "online", "0");
-    return false;
   }
 
   public HelperState getHelperState(UUID helperId) {
@@ -210,6 +263,7 @@ public class HelperPresenceService {
 
     Map<UUID, HelperState> active = new LinkedHashMap<>();
     List<String> staleMembers = new java.util.ArrayList<>();
+    Map<String, String> staleCells = new LinkedHashMap<>();
     for (int i = 0; i < memberIds.size(); i++) {
       UUID helperId = safeUuid(memberIds.get(i));
       HelperState state = helperId == null || i >= stateRows.size() ? null : stateFromPipeline(stateRows.get(i));
@@ -217,10 +271,23 @@ public class HelperPresenceService {
         active.put(helperId, state);
       } else {
         staleMembers.add(memberIds.get(i));
+        if (state != null && state.h3Cell() != null && !state.h3Cell().isBlank()) {
+          staleCells.put(memberIds.get(i), state.h3Cell());
+        }
       }
     }
     if (!staleMembers.isEmpty()) {
-      redis.opsForGeo().remove(ONLINE_HELPERS_GEO_KEY, staleMembers.toArray(String[]::new));
+      // Self-heal every index the member appears in, not just the GEO one. Removing
+      // it from GEO alone left the h3 sets holding partners who force-quit without
+      // calling setOffline — permanently, since nothing else swept them.
+      redis.executePipelined((RedisCallback<Object>) connection -> {
+        connection.zSetCommands().zRem(
+            bytes(ONLINE_HELPERS_GEO_KEY),
+            staleMembers.stream().map(this::bytes).toArray(byte[][]::new));
+        staleCells.forEach((member, cell) ->
+            connection.setCommands().sRem(bytes(keyOnlineH3(cell)), bytes(member)));
+        return null;
+      });
     }
     return active;
   }
@@ -301,24 +368,6 @@ public class HelperPresenceService {
 
   private byte[] bytes(String value) {
     return redis.getStringSerializer().serialize(value);
-  }
-
-  public Set<UUID> getOnlineHelpers() {
-    Set<String> helperIds = redis.opsForSet().members(ONLINE_HELPERS_KEY);
-    if (helperIds == null || helperIds.isEmpty()) {
-      return Set.of();
-    }
-    return helperIds.stream()
-        .map(raw -> {
-          try {
-            return UUID.fromString(raw);
-          } catch (Exception ignored) {
-            return null;
-          }
-        })
-        .filter(java.util.Objects::nonNull)
-        .filter(this::isHelperActive)
-        .collect(Collectors.toSet());
   }
 
   public record HelperState(

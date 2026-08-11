@@ -67,6 +67,16 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-redis</artifactId>
     </dependency>
+    <!--
+      Required for spring.data.redis.lettuce.pool.*. Ships disabled (see
+      application.yml): Lettuce multiplexes over a single thread-safe connection,
+      so pooling only pays off for blocking/transactional commands this codebase
+      does not use. Present so the pool can be enabled without a release.
+    -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-pool2</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>

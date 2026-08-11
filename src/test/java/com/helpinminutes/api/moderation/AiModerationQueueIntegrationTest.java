@@ -59,7 +59,11 @@ class AiModerationQueueIntegrationTest {
     auditLogRepository = mock(TaskAuditLogRepository.class);
     userRepository = mock(UserRepository.class);
     llmClient = mock(LlmClient.class);
-    decisionEngine = mock(ModerationDecisionEngine.class);
+    // A real decision engine and screener: the point of this test is the whole
+    // pipeline from task text to admin queue row, and stubbing the engine would skip
+    // the tier decision that determines whether a queue row exists at all.
+    decisionEngine = new ModerationDecisionEngine(
+        new com.helpinminutes.api.tasks.service.TaskModerationService());
     matchingService = mock(MatchingService.class);
     realtime = mock(RealtimePublisher.class);
     pushNotifications = mock(PushNotificationService.class);
@@ -76,7 +80,8 @@ class AiModerationQueueIntegrationTest {
         realtime,
         pushNotifications,
         objectMapper,
-        meterRegistry
+        meterRegistry,
+        new com.helpinminutes.api.moderation.service.ModerationResultCache(null, objectMapper)
     );
 
     adminModerationService = new AdminModerationService(
@@ -111,20 +116,19 @@ class AiModerationQueueIntegrationTest {
 
     when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
     when(userRepository.findById(buyerId)).thenReturn(Optional.of(buyer));
-    when(decisionEngine.runLocalPreCheck(any(), any())).thenReturn(List.of("STATIC_CHECK_FLAG: phone number detected"));
-
+    // The moderation queue batches buyer lookups across the page.
+    when(userRepository.findAllById(anyIterable())).thenReturn(List.of(buyer));
     AIReviewResult aiResult = new AIReviewResult(
         "REVIEW", 70, 85, 45,
         List.of("Phone number leak detected"),
         List.of("CONTACT_LEAK"),
         true,
         "{\"status\":\"REVIEW\",\"flags\":[\"CONTACT_LEAK\"]}",
-        "moonshotai/kimi-k3-free",
+        "gemini-2.5-flash-lite",
         115L
     );
 
     when(llmClient.evaluateTask(any(TaskModerationPayload.class))).thenReturn(aiResult);
-    when(decisionEngine.determineStatus(eq(aiResult), anyList())).thenReturn(TaskStatus.ADMIN_REVIEW);
 
     // 2. Fire TaskCreatedEvent
     TaskCreatedEvent event = new TaskCreatedEvent(taskId, true);
@@ -145,6 +149,8 @@ class AiModerationQueueIntegrationTest {
     // 5. Query Admin Moderation Queue
     when(taskRepository.findByStatus(eq(TaskStatus.ADMIN_REVIEW), any())).thenReturn(new PageImpl<>(List.of(task)));
     when(aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(taskId)).thenReturn(Optional.of(savedReview));
+    when(aiReviewRepository.findByTaskIdInOrderByCreatedAtDesc(anyCollection()))
+        .thenReturn(List.of(savedReview));
 
     Page<AdminModerationTaskDto> queuePage = adminModerationService.getModerationQueue("ADMIN_REVIEW", PageRequest.of(0, 10));
 
@@ -157,7 +163,7 @@ class AiModerationQueueIntegrationTest {
     assertEquals("+919876543210", item.customerPhone());
     assertEquals("ADMIN_REVIEW", item.status());
     assertEquals(85, item.riskScore());
-    assertEquals("moonshotai/kimi-k3-free", item.modelUsed());
+    assertEquals("gemini-2.5-flash-lite", item.modelUsed());
     assertTrue(item.flags().contains("CONTACT_LEAK"));
 
     // 6. Test Admin Task Detail Retrieval
@@ -166,7 +172,7 @@ class AiModerationQueueIntegrationTest {
     assertEquals(taskId, detail.taskId());
     assertEquals("John Doe", detail.customerName());
     assertEquals(85, detail.riskScore());
-    assertEquals("moonshotai/kimi-k3-free", detail.aiModel());
+    assertEquals("gemini-2.5-flash-lite", detail.aiModel());
 
     // 7. Test Admin Approval Action
     adminModerationService.approveTask(taskId, "support_admin", "Cleaned up by admin");

@@ -27,7 +27,14 @@ public class GeminiLlmClient implements LlmClient {
   @Value("${AI_MODERATION_GEMINI_API_KEY:}")
   private String geminiApiKey;
 
-  @Value("${ai.moderation.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent}")
+  // Flash-Lite is the cheapest current model ($0.10/$0.40 per million tokens) and
+  // this is a short classification task, not a reasoning one. At ~800 in / ~80 out
+  // that is roughly a paisa per escalated task.
+  //
+  // Deliberately the PAID tier: the free tier caps at 1,000 requests a day and its
+  // content may be used to improve the provider's products, which is wrong for text
+  // citizens wrote about their homes.
+  @Value("${ai.moderation.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent}")
   private String geminiEndpoint;
 
   @Value("${AI_MODERATION_GROQ_API_KEY:}")
@@ -39,7 +46,9 @@ public class GeminiLlmClient implements LlmClient {
   @Value("${ai.moderation.groq.model:llama-3.1-8b-instant}")
   private String groqModel;
 
-  @Value("${ai.moderation.timeout-seconds:8}")
+  // 8s was too long to sit on a request thread; the cascade means only the
+  // ambiguous minority waits at all, but that minority still should not wait long.
+  @Value("${ai.moderation.timeout-seconds:4}")
   private int timeoutSeconds;
 
   private final PromptBuilder promptBuilder;
@@ -61,44 +70,44 @@ public class GeminiLlmClient implements LlmClient {
     String userPrompt = promptBuilder.buildUserPrompt(payload);
 
     // 1. Try Gemini
-    try {
-      log.info("Evaluating task {} using primary Gemini API", payload.taskId());
-      AIReviewResult result = callGemini(systemPrompt, userPrompt, startTime);
-      if (result != null) {
-        log.info("Gemini approved/evaluated task {} successfully", payload.taskId());
-        return result;
+    if (geminiConfigured()) {
+      try {
+        AIReviewResult result = callGemini(systemPrompt, userPrompt, startTime);
+        if (result != null) {
+          return result;
+        }
+      } catch (Exception e) {
+        log.warn("Gemini failed for task {}: {}. Trying Groq...", payload.taskId(), e.getMessage());
       }
-    } catch (Exception e) {
-      log.warn("Gemini API failed for task {}: {}. Triggering Groq fallback...", payload.taskId(), e.getMessage());
     }
 
     // 2. Try Groq fallback
-    try {
-      log.info("Evaluating task {} using fallback Groq API with model {}", payload.taskId(), groqModel);
-      AIReviewResult fallbackResult = callGroq(systemPrompt, userPrompt, startTime);
-      if (fallbackResult != null) {
-        log.info("Groq evaluated task {} successfully", payload.taskId());
-        return fallbackResult;
+    if (groqConfigured()) {
+      try {
+        AIReviewResult fallbackResult = callGroq(systemPrompt, userPrompt, startTime);
+        if (fallbackResult != null) {
+          return fallbackResult;
+        }
+      } catch (Exception e) {
+        log.error("Groq fallback failed for task {}: {}", payload.taskId(), e.getMessage());
       }
-    } catch (Exception e) {
-      log.error("Groq fallback failed for task {}: {}", payload.taskId(), e.getMessage());
     }
 
-    // 3. Local fallback: static moderation already ran before the LLM call.
-    // If model providers are down, keep normal launch bookings moving.
+    // 3. Both providers unreachable.
+    //
+    // This used to fabricate APPROVED with confidence 85 and riskScore 10, which
+    // sailed straight through the decision engine's auto-approve branch. So a
+    // provider outage silently auto-approved every ambiguous task — and because
+    // evaluateTask never threw, the enclosing fail-closed handler could not see it.
+    //
+    // Returning null instead says "no verdict", and the decision engine routes an
+    // escalated task with no verdict to a human. Only text that local screening
+    // already found clean is approved without a model, and that decision is made
+    // before we ever get here.
     long duration = System.currentTimeMillis() - startTime;
-    return new AIReviewResult(
-        "APPROVED",
-        85,
-        10,
-        80,
-        List.of("LLM services failed or timed out; approved by local static moderation fallback"),
-        List.of(),
-        false,
-        "{\"fallback\": \"local_static_moderation\"}",
-        "fallback-fail-safe",
-        duration
-    );
+    log.error("No moderation verdict available for task {} after {}ms — routing to review",
+        payload.taskId(), duration);
+    return null;
   }
 
   private AIReviewResult callGemini(String systemPrompt, String userPrompt, long startTime) throws Exception {
@@ -107,8 +116,15 @@ public class GeminiLlmClient implements LlmClient {
     Map<String, Object> contents = Map.of(
         "parts", List.of(Map.of("text", combinedPrompt))
     );
+    // temperature 0 for a classification task — there is nothing creative to do here,
+    // and a deterministic verdict is what makes the result cache meaningful.
+    //
+    // maxOutputTokens was previously unset on this path, so the response length (and
+    // the bill) was unbounded. 384 is comfortably more than the JSON schema needs.
     Map<String, Object> generationConfig = Map.of(
-        "responseMimeType", "application/json"
+        "responseMimeType", "application/json",
+        "temperature", 0,
+        "maxOutputTokens", 384
     );
     Map<String, Object> requestBody = Map.of(
         "contents", List.of(contents),
@@ -140,7 +156,7 @@ public class GeminiLlmClient implements LlmClient {
     String content = textNode.asText();
     long duration = System.currentTimeMillis() - startTime;
 
-    return parseAiJson(content, response.body(), "gemini-flash-latest", duration);
+    return parseAiJson(content, response.body(), geminiModelName(), duration);
   }
 
   private AIReviewResult callGroq(String systemPrompt, String userPrompt, long startTime) throws Exception {
@@ -198,11 +214,16 @@ public class GeminiLlmClient implements LlmClient {
 
       JsonNode node = objectMapper.readTree(cleaned);
 
-      String status = node.path("status").asText("REVIEW").toUpperCase();
+      // Normalised to APPROVED / REVIEW / BLOCK. Models write "APPROVE" and
+      // "APPROVED" interchangeably, and the downstream comparison is exact — an
+      // unnormalised "APPROVE" would default requiresAdminReview to true and quietly
+      // route every approved task to a human.
+      String status = normalizeStatus(node.path("status").asText("REVIEW"));
       int confidence = node.path("confidence").asInt(80);
       int riskScore = node.path("riskScore").asInt(20);
       int qualityScore = node.path("qualityScore").asInt(80);
-      boolean requiresAdminReview = node.path("requiresAdminReview").asBoolean(!"APPROVED".equals(status));
+      boolean requiresAdminReview =
+          node.path("requiresAdminReview").asBoolean("REVIEW".equals(status));
 
       List<String> reasons = new ArrayList<>();
       if (node.has("reasons") && node.path("reasons").isArray()) {
@@ -228,6 +249,7 @@ public class GeminiLlmClient implements LlmClient {
       );
     } catch (Exception e) {
       log.error("Failed to parse AI JSON content: {}. Error: {}", content, e.getMessage());
+      // Fail closed. An unreadable verdict is not an approval.
       return new AIReviewResult(
           "REVIEW",
           60,
@@ -243,21 +265,53 @@ public class GeminiLlmClient implements LlmClient {
     }
   }
 
+  /**
+   * Canonicalises the model's status word.
+   *
+   * <p>Anything unrecognised becomes REVIEW: an unexpected value means we do not know
+   * what the model decided, and that is not grounds for approval.
+   */
+  private static String normalizeStatus(String raw) {
+    String upper = raw == null ? "" : raw.trim().toUpperCase(java.util.Locale.ROOT);
+    return switch (upper) {
+      case "APPROVE", "APPROVED", "OK", "ALLOW" -> "APPROVED";
+      case "BLOCK", "BLOCKED", "REJECT", "REJECTED", "DENY" -> "BLOCK";
+      default -> "REVIEW";
+    };
+  }
+
+  /**
+   * The configured key, or blank when the provider is not set up.
+   *
+   * <p>Both keys used to be embedded here as split string literals — an obvious
+   * attempt to get past secret scanning — and were used whenever the environment
+   * variable was empty, which means production was very likely running on them. Both
+   * must be treated as compromised and rotated. A missing key now disables the
+   * provider rather than silently falling back to a shared one; see
+   * {@code coding-standards.md}: "A missing secret should fail startup, not fall back
+   * to something."
+   */
   private String getGeminiApiKey() {
-    if (geminiApiKey != null && !geminiApiKey.isBlank()) {
-      return geminiApiKey;
-    }
-    String part1 = "AQ.Ab8RN6LSF";
-    String part2 = "UET0USPbpkeBBSQNZ9o-klCZHKvbjiWXXnX8WeeAw";
-    return part1 + part2;
+    return geminiApiKey == null ? "" : geminiApiKey.trim();
   }
 
   private String getGroqApiKey() {
-    if (groqApiKey != null && !groqApiKey.isBlank()) {
-      return groqApiKey;
-    }
-    String part1 = "gsk_ECqUZUasS0";
-    String part2 = "pWgAPZuZ2XWGdyb3FY3tPlrX0Ds5FtaE6JkyFLvIxt";
-    return part1 + part2;
+    return groqApiKey == null ? "" : groqApiKey.trim();
+  }
+
+  /** Model name for the audit row, derived from the configured endpoint. */
+  private String geminiModelName() {
+    int start = geminiEndpoint.lastIndexOf("/models/");
+    int end = geminiEndpoint.lastIndexOf(":generateContent");
+    if (start < 0 || end < 0 || end <= start) return "gemini";
+    return geminiEndpoint.substring(start + "/models/".length(), end);
+  }
+
+  private boolean geminiConfigured() {
+    return !getGeminiApiKey().isBlank();
+  }
+
+  private boolean groqConfigured() {
+    return !getGroqApiKey().isBlank();
   }
 }

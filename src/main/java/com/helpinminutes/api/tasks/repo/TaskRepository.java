@@ -74,15 +74,20 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
             @Param("helperIds") Collection<UUID> helperIds,
             @Param("statuses") Collection<TaskStatus> statuses);
 
+    /**
+     * Tasks that have been SEARCHING since before {@code cutoff}.
+     *
+     * <p>Keyed off {@code searchingStartedAt}, not {@code createdAt}: a booking
+     * released from ADMIN_REVIEW two hours after creation was instantly past a
+     * created_at-based cutoff and got cancelled on the next cleanup tick.
+     * {@code coalesce} covers rows written before V61 backfilled the column.
+     */
     @Query("""
             select t from TaskEntity t
             where t.status = :status
               and t.assignedHelperId is null
-              and (
-                    (t.scheduledAt is null and t.createdAt <= :cutoff)
-                 or (t.scheduledAt is not null and t.scheduledAt <= :cutoff)
-              )
-            order by t.createdAt asc
+              and coalesce(t.searchingStartedAt, t.scheduledAt, t.createdAt) <= :cutoff
+            order by coalesce(t.searchingStartedAt, t.scheduledAt, t.createdAt) asc
             """)
     java.util.List<TaskEntity> findTimedOutSearchingTasks(
             @Param("status") TaskStatus status,

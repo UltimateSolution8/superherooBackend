@@ -1,5 +1,6 @@
 package com.helpinminutes.api.tasks.service;
 
+import com.helpinminutes.api.common.SchedulerLock;
 import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
@@ -14,12 +15,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class TaskScheduleDispatchJob {
   private static final Logger log = LoggerFactory.getLogger(TaskScheduleDispatchJob.class);
 
+  private final SchedulerLock schedulerLock;
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
   private final MatchingService matching;
@@ -27,11 +28,13 @@ public class TaskScheduleDispatchJob {
   private final PushNotificationService pushNotifications;
 
   public TaskScheduleDispatchJob(
+      SchedulerLock schedulerLock,
       TaskRepository tasks,
       TaskOfferRepository offers,
       MatchingService matching,
       RealtimePublisher realtime,
       PushNotificationService pushNotifications) {
+    this.schedulerLock = schedulerLock;
     this.tasks = tasks;
     this.offers = offers;
     this.matching = matching;
@@ -40,8 +43,16 @@ public class TaskScheduleDispatchJob {
   }
 
   @Scheduled(fixedDelayString = "${TASK_SCHEDULE_DISPATCH_MS:60000}")
-  @Transactional
   public void dispatchScheduledTasks() {
+    // Serialised across instances like every other scheduled job. Two runs would
+    // flip the same SCHEDULED_PENDING task to SEARCHING and dispatch it twice;
+    // the row lock in dispatchOffers makes that benign but it doubles the
+    // buyer's activation push and the Redis command spend.
+    schedulerLock.runExclusively("tasks.schedule-dispatch", this::runDispatch);
+  }
+
+  /** Transaction is provided by SchedulerLock; see the note there. */
+  public void runDispatch() {
     Instant now = Instant.now();
     List<TaskEntity> due = tasks.findTop50ByStatusAndScheduledAtBeforeAndAssignedHelperIdIsNullOrderByScheduledAtAsc(
         TaskStatus.SCHEDULED_PENDING,
@@ -57,7 +68,9 @@ public class TaskScheduleDispatchJob {
         continue;
       }
       try {
-        task.setStatus(TaskStatus.SEARCHING);
+        // Starts a fresh search window: a scheduled task activating hours after
+        // it was booked must not inherit a createdAt-based clock.
+        task.beginSearching(now);
         tasks.save(task);
 
         try {

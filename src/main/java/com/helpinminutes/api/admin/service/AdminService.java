@@ -37,6 +37,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AdminService {
+
+  /**
+   * Ceiling on ids accepted by a bulk endpoint. These run in one transaction and
+   * previously had no cap at all, so a 10,000-element array held a database
+   * connection open for 20,000 statements.
+   */
+  private static final int BULK_MAX_ITEMS = 200;
+
   private final HelperProfileRepository helperProfiles;
   private final UserRepository users;
   private final PasswordEncoder passwordEncoder;
@@ -70,7 +78,7 @@ public class AdminService {
     Map<UUID, HelperPayoutAccountEntity> payoutByHelperId = new HashMap<>();
     if (!userIds.isEmpty()) {
       users.findAllById(userIds).forEach(u -> userById.put(u.getId(), u));
-      payoutAccounts.findByHelperIdInAndProvider(userIds, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
+      payoutAccounts.findByHelperIdInAndProviderAndCurrentTrue(userIds, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
           .forEach(account -> payoutByHelperId.put(account.getHelperId(), account));
     }
     responses.addAll(pending.stream()
@@ -184,24 +192,32 @@ public class AdminService {
     if (userIds == null || userIds.isEmpty()) {
       throw new BadRequestException("At least one user id is required");
     }
+    requireBulkSizeWithinLimit(userIds.size());
     UserStatus nextStatus = parseStatusOrDefault(statusRaw, null);
     if (nextStatus == null) {
       throw new BadRequestException("Invalid status");
     }
     List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
     int success = 0;
-    for (UUID userId : new LinkedHashSet<>(userIds)) {
+    LinkedHashSet<UUID> distinctIds = new LinkedHashSet<>(userIds);
+    Map<UUID, UserEntity> byId = loadUsersById(distinctIds);
+    for (UUID userId : distinctIds) {
       if (userId == null) {
         failures.add(new AdminBulkOperationFailure("missing-user-id", "Missing user id"));
         continue;
       }
       try {
-        UserEntity u = users.findById(userId).orElseThrow(() -> new NotFoundException("User not found"));
+        UserEntity u = byId.get(userId);
+        if (u == null) {
+          throw new NotFoundException("User not found");
+        }
         if (u.getRole() != role) {
           throw new BadRequestException("User role mismatch");
         }
         u.setStatus(nextStatus);
-        users.save(u);
+        // No explicit save: these are managed entities inside a @Transactional
+        // method, so dirty checking flushes them as one batched UPDATE. Calling
+        // save() here forced a select-before-update per row.
         success++;
       } catch (Exception ex) {
         failures.add(new AdminBulkOperationFailure(userId.toString(), sanitizeFailureMessage(ex, "Update failed")));
@@ -216,20 +232,25 @@ public class AdminService {
       throw new BadRequestException("At least one buyer id is required");
     }
 
+    requireBulkSizeWithinLimit(buyerIds.size());
     List<AdminBulkOperationFailure> failures = new java.util.ArrayList<>();
     int success = 0;
-    for (UUID buyerId : new LinkedHashSet<>(buyerIds)) {
+    LinkedHashSet<UUID> distinctIds = new LinkedHashSet<>(buyerIds);
+    Map<UUID, UserEntity> byId = loadUsersById(distinctIds);
+    for (UUID buyerId : distinctIds) {
       if (buyerId == null) {
         failures.add(new AdminBulkOperationFailure("missing-buyer-id", "Missing buyer id"));
         continue;
       }
       try {
-        UserEntity u = users.findById(buyerId).orElseThrow(() -> new NotFoundException("Buyer not found"));
+        UserEntity u = byId.get(buyerId);
+        if (u == null) {
+          throw new NotFoundException("Buyer not found");
+        }
         if (u.getRole() != UserRole.BUYER) {
           throw new BadRequestException("User role mismatch");
         }
         u.setBulkCsvEnabled(enabled);
-        users.save(u);
         success++;
       } catch (Exception ex) {
         failures.add(new AdminBulkOperationFailure(buyerId.toString(), sanitizeFailureMessage(ex, "Update failed")));
@@ -243,6 +264,7 @@ public class AdminService {
     if (helperIds == null || helperIds.isEmpty()) {
       throw new BadRequestException("At least one helper id is required");
     }
+    requireBulkSizeWithinLimit(helperIds.size());
     String action = actionRaw == null ? "" : actionRaw.trim().toUpperCase(Locale.ROOT);
     if (!"APPROVE".equals(action) && !"REJECT".equals(action) && !"REOPEN".equals(action)) {
       throw new BadRequestException("Invalid action");
@@ -268,6 +290,25 @@ public class AdminService {
       }
     }
     return new AdminBulkOperationResponse(helperIds.size(), success, failures.size(), failures);
+  }
+
+  private void requireBulkSizeWithinLimit(int size) {
+    if (size > BULK_MAX_ITEMS) {
+      throw new BadRequestException("At most " + BULK_MAX_ITEMS + " ids per request");
+    }
+  }
+
+  /**
+   * Single batched read for a bulk operation. Returns managed entities, so
+   * mutations inside the caller's transaction still flush via dirty checking.
+   */
+  private Map<UUID, UserEntity> loadUsersById(java.util.Collection<UUID> ids) {
+    List<UUID> present = ids.stream().filter(java.util.Objects::nonNull).toList();
+    if (present.isEmpty()) {
+      return Map.of();
+    }
+    return users.findAllById(present).stream()
+        .collect(java.util.stream.Collectors.toMap(UserEntity::getId, u -> u));
   }
 
   public List<AdminManagedUserResponse> listUsersByRole(UserRole role) {

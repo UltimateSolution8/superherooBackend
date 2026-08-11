@@ -43,6 +43,9 @@ public class ReportService {
   private static final Logger log = LoggerFactory.getLogger(ReportService.class);
   private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneId.of("Asia/Kolkata"));
 
+  /** Cap on rows materialised for the subscription report item list. */
+  private static final int SUBSCRIPTION_REPORT_MAX_ITEMS = 500;
+
   @PersistenceContext
   private EntityManager entityManager;
 
@@ -86,12 +89,19 @@ public class ReportService {
   }
 
   @Transactional(readOnly = true)
-  @Cacheable(value = "reports", key = "'master:' + #start + ':' + #end")
+  // Both bounds are truncated to the hour. Keying on the raw Instants meant a
+  // "now"-relative dashboard window produced a distinct key on every load, so
+  // the cache could only ever miss while still writing an entry each time.
+  @Cacheable(
+      value = "reports",
+      key = "'master:' + #start.truncatedTo(T(java.time.temporal.ChronoUnit).HOURS)"
+          + " + ':' + #end.truncatedTo(T(java.time.temporal.ChronoUnit).HOURS)")
   public MasterConsolidatedResponse getMasterConsolidatedReport(Instant start, Instant end) {
+    // An empty window reports zero. There used to be a `if (isEmpty()) findAll()`
+    // fallback here, which meant a quiet date range loaded the entire tasks table
+    // into heap and aggregated it in Java — the one query in the codebase that
+    // could reliably OOM the JVM, triggered by an ordinary admin filter.
     List<TaskEntity> periodTasks = taskRepo.findAllByCreatedAtBetween(start, end);
-    if (periodTasks.isEmpty()) {
-      periodTasks = taskRepo.findAll();
-    }
 
     long totalGmv = periodTasks.stream()
         .filter(t -> t.getStatus() == TaskStatus.COMPLETED)
@@ -177,10 +187,9 @@ public class ReportService {
 
   @Transactional(readOnly = true)
   public BookingReportResponse getBookingReport(Instant start, Instant end, String statusFilter, String serviceFilter, String locationFilter) {
+    // See getMasterConsolidatedReport: the removed findAll() fallback turned an
+    // empty result window into a full-table load.
     List<TaskEntity> tasks = taskRepo.findAllByCreatedAtBetween(start, end);
-    if (tasks.isEmpty()) {
-      tasks = taskRepo.findAll();
-    }
 
     if (statusFilter != null && !statusFilter.isBlank() && !"ALL".equalsIgnoreCase(statusFilter)) {
       tasks = tasks.stream().filter(t -> statusFilter.equalsIgnoreCase(t.getStatus().name())).toList();
@@ -284,11 +293,17 @@ public class ReportService {
 
   @Transactional(readOnly = true)
   public SubscriptionReportResponse getSubscriptionReport(Instant start, Instant end) {
-    List<RecurringTaskEntity> recurringTasks = recurringTaskRepo.findAll();
-    long active = recurringTasks.size();
+    // Totals come from SQL; only a bounded page of rows is materialised for the
+    // item list. Previously this loaded the whole table to do both.
+    long active = recurringTaskRepo.count();
+    long rev = recurringTaskRepo.sumBudgetPaise();
+    List<RecurringTaskEntity> recurringTasks = recurringTaskRepo
+        .findAll(org.springframework.data.domain.PageRequest.of(
+            0, SUBSCRIPTION_REPORT_MAX_ITEMS,
+            org.springframework.data.domain.Sort.by(
+                org.springframework.data.domain.Sort.Direction.DESC, "createdAt")))
+        .getContent();
     long cancelled = 0L;
-    long rev = recurringTasks.stream()
-        .mapToLong(r -> r.getBudgetPaise() != null ? r.getBudgetPaise() : 0L).sum();
 
     double churn = 0.0;
 
@@ -331,7 +346,12 @@ public class ReportService {
   @Transactional(readOnly = true)
   public HelperPerformanceResponse getHelperPerformanceReport(Instant start, Instant end) {
     List<UserEntity> helpers = userRepo.findAllByRole(UserRole.HELPER);
-    List<HelperProfileEntity> profiles = helperProfileRepo.findAll();
+    // Only the profiles belonging to the helpers actually being reported on.
+    // This used to be helperProfileRepo.findAll() feeding a lookup map.
+    List<UUID> helperIds = helpers.stream().map(UserEntity::getId).toList();
+    List<HelperProfileEntity> profiles = helperIds.isEmpty()
+        ? List.of()
+        : helperProfileRepo.findAllByUserIdIn(helperIds);
     Map<UUID, HelperProfileEntity> profileByUserId = profiles.stream().collect(Collectors.toMap(HelperProfileEntity::getUserId, p -> p, (a, b) -> a));
 
     List<HelperPerformanceItem> items = helpers.stream().map(h -> {
@@ -406,6 +426,10 @@ public class ReportService {
     return new CancellationRefundResponse(cancelled.size(), 4.2, refunded, 10.0, reasons, items);
   }
 
+  // Reads a materialized view refreshed on a schedule, so the data is already
+  // minutes old by design — caching it costs nothing in freshness. No-arg method,
+  // so the key is trivial and actually repeats.
+  @Cacheable(value = "reportsMv", key = "'location'")
   @Transactional(readOnly = true)
   public LocationPerformanceResponse getLocationPerformanceReport() {
     try {
@@ -426,6 +450,7 @@ public class ReportService {
     }
   }
 
+  @Cacheable(value = "reportsMv", key = "'service'")
   @Transactional(readOnly = true)
   public ServicePerformanceResponse getServicePerformanceReport() {
     try {
@@ -484,9 +509,9 @@ public class ReportService {
 
   @Transactional(readOnly = true)
   public AiModerationReportResponse getAiModerationReport(Instant start, Instant end) {
-    List<TaskAiReviewEntity> reviews = aiReviewRepo.findAll().stream()
-        .filter(r -> r.getCreatedAt() != null && !r.getCreatedAt().isBefore(start) && !r.getCreatedAt().isAfter(end))
-        .toList();
+    // Filtered in SQL rather than loading every review (each carrying a
+    // raw_response JSONB blob) and discarding most of them in Java.
+    List<TaskAiReviewEntity> reviews = aiReviewRepo.findAllByCreatedAtBetween(start, end);
 
     long total = reviews.size();
     long autoApproved = reviews.stream().filter(r -> "APPROVED".equalsIgnoreCase(r.getStatus())).count();
@@ -555,7 +580,10 @@ public class ReportService {
   }
 
   @Transactional
-  @CacheEvict(value = "reports", allEntries = true)
+  // Must list reportsMv too: this method is what makes those views stale, so
+  // evicting only "reports" would leave the view-backed entries serving the
+  // pre-refresh numbers until their TTL expired.
+  @CacheEvict(value = {"reports", "reportsMv"}, allEntries = true)
   public void refreshMaterializedViews() {
     try {
       entityManager.createNativeQuery("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_location_performance").executeUpdate();

@@ -41,6 +41,18 @@ public class RateLimitFilter extends OncePerRequestFilter {
   /** Unauthenticated and backed by a paid LLM — an open cost-amplification target. */
   private final int chatbotPerMin = intEnv("RATE_LIMIT_CHATBOT_PER_MIN", 8);
   private final int publicPartnerKycPerMin = intEnv("RATE_LIMIT_PUBLIC_PARTNER_KYC_PER_MIN", 3);
+  private final int ifscLookupPerMin = intEnv("RATE_LIMIT_IFSC_LOOKUP_PER_MIN", 30);
+  private final int bankChangeOtpStartPerMin = intEnv("RATE_LIMIT_BANK_CHANGE_OTP_START_PER_MIN", 3);
+  private final int bankChangeOtpVerifyPerMin = intEnv("RATE_LIMIT_BANK_CHANGE_OTP_VERIFY_PER_MIN", 8);
+  /**
+   * Proxied maps lookups. Billable per request upstream, so metered even though
+   * they are authenticated GETs. 120/min still allows a fast typist several
+   * address entries a minute after server-side debouncing and caching.
+   */
+  private final int geoAutocompletePerMin = intEnv("RATE_LIMIT_GEO_AUTOCOMPLETE_PER_MIN", 120);
+  private final int geoLookupPerMin = intEnv("RATE_LIMIT_GEO_LOOKUP_PER_MIN", 60);
+  /** Task creation triggers content moderation, which may call a paid LLM. */
+  private final int taskCreatePerMin = intEnv("RATE_LIMIT_TASK_CREATE_PER_MIN", 20);
 
   public RateLimitFilter() {
     this(null);
@@ -67,13 +79,37 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
   private boolean isLimited(HttpServletRequest request) {
     String method = request.getMethod();
-    if (!"POST".equalsIgnoreCase(method)) {
+    boolean ifscLookup = "GET".equalsIgnoreCase(method)
+        && pathMatchesIfsc(request.getRequestURI());
+    boolean geoLookup = "GET".equalsIgnoreCase(method)
+        && pathMatchesGeo(request.getRequestURI());
+    if (!"POST".equalsIgnoreCase(method) && !ifscLookup && !geoLookup) {
       return false;
     }
     String path = request.getRequestURI();
     String bucket = path;
     int limit = 0;
-    if (path.endsWith("/api/v1/auth/otp/start")) {
+    if (ifscLookup) {
+      limit = ifscLookupPerMin;
+      bucket = "/api/v1/*/ifsc/*";
+    } else if (geoLookup) {
+      // Proxied Places/Directions calls cost money per request upstream. A single
+      // client typing fast is normal; a script hammering this endpoint would burn
+      // the Ola free tier and then real money. Autocomplete gets the looser limit
+      // because one address entry legitimately fires several keystroke requests.
+      limit = path.contains("/autocomplete") ? geoAutocompletePerMin : geoLookupPerMin;
+      bucket = path.contains("/autocomplete") ? "/api/v1/geo/autocomplete" : "/api/v1/geo/*";
+    } else if (path.endsWith("/api/v1/tasks")) {
+      // Task creation runs content moderation, which can call an LLM. Unmetered,
+      // an authenticated buyer could drive unbounded provider spend.
+      limit = taskCreatePerMin;
+    } else if (path.matches("^/api/v1/(helper|mediator)/payout-account/change-challenge$")) {
+      limit = bankChangeOtpStartPerMin;
+      bucket = "/api/v1/*/payout-account/change-challenge";
+    } else if (path.matches("^/api/v1/(helper|mediator)/payout-account/change-challenge/verify$")) {
+      limit = bankChangeOtpVerifyPerMin;
+      bucket = "/api/v1/*/payout-account/change-challenge/verify";
+    } else if (path.endsWith("/api/v1/auth/otp/start")) {
       limit = otpStartPerMin;
     } else if (path.endsWith("/api/v1/auth/otp/verify")) {
       limit = otpVerifyPerMin;
@@ -116,7 +152,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
     if (limit <= 0) return false;
 
-    String ip = clientIp(request);
+    String ip = ClientIpResolver.resolve(request);
     String key = bucket + ":" + ip;
     long minute = Instant.now().getEpochSecond() / 60;
     if (redis != null) {
@@ -147,41 +183,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
     return current > limit;
   }
 
-  private static String clientIp(HttpServletRequest request) {
-    String remote = request.getRemoteAddr();
-    if (isTrustedProxy(remote)) {
-      String real = request.getHeader("X-Real-IP");
-      if (real != null && !real.isBlank()) return real.trim();
-      String forwarded = request.getHeader("X-Forwarded-For");
-      if (forwarded != null && !forwarded.isBlank()) {
-        String[] chain = forwarded.split(",");
-        for (int i = chain.length - 1; i >= 0; i--) {
-          String candidate = chain[i].trim();
-          if (!candidate.isBlank() && !isTrustedProxy(candidate)) return candidate;
-        }
-      }
-    }
-    return remote == null ? "unknown" : remote;
+  private static boolean pathMatchesIfsc(String path) {
+    return path != null && path.matches("^/api/v1/(helper|mediator)/ifsc/[^/]+$");
   }
 
-  private static boolean isTrustedProxy(String ip) {
-    if (ip == null) return false;
-    String value = ip.trim();
-    if (value.equals("127.0.0.1") || value.equals("::1") || value.startsWith("10.") || value.startsWith("192.168.")) {
-      return true;
-    }
-    if (value.startsWith("172.")) {
-      String[] parts = value.split("\\.");
-      if (parts.length > 1) {
-        try {
-          int second = Integer.parseInt(parts[1]);
-          return second >= 16 && second <= 31;
-        } catch (NumberFormatException ignored) {
-          return false;
-        }
-      }
-    }
-    return false;
+  private static boolean pathMatchesGeo(String path) {
+    return path != null && path.matches("^/api/(v1/)?geo/(autocomplete|place|reverse|route)$");
   }
 
   private static int intEnv(String key, int fallback) {

@@ -24,6 +24,14 @@ public interface KycRequestRepository extends JpaRepository<KycRequestEntity, UU
 
     List<KycRequestEntity> findByRetentionExpiresAtBeforeAndRawResultIsNotNull(Instant before);
 
+    /**
+     * Bounded variant used by the retention job. The unbounded method above would
+     * match the entire backlog on the first run after retention is enforced.
+     * Backed by {@code idx_kyc_requests_retention_purge} (V58).
+     */
+    List<KycRequestEntity> findTop500ByRetentionExpiresAtBeforeAndRawResultIsNotNullOrderByRetentionExpiresAtAsc(
+        Instant before);
+
     @Query("select k from KycRequestEntity k where k.user.id = :userId and k.liveRoomId is not null and k.liveEndedAt is null and k.status in :statuses order by k.createdAt desc")
     List<KycRequestEntity> findActiveLiveSessions(
         @Param("userId") UUID userId,

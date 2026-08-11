@@ -96,7 +96,7 @@ public class AdminServiceTest {
 
     when(helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING)).thenReturn(List.of(profile));
     when(users.findAllById(List.of(helperId))).thenReturn(List.of(user));
-    when(payoutAccounts.findByHelperIdInAndProvider(List.of(helperId), HelperPayoutAccountEntity.DEFAULT_PROVIDER)).thenReturn(List.of(payout));
+    when(payoutAccounts.findByHelperIdInAndProviderAndCurrentTrue(List.of(helperId), HelperPayoutAccountEntity.DEFAULT_PROVIDER)).thenReturn(List.of(payout));
 
     var pending = service.listPendingHelpers();
 
@@ -130,7 +130,7 @@ public class AdminServiceTest {
     submission.prePersist();
 
     when(helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING)).thenReturn(List.of());
-    when(payoutAccounts.findByHelperIdInAndProvider(List.of(), HelperPayoutAccountEntity.DEFAULT_PROVIDER)).thenReturn(List.of());
+    when(payoutAccounts.findByHelperIdInAndProviderAndCurrentTrue(List.of(), HelperPayoutAccountEntity.DEFAULT_PROVIDER)).thenReturn(List.of());
     when(publicPartnerKycSubmissions.findAllByStatusOrderByCreatedAtAsc(HelperKycStatus.PENDING)).thenReturn(List.of(submission));
 
     var pending = service.listPendingHelpers();

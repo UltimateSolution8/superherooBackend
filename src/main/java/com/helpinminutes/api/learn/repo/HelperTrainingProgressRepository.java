@@ -13,5 +13,10 @@ public interface HelperTrainingProgressRepository extends JpaRepository<HelperTr
 
   List<HelperTrainingProgressEntity> findByMaterialIdOrderByUpdatedAtDesc(UUID materialId);
 
-  List<HelperTrainingProgressEntity> findAllByOrderByUpdatedAtDesc();
+  /**
+   * Bounded deliberately. This is an admin overview, and the unbounded variant
+   * was a full scan plus an in-memory sort of the whole progress table
+   * ({@code updated_at} is not indexed) that grew with every helper-material pair.
+   */
+  List<HelperTrainingProgressEntity> findTop500ByOrderByUpdatedAtDesc();
 }

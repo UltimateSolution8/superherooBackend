@@ -10,9 +10,19 @@
 
   <!-- Async wrapper to avoid log I/O on request threads -->
   <appender name="ASYNC_STDOUT" class="ch.qos.logback.classic.AsyncAppender">
-    <queueSize>2048</queueSize>
+    <queueSize>4096</queueSize>
+    <!-- 0 = never pre-emptively drop INFO/DEBUG when the queue gets low. -->
     <discardingThreshold>0</discardingThreshold>
     <includeCallerData>false</includeCallerData>
+    <!--
+      Logback's default is false, which makes a FULL queue block the calling
+      thread — i.e. exactly the request threads this appender exists to protect.
+      Under a log burst that turns a logging problem into a latency problem
+      across every in-flight request. For an API, dropping log lines is the
+      correct trade.
+    -->
+    <neverBlock>true</neverBlock>
+    <maxFlushTime>2000</maxFlushTime>
     <appender-ref ref="STDOUT"/>
   </appender>
 

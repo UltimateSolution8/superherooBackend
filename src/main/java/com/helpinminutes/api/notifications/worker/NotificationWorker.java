@@ -52,16 +52,8 @@ public class NotificationWorker {
                 case TASK_OFFERED -> {
                     if (task != null) {
                         List<UUID> helperIds = job.helperIds();
-                        Map<UUID, Double> distanceByHelper = new HashMap<>();
-                        if (helperIds != null) {
-                            for (UUID helperId : helperIds) {
-                                var state = presence.getHelperState(helperId);
-                                if (state == null) continue;
-                                double dist = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
-                                distanceByHelper.put(helperId, dist);
-                            }
-                        }
-                        pushNotifications.notifyTaskOffered(helperIds, task, distanceByHelper);
+                        pushNotifications.notifyTaskOffered(
+                                helperIds, task, distancesToTask(helperIds, task));
                     }
                 }
                 case TASK_ACCEPTED -> {
@@ -79,17 +71,9 @@ public class NotificationWorker {
                 case TASK_CREATED -> {
                     if (task != null) {
                         List<UUID> helperIds = job.helperIds();
-                        Map<UUID, Double> distanceByHelper = new HashMap<>();
-                        if (helperIds != null) {
-                            for (UUID helperId : helperIds) {
-                                var state = presence.getHelperState(helperId);
-                                if (state == null) continue;
-                                double dist = GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
-                                distanceByHelper.put(helperId, dist);
-                            }
-                        }
-                        // just in case, reuse the offered notification logic which already filters tokens
-                        pushNotifications.notifyTaskCreated(helperIds, task, distanceByHelper);
+                        // reuse the offered notification logic which already filters tokens
+                        pushNotifications.notifyTaskCreated(
+                                helperIds, task, distancesToTask(helperIds, task));
                     }
                 }
                 case KYC_APPROVED -> {
@@ -102,5 +86,27 @@ public class NotificationWorker {
         } catch (Exception e) {
             log.error("Failed to process notification job type={} taskId={}", job.type(), job.taskId(), e);
         }
+    }
+
+    /**
+     * Distance from each recipient to the task, for the notification copy.
+     *
+     * <p>One pipelined read. This was a loop calling {@code getHelperState} per
+     * helper — a separate round trip each, against a network-remote Redis. Bounded
+     * at the offer fanout for TASK_OFFERED, but TASK_CREATED can carry every helper
+     * notified across a bulk booking of up to 250 rows.
+     */
+    private Map<UUID, Double> distancesToTask(List<UUID> helperIds, TaskEntity task) {
+        if (helperIds == null || helperIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, Double> distanceByHelper = new HashMap<>();
+        presence.getHelperStates(helperIds).forEach((helperId, state) -> {
+            if (state == null) return;
+            distanceByHelper.put(
+                    helperId,
+                    GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng()));
+        });
+        return distanceByHelper;
     }
 }

@@ -83,7 +83,9 @@ class AiModerationReportTest {
     r2.setReviewDurationMs(130L);
     r2.setCreatedAt(Instant.now().minusSeconds(1800));
 
-    when(aiReviewRepo.findAll()).thenReturn(List.of(r1, r2));
+    // The report now bounds the scan in SQL instead of loading every review
+    // (raw_response JSONB included) and filtering by date in Java.
+    when(aiReviewRepo.findAllByCreatedAtBetween(any(), any())).thenReturn(List.of(r1, r2));
 
     TaskEntity t1 = new TaskEntity();
     t1.setId(task1);

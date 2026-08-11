@@ -27,6 +27,9 @@ import com.helpinminutes.api.payments.service.PaymentLifecycleService;
 public class TaskStaleCleanupJob {
   private static final Logger log = LoggerFactory.getLogger(TaskStaleCleanupJob.class);
 
+  /** Ceiling on the re-dispatch quiet period, however high the wave climbs. */
+  private static final Duration MAX_REDISPATCH_BACKOFF = Duration.ofMinutes(3);
+
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
   private final MatchingService matching;
@@ -50,7 +53,10 @@ public class TaskStaleCleanupJob {
       @Value("${TASK_ASSIGNED_STALE_MINUTES:20}") long staleAssignedMinutes,
       // Was 120s, which equalled one offer window — a task was cancelled at the
       // exact moment its first round of offers lapsed, leaving no room to retry.
-      @Value("${TASK_SEARCH_TIMEOUT_SECONDS:300}") long searchingTimeoutSeconds) {
+      // Then 300s, which at a 45s offer TTL allowed ~6 waves but capped the reach
+      // at the second radius tier. 720s lets the escalation reach the widest tier
+      // and gives partners coming online mid-search a chance to see the job.
+      @Value("${TASK_SEARCH_TIMEOUT_SECONDS:720}") long searchingTimeoutSeconds) {
     this.schedulerLock = schedulerLock;
     this.tasks = tasks;
     this.offers = offers;
@@ -73,8 +79,11 @@ public class TaskStaleCleanupJob {
   /** Transaction is provided by SchedulerLock; see the note there. */
   public void runCleanup() {
     expireLapsedOffers();
-    redispatchUnansweredSearchingTasks();
+    // Order matters. Cancelling runs *before* re-dispatch: the reverse order
+    // pushed a fresh wave of offers and then cancelled the task in the same
+    // commit, so partners got a push for a task that no longer existed.
     closeTimedOutSearchingTasks();
+    redispatchUnansweredSearchingTasks();
 
     Instant cutoff = Instant.now().minus(staleAssigned);
     List<TaskEntity> stale = tasks.findTop100ByStatusAndUpdatedAtBefore(TaskStatus.ASSIGNED, cutoff);
@@ -140,9 +149,19 @@ public class TaskStaleCleanupJob {
         new java.util.HashSet<>(offers.findTaskIdsWithLiveOffers(taskIds, now));
 
     int redispatched = 0;
+    int backedOff = 0;
     for (TaskEntity task : searching) {
       if (task.getAssignedHelperId() != null) continue;
       if (withLiveOffers.contains(task.getId())) continue;
+      // Back off tasks nobody can serve. A task with no partners in range has no
+      // live offers either, so without this it was re-dispatched on every 30s
+      // tick — roughly 100 Redis commands each time, for the whole search
+      // window. The gap widens with the wave, which is also when the search
+      // radius widens, so each retry is both later and broader.
+      if (isBackedOff(task, now)) {
+        backedOff++;
+        continue;
+      }
       try {
         // dispatchOffers re-checks status under a row lock, so a task that was
         // accepted between the query and here is a no-op.
@@ -152,9 +171,24 @@ public class TaskStaleCleanupJob {
         log.warn("Re-dispatch failed for task {}", task.getId(), e);
       }
     }
-    if (redispatched > 0) {
-      log.info("Re-dispatched offers for {} unanswered searching tasks", redispatched);
+    if (redispatched > 0 || backedOff > 0) {
+      log.info("Re-dispatched offers for {} unanswered searching tasks ({} backed off)",
+          redispatched, backedOff);
     }
+  }
+
+  /**
+   * True while a task is inside its post-dispatch quiet period.
+   *
+   * <p>Gap grows with the wave: one offer window for the first retry, then longer,
+   * capped at {@link #MAX_REDISPATCH_BACKOFF}.
+   */
+  private boolean isBackedOff(TaskEntity task, Instant now) {
+    Instant lastDispatch = task.getLastDispatchedAt();
+    if (lastDispatch == null) return false;
+    long gapSeconds = Math.max(30, offerTtlSeconds) * (long) (task.getDispatchWave() + 1);
+    Duration gap = Duration.ofSeconds(Math.min(gapSeconds, MAX_REDISPATCH_BACKOFF.toSeconds()));
+    return lastDispatch.plus(gap).isAfter(now);
   }
 
   private void closeTimedOutSearchingTasks() {

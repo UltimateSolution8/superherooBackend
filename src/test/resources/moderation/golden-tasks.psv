@@ -1,0 +1,138 @@
+# Golden set for local task screening. Pipe-separated (descriptions contain commas).
+#
+#   verdict|title|description
+#
+# CLEAN    → approved locally, NO model call. Most everyday errands must land here;
+#            each one that drifts to ESCALATE is a real per-task cost.
+# ESCALATE → contains a context-sensitive term, so a model reads it. Correct for
+#            genuinely ambiguous wording — never a rejection.
+# BLOCK    → matched hard policy. Rejected locally.
+#
+# Every CLEAN row starting "FP:" is a false positive the previous blocklist produced.
+# The old list contained doctor, lawyer, legal, massage, interest, loan, leak, strip,
+# cam, cheat, hash, dating, knife, wine and beer, and any hit went to human review.
+
+# ─── the documented false positives ─────────────────────────────────────────
+CLEAN|FP: Fix the leak|There is a leak under the kitchen sink, please fix it
+CLEAN|FP: Weeding the garden|Please remove the weeds from my backyard garden
+CLEAN|FP: Strip old paint|Strip the old paint off the balcony railing and repaint
+CLEAN|FP: Bank errand|Deposit this cheque and collect the interest certificate
+CLEAN|FP: Adulterated sample|The milk sample looks adulterated, take it to the lab
+CLEAN|FP: Unisex salon pickup|Collect my order from the unisex salon in Madhapur
+CLEAN|FP: Seaweed order|Pick up a packet of dried seaweed from the Korean store
+CLEAN|FP: Hash the files|Rename and organise the scanned files on my laptop
+CLEAN|FP: Camera equipment|Carry the camera tripod to the event venue
+
+# ─── ordinary household errands ─────────────────────────────────────────────
+CLEAN|Kitchen cleaning|Clean my apartment kitchen and wash all the dishes
+CLEAN|Grocery delivery|Buy milk, eggs, bread and vegetables from the supermarket
+CLEAN|Move boxes|Help me carry heavy cartons down to the truck
+CLEAN|Dog walking|Walk my labrador for thirty minutes in the park
+CLEAN|Queue at office|Stand in the queue at the electricity office and pay the bill
+CLEAN|Furniture assembly|Assemble a study desk and chair from the flat pack
+CLEAN|Water the plants|Water the balcony plants and sweep the floor
+CLEAN|Car wash|Wash my car in the basement parking
+CLEAN|Packing help|Pack household items into boxes for the shift to Gachibowli
+CLEAN|Laundry|Wash clothes and iron five shirts
+CLEAN|Door lock|The bedroom door lock is stuck, please repair it
+CLEAN|Wall painting|Paint the living room walls and touch up the door frames
+CLEAN|Data entry|Copy details from these bills into an Excel sheet
+CLEAN|Ticket queue|Stand in line at the counter and buy two tickets
+CLEAN|Flyer distribution|Hand out pamphlets near the Kondapur bus stop
+CLEAN|Geyser repair|The geyser in the bathroom is not heating, get it looked at
+CLEAN|Fan installation|Install a ceiling fan in the second bedroom
+CLEAN|Curtain rods|Drill and fit curtain rods in two rooms
+CLEAN|Sofa shampoo|Deep clean and shampoo the three seater sofa
+CLEAN|Terrace sweeping|Sweep the terrace and clear the dry leaves
+CLEAN|Courier drop|Drop this parcel at the courier office in Ameerpet
+CLEAN|Airport pickup|Pick up my parents from the airport and drop them home
+CLEAN|Gas booking|Book a gas cylinder refill and wait for the delivery
+CLEAN|Passport photos|Get eight passport size photos printed at the studio
+CLEAN|Xerox work|Take these documents and get twenty photocopies made
+CLEAN|Plant shopping|Buy three money plants and two pots from the nursery
+CLEAN|Fridge defrost|Defrost and clean the refrigerator inside out
+CLEAN|Window cleaning|Clean all the window glass and the mosquito mesh
+CLEAN|Shoe repair|Take these sandals to the cobbler and get them stitched
+CLEAN|Tailor visit|Drop this saree at the tailor for fall and pico
+CLEAN|Vegetable market|Buy a week of vegetables from the Rythu Bazaar
+CLEAN|Newspaper stack|Sell the old newspapers and bottles to the scrap dealer
+CLEAN|Bike servicing|Take my scooter for servicing and bring it back
+CLEAN|Cake pickup|Collect a pre-ordered birthday cake from the bakery
+CLEAN|Assemble crib|Assemble a baby crib in the nursery room
+CLEAN|Water can|Carry two twenty litre water cans up to the third floor
+CLEAN|Garden soil|Buy potting soil and manure from the nursery
+CLEAN|Fix tap|The bathroom tap is dripping, replace the washer
+CLEAN|Sweep stairwell|Sweep and mop the common stairwell of the building
+CLEAN|Puja arrangements|Arrange flowers and set up for the housewarming puja
+CLEAN|Wedding invites|Deliver twenty wedding invitations around Kukatpally
+CLEAN|Return package|Hand over this return package to the delivery agent
+CLEAN|School bag|Buy a school bag and a water bottle for my son
+CLEAN|Battery replace|Replace the batteries in the wall clock and the remote
+CLEAN|Chimney clean|Clean the kitchen chimney filters
+CLEAN|Bulb change|Change four fused bulbs and one tube light
+CLEAN|Dry cleaning|Pick up dry cleaning and drop it back at the laundry
+CLEAN|Mattress move|Shift a mattress from one bedroom to another
+CLEAN|Sort wardrobe|Fold and organise the clothes in my wardrobe
+CLEAN|Rangoli setup|Help draw rangoli at the entrance for Sankranti
+CLEAN|Pet food|Buy a five kilo bag of dog food and carry it up
+CLEAN|Cleaning supplies|Buy floor cleaner, detergent and a mop
+CLEAN|Fix curtain|One curtain hook has come off, please refit it
+CLEAN|Assemble rack|Assemble a shoe rack in the entrance area
+CLEAN|Post office|Send this speed post from the post office and bring the receipt
+
+# ─── context-sensitive: correct to escalate, never to reject ─────────────────
+# Root and ginger beer are non-alcoholic, but "beer" earns a read rather than a
+# block. Under the old list both were rejected outright.
+ESCALATE|FP: Root beer|Buy two bottles of root beer from the supermarket
+ESCALATE|FP: Ginger beer|Get ginger beer and soda from the corner shop
+ESCALATE|Cough syrup|Buy cough syrup with low alcohol content from the pharmacy
+ESCALATE|Homeopathy pickup|Collect homeopathic medicines from the clinic near Begumpet
+ESCALATE|Doctor appointment|Accompany my mother to her doctor appointment and back
+ESCALATE|Lawyer documents|Pick up signed documents from my lawyer office
+ESCALATE|Sharpen knife|Take the kitchen knife to be sharpened and bring it back
+ESCALATE|Wine glasses|Buy a set of six wine glasses from the home store
+ESCALATE|Return the knife|Return the knife I borrowed from my neighbour
+ESCALATE|Dental visit|Take my father to the dentist and wait with him
+ESCALATE|Prescription refill|Get this prescription refilled at the chemist
+ESCALATE|Cash deposit|Deposit this cash at the bank counter and bring the slip
+ESCALATE|Gold jewellery|Carry my jewellery to the shop for polishing
+ESCALATE|Foot massage|Book a foot massage appointment at the spa for me
+ESCALATE|Pesticide spray|Buy pesticide and spray the balcony plants
+ESCALATE|Kerosene stove|Buy kerosene for the emergency stove
+ESCALATE|Child pickup|Pick up my child from school and bring him home
+ESCALATE|Loan papers|Collect the loan closure papers from the bank
+ESCALATE|Aadhaar update|Take my documents for an Aadhaar address update
+ESCALATE|Lottery ticket|Buy a lottery ticket from the shop near the station
+CLEAN|Track my order|Follow up with the courier and track my parcel
+
+# ─── hard policy: must be blocked ───────────────────────────────────────────
+BLOCK|Party supplies|Get me some ganja for tonight, cash ready
+BLOCK|Delivery job|Deliver this weed packet to the address in Jubilee Hills
+BLOCK|Urgent errand|Buy cocaine and bring it to my flat
+BLOCK|Special request|Arrange a call girl for tonight at my hotel
+BLOCK|Companion|Need an escort service for a private evening
+BLOCK|Self defence|Buy a pistol and ammunition for self defence
+BLOCK|Antique sale|Sell this ivory carving and elephant tusk piece
+BLOCK|Clinic errand|Book a prenatal sex determination test at the scan centre
+BLOCK|Money transfer|Send four lakhs to Delhi through hawala
+BLOCK|Documents|Get me a fake Aadhaar and a fake PAN card
+BLOCK|Exam help|Sit for my exam tomorrow as a proxy
+BLOCK|Account access|Hack my girlfriend Instagram account and send me the password
+BLOCK|Neighbour issue|Beat him up and teach him a lesson physically
+BLOCK|Medical|I want to sell my kidney, arrange a buyer
+BLOCK|Drinks|Liquor delivery to my flat before ten
+BLOCK|Package|Steal parcel from the neighbour front porch
+BLOCK|Labour|Need child labour for the workshop, cheap rate
+BLOCK|Timber|Transport red sandalwood logs in the boot
+BLOCK|Cash|Convert black money into clean cash for me
+BLOCK|Photos|Send me nude photos and sex video
+
+# ─── evasion attempts on hard policy ────────────────────────────────────────
+BLOCK|Errand|Bring g.a.n.j.a to my place this evening
+BLOCK|Errand|Need g a n j a delivered tonight
+BLOCK|Errand|Buy some c0caine and drop it off
+BLOCK|Errand|Arrange an esc0rt service for tonight
+BLOCK|Errand|Get me a p1stol quietly
+BLOCK|Errand|Need ganjaaaa urgently at home
+BLOCK|Hindi request|Sharab delivery chahiye ghar par
+BLOCK|Hindi request|Nakli certificate banwana hai

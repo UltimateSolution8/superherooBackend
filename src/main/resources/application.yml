@@ -1,15 +1,26 @@
 server:
   port: ${PORT:8081}
+  # Nginx terminates TLS and sets X-Forwarded-Proto. Without this Spring builds
+  # absolute URLs and evaluates cookie "secure" logic as if the request were http.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:FRAMEWORK}
+  # In-flight requests finish before the JVM exits. Must stay below the systemd
+  # TimeoutStopSec in Backend/deploy/superheroo-api.service.
+  shutdown: graceful
   tomcat:
     threads:
-      max: ${TOMCAT_MAX_THREADS:200}
-      min-spare: ${TOMCAT_MIN_THREADS:25}
-    accept-count: ${TOMCAT_ACCEPT_COUNT:200}
-    max-connections: ${TOMCAT_MAX_CONNECTIONS:10000}
-    max-keep-alive-requests: 100
-    connection-timeout: 20s
+      # Sized against the Hikari pool, not against the box. 200 threads competing
+      # for 12 connections means 188 of them can only ever queue on acquisition;
+      # ~4x the pool leaves room for the non-DB portion of a request.
+      max: ${TOMCAT_MAX_THREADS:48}
+      min-spare: ${TOMCAT_MIN_THREADS:8}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:100}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:2000}
+    max-keep-alive-requests: ${TOMCAT_MAX_KEEPALIVE_REQUESTS:1000}
+    connection-timeout: ${TOMCAT_CONNECTION_TIMEOUT:20s}
   compression:
-    enabled: true
+    # Nginx gzips now (see Realtime/deploy/nginx.conf). Doing it here as well
+    # burns CPU on a response nginx will not re-compress anyway.
+    enabled: ${TOMCAT_COMPRESSION_ENABLED:false}
     mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/javascript,application/json,application/xml
     min-response-size: 1024
 
@@ -20,6 +31,10 @@ eureka:
 spring:
   application:
     name: helpinminutes-api
+
+  lifecycle:
+    # Budget for server.shutdown: graceful. systemd allows 45s before SIGKILL.
+    timeout-per-shutdown-phase: ${SHUTDOWN_GRACE:25s}
 
   mail:
     host: ${SPRING_MAIL_HOST:smtp.gmail.com}
@@ -42,24 +57,40 @@ spring:
     password: ${DATABASE_PASSWORD:him}
     hikari:
       # Keep a small warm pool to avoid connection establish latency
-      minimum-idle: ${HIKARI_MIN_IDLE:5}
-      maximum-pool-size: ${HIKARI_MAX_POOL_SIZE:20}
-      connection-timeout: ${HIKARI_CONNECTION_TIMEOUT_MS:30000}
-      idle-timeout: ${HIKARI_IDLE_TIMEOUT_MS:30000}
-      max-lifetime: ${HIKARI_MAX_LIFETIME_MS:1800000}
+      minimum-idle: ${HIKARI_MIN_IDLE:4}
+      # Budget: SchedulerLock takes TWO connections per running job (one holds
+      # the advisory lock, one runs the transactional body), so a scheduler pool
+      # of 3 reserves 6. The remaining 6 serve HTTP.
+      maximum-pool-size: ${HIKARI_MAX_POOL_SIZE:12}
+      # Fail fast into a 503 rather than pinning a Tomcat thread for 30s.
+      connection-timeout: ${HIKARI_CONNECTION_TIMEOUT_MS:10000}
+      # Was 30s, equal to connection-timeout: every traffic lull retired the pool
+      # and forced a fresh TLS handshake to Supabase on the next request.
+      idle-timeout: ${HIKARI_IDLE_TIMEOUT_MS:300000}
+      max-lifetime: ${HIKARI_MAX_LIFETIME_MS:1500000}
+      keepalive-time: ${HIKARI_KEEPALIVE_MS:120000}
       validation-timeout: ${HIKARI_VALIDATION_TIMEOUT_MS:5000}
-      leak-detection-threshold: ${HIKARI_LEAK_DETECTION_MS:20000}
+      # Was 20s, which false-positived on every SchedulerLock job that legitimately
+      # holds a connection for the length of its run.
+      leak-detection-threshold: ${HIKARI_LEAK_DETECTION_MS:60000}
+      pool-name: superheroo-hikari
       # In Docker, Postgres can take a few seconds to accept connections. Don't crash-loop.
       initialization-fail-timeout: -1
       data-source-properties:
         sslmode: ${DATABASE_SSLMODE:require}
         ssl: ${DATABASE_SSL:true}
-        # Postgres optimization properties
-        cachePrepStmts: false
-        prepStmtCacheSize: 250
-        prepStmtCacheSqlLimit: 2048
-        useServerPrepStmts: false
+        # NOTE: cachePrepStmts / prepStmtCacheSize / prepStmtCacheSqlLimit /
+        # useServerPrepStmts used to be set here. Those are MySQL Connector/J
+        # properties; pgjdbc ignores all four. The pgjdbc equivalents are
+        # prepareThreshold and preparedStatementCacheQueries — deliberately left
+        # at their defaults while the production URL sets preferQueryMode=simple.
         reWriteBatchedInserts: true
+        # Socket-level timeouts. Without these a hung Supabase connection blocks a
+        # request thread until the OS TCP timeout (minutes).
+        connectTimeout: ${PG_CONNECT_TIMEOUT_S:5}
+        socketTimeout: ${PG_SOCKET_TIMEOUT_S:30}
+        tcpKeepAlive: true
+        ApplicationName: superheroo-api
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
@@ -84,6 +115,40 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+          # Batching was never configured, so reWriteBatchedInserts above had no
+          # batches to rewrite. Biggest win is MatchingService offer fan-out
+          # (offerFanout inserts per dispatch) and the mediator crew loops.
+          # NOTE: batching stays inert while the production JDBC URL sets
+          # preferQueryMode=simple (see .claude/known-risks.md #22).
+          batch_size: ${HIBERNATE_BATCH_SIZE:50}
+          batch_versioned_data: true
+          fetch_size: ${HIBERNATE_FETCH_SIZE:100}
+        order_inserts: true
+        order_updates: true
+        # Near-zero effect today (the model uses raw UUID FKs, not associations);
+        # helps only the two KYC @ManyToOne mappings. Costs nothing.
+        default_batch_fetch_size: ${HIBERNATE_BATCH_FETCH_SIZE:25}
+        query:
+          # Pads IN (?,?,?) to powers of two so MatchingService's eligibility
+          # lookup reuses one plan instead of one per candidate count.
+          in_clause_parameter_padding: true
+          fail_on_pagination_over_collection_fetch: true
+        # NOTE: hibernate.connection.provider_disables_autocommit is deliberately
+        # NOT set. It saves one round trip per transaction, but only if the pool
+        # really has autocommit off — and Hikari defaults it to true. Enabling the
+        # hint without also setting spring.datasource.hikari.auto-commit: false
+        # makes every commit fail with "Cannot commit when autoCommit is enabled",
+        # which took out all six scheduled jobs. Setting both is possible, but then
+        # SchedulerLock's raw advisory-lock connection would sit in an open
+        # transaction for the whole job — and that collides with the
+        # idle_in_transaction_session_timeout recommended in deploy/api.env.example.
+        # Not worth one round trip.
+        generate_statistics: ${HIBERNATE_STATS:false}
+        session:
+          events:
+            log:
+              # Set to 0 temporarily to log every query when profiling.
+              LOG_QUERIES_SLOWER_THAN_MS: ${HIBERNATE_SLOW_QUERY_MS:300}
 
   flyway:
     enabled: true
@@ -91,9 +156,53 @@ spring:
     connect-retries: 60
     connect-retries-interval: 2
 
+  task:
+    scheduling:
+      # Six @Scheduled jobs shared one thread, so a slow refund tick delayed the
+      # 30s stale-task cleanup past its own period. Kept at 3 because each running
+      # job holds two Hikari connections via SchedulerLock (3 x 2 = 6 of 12).
+      pool:
+        size: ${SCHEDULER_POOL_SIZE:3}
+      thread-name-prefix: sched-
+      shutdown:
+        await-termination: true
+        await-termination-period: ${SCHEDULER_SHUTDOWN_WAIT:20s}
+    execution:
+      # Bounds applicationTaskExecutor, which serves the @Async methods that carry
+      # no qualifier (InvoiceEmailService, AiTaskModerationService). Its queue was
+      # unbounded, so a mail or LLM outage grew it without limit.
+      pool:
+        core-size: ${ASYNC_CORE_SIZE:2}
+        max-size: ${ASYNC_MAX_SIZE:6}
+        queue-capacity: ${ASYNC_QUEUE_CAPACITY:200}
+        keep-alive: 60s
+      thread-name-prefix: app-async-
+      shutdown:
+        await-termination: true
+        await-termination-period: 20s
+
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
+      # Mandatory: Redis is on the matching hot path (GEOSEARCH in MatchingService)
+      # and the rate-limit filter. With no timeout a Redis stall blocks a Tomcat
+      # thread until Lettuce's 60s default, or forever on a half-open socket.
+      timeout: ${REDIS_TIMEOUT:2s}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
+      client-name: superheroo-api
+      lettuce:
+        shutdown-timeout: 200ms
+        pool:
+          # Off by default and that is deliberate. Lettuce multiplexes commands
+          # over one connection and is thread-safe; pooling only helps blocking
+          # commands (BLPOP), MULTI and transactions, none of which this codebase
+          # uses. commons-pool2 is on the classpath so this can be flipped on if
+          # profiling ever shows contention.
+          enabled: ${REDIS_POOL_ENABLED:false}
+          max-active: ${REDIS_POOL_MAX_ACTIVE:16}
+          max-idle: ${REDIS_POOL_MAX_IDLE:8}
+          min-idle: ${REDIS_POOL_MIN_IDLE:2}
+          max-wait: 1s
 
   servlet:
     multipart:
@@ -130,35 +239,110 @@ app:
   jwt:
     # No defaults on purpose: a missing secret must fail startup, never fall back
     # to a publicly-known key. Validated in AppProperties.
-    accessSecret: ${JWT_ACCESS_SECRET:}
-    refreshSecret: ${JWT_REFRESH_SECRET:}
-    accessTtlSeconds: ${JWT_ACCESS_TTL_SECONDS:900}
-    refreshTtlSeconds: ${JWT_REFRESH_TTL_SECONDS:2592000}
+    access-secret: ${JWT_ACCESS_SECRET:}
+    refresh-secret: ${JWT_REFRESH_SECRET:}
+    access-ttl-seconds: ${JWT_ACCESS_TTL_SECONDS:900}
+    refresh-ttl-seconds: ${JWT_REFRESH_TTL_SECONDS:2592000}
 
   otp:
-    ttlSeconds: ${OTP_TTL_SECONDS:300}
+    ttl-seconds: ${OTP_TTL_SECONDS:300}
     # Local development only. Returning the OTP in the API response is an
     # authentication bypass and must stay false in every deployed environment.
-    returnOtpInResponse: ${OTP_RETURN_IN_RESPONSE:false}
+    return-otp-in-response: ${OTP_RETURN_IN_RESPONSE:false}
 
   payments:
     # Online card/UPI checkout is disabled at launch. Cash and UPI are collected
     # offline and confirmed in-app by the partner. Flip to true (with live
     # Razorpay keys) to re-enable prepaid checkout.
-    onlineEnabled: ${PAYMENTS_ONLINE_ENABLED:false}
+    online-enabled: ${PAYMENTS_ONLINE_ENABLED:false}
 
   matching:
-    h3Resolution: ${MATCH_H3_RESOLUTION:9}
-    maxKRing: ${MATCH_MAX_KRING:3}
-    offerFanout: ${MATCH_OFFER_FANOUT:5}
-    helperStaleAfterSeconds: ${MATCH_HELPER_STALE_AFTER_SECONDS:120}
-    offerTtlSeconds: ${MATCH_OFFER_TTL_SECONDS:120}
+    h3-resolution: ${MATCH_H3_RESOLUTION:9}
+    # k=3 at resolution 9 spans only ~1.2km, so the H3 cold-start fallback was
+    # searching a much smaller area than the primary GEO path. 6 covers ~2.4km;
+    # the SUNION cost is bounded by a cell cap in MatchingService, not by k.
+    max-k-ring: ${MATCH_MAX_KRING:6}
+    # Fallback fanout for callers without a wave. Wave dispatch uses waveFanouts.
+    offer-fanout: ${MATCH_OFFER_FANOUT:8}
+    helper-stale-after-seconds: ${MATCH_HELPER_STALE_AFTER_SECONDS:120}
+    # 45s matches the partner app's on-screen countdown. At 120s the modal
+    # vanished after 30s while the offer kept the slot locked for 90s more, so
+    # nobody else could be offered the job.
+    offer-ttl-seconds: ${MATCH_OFFER_TTL_SECONDS:45}
+    # Escalating waves: each unanswered offer window searches wider and offers to
+    # more partners. Comma-separated so both are tunable without a deploy.
+    wave-radii-meters: ${MATCH_WAVE_RADII_METERS:3000,6000,10000}
+    wave-fanouts: ${MATCH_WAVE_FANOUTS:8,15,25}
+    # The pull feed (GET /tasks/available) is deliberately much wider than a
+    # push wave: seeing a job in a list costs a partner nothing, and Hyderabad is
+    # one service area.
+    pull-feed-radius-meters: ${MATCH_PULL_FEED_RADIUS_METERS:15000}
+    # Cap on simultaneous live offers per partner. The app shows one offer modal
+    # at a time, so a burst used to overwrite earlier alerts while their slots
+    # stayed locked for the full TTL.
+    max-live-offers-per-helper: ${MATCH_MAX_LIVE_OFFERS_PER_HELPER:2}
 
   realtime:
-    redisPubSubChannel: ${REALTIME_REDIS_CHANNEL:him:rt:events}
-    publishHttpUrl: ${REALTIME_HTTP_PUBLISH_URL:}
-    publishHttpSecret: ${REALTIME_HTTP_PUBLISH_SECRET:}
-    publishHttpTimeoutMs: ${REALTIME_HTTP_PUBLISH_TIMEOUT_MS:1500}
+    redis-pub-sub-channel: ${REALTIME_REDIS_CHANNEL:him:rt:events}
+    publish-http-url: ${REALTIME_HTTP_PUBLISH_URL:}
+    publish-http-secret: ${REALTIME_HTTP_PUBLISH_SECRET:}
+    publish-http-timeout-ms: ${REALTIME_HTTP_PUBLISH_TIMEOUT_MS:1500}
+
+# Maps providers. Order is per capability because the right choice differs by
+# capability and cost model — see GeoProperties for the reasoning.
+#
+# Nothing here is required to boot: with every key blank the chain degrades to
+# local answers (empty suggestions, coordinates-as-address, straight-line ETA) and
+# the apps keep working. Map *rendering* is unaffected either way; it runs on the
+# Google mobile SDK, whose map-load SKU is free and unlimited.
+geo:
+  # The built-in Hyderabad locality index is the credential-free last resort.
+  # Keep it after the street-level providers so missing keys or an upstream
+  # outage never turns common searches such as "Madhapur" into a blank result.
+  autocompleteOrder: ${GEO_AUTOCOMPLETE_ORDER:ola,google,local}
+  placeDetailsOrder: ${GEO_PLACE_DETAILS_ORDER:ola,google,local}
+  reverseGeocodeOrder: ${GEO_REVERSE_GEOCODE_ORDER:ola,google}
+  # OSRM first: self-hosted, free, and routing is our highest-frequency geo call.
+  routingOrder: ${GEO_ROUTING_ORDER:osrm,ola,google}
+  perProviderTimeoutMs: ${GEO_PROVIDER_TIMEOUT_MS:2500}
+  circuitBreakerThreshold: ${GEO_CIRCUIT_BREAKER_THRESHOLD:5}
+  circuitBreakerCooldownMs: ${GEO_CIRCUIT_BREAKER_COOLDOWN_MS:30000}
+  defaultBiasLat: ${GEO_DEFAULT_BIAS_LAT:17.3850}
+  defaultBiasLng: ${GEO_DEFAULT_BIAS_LNG:78.4867}
+  ola:
+    baseUrl: ${OLA_MAPS_BASE_URL:https://api.olamaps.io}
+    apiKey: ${OLA_MAPS_API_KEY:}
+    # Ola enforces its allowed-domains list against the Origin header, not the
+    # caller's IP. Send nothing and every call is refused with
+    # 403 {"message":"Domain  is not allowed."}. This value must appear in (or be
+    # covered by a wildcard in) the credential's allowed domains in the Ola console.
+    origin: ${OLA_MAPS_ORIGIN:https://api.mysuperhero.xyz}
+  osrm:
+    # Blank until a private instance is running. Never point this at
+    # router.project-osrm.org — that demo server's policy allows withdrawal
+    # without notice. See docs/OSRM_SETUP.md.
+    baseUrl: ${OSRM_BASE_URL:}
+    # What the deployed extract covers: minLat,minLng,maxLat,maxLng. Routes with any
+    # endpoint outside this skip OSRM entirely rather than waiting for a NoSegment
+    # error. Blank means "global" — set that when the extract goes national.
+    #
+    # This must match the clip in build-osrm-hyderabad.sh, which writes the same box in
+    # osmium's lng-first order (77.8267,16.7550,79.1467,18.0150).
+    coverageBbox: ${OSRM_COVERAGE_BBOX:16.7550,77.8267,18.0150,79.1467}
+    # Must equal the server's --max-table-size (see deploy/superheroo-osrm.service).
+    # A larger request fails outright, so we decline locally instead.
+    maxTableSize: ${OSRM_MAX_TABLE_SIZE:64}
+  google:
+    baseUrl: ${GOOGLE_MAPS_BASE_URL:https://maps.googleapis.com}
+    # Server-side key for Places/Geocoding/Directions. Must NOT be the Android
+    # render key: this one is IP-restricted, that one is package-restricted and
+    # ships inside the APK.
+    apiKey: ${GOOGLE_MAPS_SERVER_API_KEY:}
+  cache:
+    autocompleteTtlSeconds: ${GEO_CACHE_AUTOCOMPLETE_TTL_SECONDS:86400}
+    placeDetailsTtlSeconds: ${GEO_CACHE_PLACE_DETAILS_TTL_SECONDS:2592000}
+    reverseGeocodeTtlSeconds: ${GEO_CACHE_REVERSE_TTL_SECONDS:2592000}
+    routeTtlSeconds: ${GEO_CACHE_ROUTE_TTL_SECONDS:60}
 
 mojoauth:
   api-key: ${MOJOAUTH_API_KEY:}
@@ -180,6 +364,13 @@ razorpay:
   key-id: ${RAZORPAY_KEY_ID:}
   key-secret: ${RAZORPAY_KEY_SECRET:}
   webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+
+banking:
+  encryption-keys: ${BANK_ACCOUNT_ENCRYPTION_KEYS:}
+  active-key-id: ${BANK_ACCOUNT_ACTIVE_KEY_ID:}
+  ifsc-base-url: ${IFSC_LOOKUP_BASE_URL:https://ifsc.razorpay.com}
+  ifsc-connect-timeout-ms: ${IFSC_LOOKUP_CONNECT_TIMEOUT_MS:1500}
+  ifsc-request-timeout-ms: ${IFSC_LOOKUP_REQUEST_TIMEOUT_MS:3000}
 
 livekit:
   url: ${LIVEKIT_URL:}
@@ -208,10 +399,19 @@ logging:
 
 ai:
   moderation:
-    llm-enabled: ${AI_MODERATION_LLM_ENABLED:false}
-    zenmux:
-      api-key: ${ZENMUX_API_KEY:}
-      endpoint: ${ZENMUX_ENDPOINT:https://zenmux.ai/api/v1/chat/completions}
-      primary-model: ${ZENMUX_PRIMARY_MODEL:moonshotai/kimi-k3-free}
-      fallback-model: ${ZENMUX_FALLBACK_MODEL:z-ai/glm-4.7-flash-free}
-      timeout-seconds: ${ZENMUX_TIMEOUT_SECONDS:10}
+    # Content moderation runs as a cascade: a local policy screen decides most tasks
+    # outright, and only ambiguous text reaches a model. See TaskModerationService.
+    #
+    # Both keys may be blank. With neither set, locally-clean tasks are still approved
+    # and ambiguous ones go to human review — booking never breaks, it just costs a
+    # moderator's attention. Nothing is ever auto-approved because a provider is down.
+    #
+    # The previous `llm-enabled` flag was read by nothing and defaulted to false while
+    # the model ran unconditionally, so it has been removed rather than wired up: the
+    # real switch is whether a key is configured.
+    timeout-seconds: ${AI_MODERATION_TIMEOUT_SECONDS:4}
+    gemini:
+      endpoint: ${AI_MODERATION_GEMINI_ENDPOINT:https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent}
+    groq:
+      endpoint: ${AI_MODERATION_GROQ_ENDPOINT:https://api.groq.com/openai/v1/chat/completions}
+      model: ${AI_MODERATION_GROQ_MODEL:llama-3.1-8b-instant}

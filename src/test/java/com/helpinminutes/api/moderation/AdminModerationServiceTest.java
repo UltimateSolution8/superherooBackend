@@ -84,8 +84,11 @@ class AdminModerationServiceTest {
     aiReview.setModel("moonshotai/kimi-k3-free");
 
     when(taskRepository.findByStatus(eq(TaskStatus.ADMIN_REVIEW), any())).thenReturn(new PageImpl<>(List.of(task)));
-    when(userRepository.findById(buyerId)).thenReturn(Optional.of(buyer));
-    when(aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(taskId)).thenReturn(Optional.of(aiReview));
+    // The queue batches both lookups across the whole page rather than issuing
+    // two queries per row.
+    when(userRepository.findAllById(anyIterable())).thenReturn(List.of(buyer));
+    when(aiReviewRepository.findByTaskIdInOrderByCreatedAtDesc(anyCollection()))
+        .thenReturn(List.of(aiReview));
 
     Page<AdminModerationTaskDto> page = adminModerationService.getModerationQueue("ADMIN_REVIEW", PageRequest.of(0, 10));
 
@@ -122,6 +125,8 @@ class AdminModerationServiceTest {
     aiReview.setRawResponse("{\"status\":\"REVIEW\"}");
 
     when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    // Single-task detail, so these stay per-row lookups — only the paginated
+    // queue was batched.
     when(userRepository.findById(buyerId)).thenReturn(Optional.of(buyer));
     when(aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(taskId)).thenReturn(Optional.of(aiReview));
     when(auditLogRepository.findByTaskIdOrderByTimestampDesc(taskId)).thenReturn(List.of());

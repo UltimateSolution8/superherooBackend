@@ -23,11 +23,18 @@ public class RealtimePublisher {
   private final ObjectMapper om;
   private final AppProperties props;
   private final HttpClient http;
+  private final java.util.concurrent.Executor dispatchExecutor;
 
-  public RealtimePublisher(StringRedisTemplate redis, ObjectMapper om, AppProperties props) {
+  public RealtimePublisher(
+      StringRedisTemplate redis,
+      ObjectMapper om,
+      AppProperties props,
+      @org.springframework.beans.factory.annotation.Qualifier("realtimeDispatchExecutor")
+          java.util.concurrent.Executor dispatchExecutor) {
     this.redis = redis;
     this.om = om;
     this.props = props;
+    this.dispatchExecutor = dispatchExecutor;
     this.http = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(Math.max(200, props.realtime().publishHttpTimeoutMs())))
         .build();
@@ -41,6 +48,7 @@ public class RealtimePublisher {
         "publishedAt", Instant.now().toString(),
         "payload", payload
     );
+    boolean redisDelivered = false;
     try {
       String msg = om.writeValueAsString(envelope);
       String channel = props.realtime().redisPubSubChannel();
@@ -48,6 +56,7 @@ public class RealtimePublisher {
         channel = "him:rt:events";
       }
       Long delivered = redis.convertAndSend(channel, msg);
+      redisDelivered = delivered != null && delivered > 0;
       if (delivered == null || delivered <= 0) {
         log.warn("Realtime Redis publish had no subscribers type={} eventId={} channel={}", type, eventId, channel);
       }
@@ -56,8 +65,11 @@ public class RealtimePublisher {
     }
 
     String publishUrl = props.realtime().publishHttpUrl();
-    if (publishUrl != null && !publishUrl.isBlank()) {
-      java.util.concurrent.CompletableFuture.runAsync(() -> publishHttpFallback(envelope));
+    if (!redisDelivered && publishUrl != null && !publishUrl.isBlank()) {
+      // Not CompletableFuture.runAsync: that uses the common ForkJoinPool, sized
+      // availableProcessors() - 1 — a single thread on 2 vCPU — and this body
+      // makes a blocking HTTP call.
+      dispatchExecutor.execute(() -> publishHttpFallback(envelope));
     }
   }
 

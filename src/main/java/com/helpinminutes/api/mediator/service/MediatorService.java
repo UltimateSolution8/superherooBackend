@@ -543,10 +543,16 @@ public class MediatorService {
     }
     verifyOtp(batch.getBatchStartOtp(), otp, "Start OTP is required");
     List<MediatorJobWorkerEntity> jobWorkers = workers.findByBatchId(batchId);
+    // One batched read shared by the validation pass and the mutation pass below.
+    // Both used to call taskRepo.findById() per crew member, on a path the
+    // mediator is waiting on after entering an OTP.
+    Map<UUID, TaskEntity> crewTasksById = loadCrewTasks(jobWorkers);
     for (MediatorJobWorkerEntity worker : jobWorkers) {
       if (worker.getAttendanceStatus() == MediatorAttendanceStatus.ABSENT || worker.getTaskId() == null) continue;
-      TaskEntity task = taskRepo.findById(worker.getTaskId())
-          .orElseThrow(() -> new ConflictException("A crew task is missing"));
+      TaskEntity task = crewTasksById.get(worker.getTaskId());
+      if (task == null) {
+        throw new ConflictException("A crew task is missing");
+      }
       if (task.getArrivalSelfieUrl() == null || task.getArrivalSelfieUrl().isBlank()) {
         throw new ConflictException("Every crew member must check in with an arrival photo before work starts");
       }
@@ -555,13 +561,13 @@ public class MediatorService {
     batches.save(batch);
     for (MediatorJobWorkerEntity worker : jobWorkers) {
       if (worker.getTaskId() == null) continue;
-      taskRepo.findById(worker.getTaskId()).ifPresent(task -> {
-        if (task.getStatus() == TaskStatus.ASSIGNED || task.getStatus() == TaskStatus.ARRIVED) {
-          task.setStatus(TaskStatus.STARTED);
-          if (task.getWorkStartedAt() == null) task.setWorkStartedAt(Instant.now());
-          taskRepo.save(task);
-        }
-      });
+      TaskEntity task = crewTasksById.get(worker.getTaskId());
+      if (task == null) continue;
+      if (task.getStatus() == TaskStatus.ASSIGNED || task.getStatus() == TaskStatus.ARRIVED) {
+        task.setStatus(TaskStatus.STARTED);
+        if (task.getWorkStartedAt() == null) task.setWorkStartedAt(Instant.now());
+        taskRepo.save(task);
+      }
     }
     try {
       realtime.publish("mediator.job_started", Map.of(
@@ -626,10 +632,13 @@ public class MediatorService {
     long helperWage = template.budgetPaise();
     long totalHelperPayout = 0L;
 
+    Map<UUID, TaskEntity> completionTasksById = loadCrewTasks(jobWorkers);
     for (MediatorJobWorkerEntity w : jobWorkers) {
       if (w.getAttendanceStatus() != MediatorAttendanceStatus.PRESENT || w.getTaskId() == null) continue;
-      TaskEntity task = taskRepo.findById(w.getTaskId())
-          .orElseThrow(() -> new ConflictException("A crew task is missing"));
+      TaskEntity task = completionTasksById.get(w.getTaskId());
+      if (task == null) {
+        throw new ConflictException("A crew task is missing");
+      }
       if (task.getCompletionSelfieUrl() == null || task.getCompletionSelfieUrl().isBlank()) {
         throw new ConflictException("Every present crew member must submit a completion photo");
       }
@@ -718,8 +727,16 @@ public class MediatorService {
     List<WorkerPaymentDetail> list = new ArrayList<>();
     long totalHelperPayout = 0;
 
+    // Batched like the payments above, which already used findByTaskIdIn.
+    List<UUID> helperIds = jobWorkers.stream().map(MediatorJobWorkerEntity::getHelperId)
+        .filter(java.util.Objects::nonNull).distinct().toList();
+    Map<UUID, UserEntity> helpersById = helperIds.isEmpty()
+        ? Map.of()
+        : users.findAllById(helperIds).stream()
+            .collect(java.util.stream.Collectors.toMap(UserEntity::getId, u -> u));
+
     for (MediatorJobWorkerEntity w : jobWorkers) {
-      UserEntity helper = users.findById(w.getHelperId()).orElse(null);
+      UserEntity helper = w.getHelperId() == null ? null : helpersById.get(w.getHelperId());
       String name = helper != null ? helper.getDisplayName() : "Unknown";
       String phone = helper != null ? helper.getPhone() : "";
 
@@ -873,6 +890,26 @@ public class MediatorService {
     String digits = phone.replaceAll("\\D", "");
     if (digits.length() <= 4) return "••••";
     return "••••••" + digits.substring(digits.length() - 4);
+  }
+
+  /**
+   * Loads every task belonging to a crew in one query, keyed by id.
+   *
+   * <p>Returns managed entities, so callers inside a {@code @Transactional} method
+   * can mutate them and rely on dirty checking exactly as they could with
+   * {@code findById}. {@code mediator_job_workers.task_id} is indexed as of V58.
+   */
+  private Map<UUID, TaskEntity> loadCrewTasks(List<MediatorJobWorkerEntity> jobWorkers) {
+    List<UUID> taskIds = jobWorkers.stream()
+        .map(MediatorJobWorkerEntity::getTaskId)
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .toList();
+    if (taskIds.isEmpty()) {
+      return Map.of();
+    }
+    return taskRepo.findAllById(taskIds).stream()
+        .collect(java.util.stream.Collectors.toMap(TaskEntity::getId, t -> t));
   }
 
   private void verifyOtp(String expected, String provided, String message) {

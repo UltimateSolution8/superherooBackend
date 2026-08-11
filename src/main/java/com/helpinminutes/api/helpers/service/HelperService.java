@@ -6,12 +6,12 @@ import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.dto.HelperBankDetailsResponse;
 import com.helpinminutes.api.helpers.dto.HelperPayoutAccountRequest;
+import com.helpinminutes.api.helpers.dto.PayoutAccountUpdateRequest;
 import com.helpinminutes.api.helpers.dto.HelperProfileResponse;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperPayoutAccountEntity;
 import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
-import com.helpinminutes.api.helpers.repo.HelperPayoutAccountRepository;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.users.model.UserEntity;
@@ -31,6 +31,17 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class HelperService {
+
+  /** How long a helper's go-online dispatch sweep is suppressed after one runs. */
+  private static final java.time.Duration GO_ONLINE_DISPATCH_COOLDOWN =
+      java.time.Duration.ofSeconds(60);
+
+  /**
+   * Rows fetched from the bounding box before the exact-radius filter. Larger
+   * than the dispatch limit because the box covers more area than the circle.
+   */
+  private static final int GO_ONLINE_CANDIDATE_PAGE_SIZE = 50;
+
   private final HelperProfileRepository profiles;
   private final HelperPresenceService presence;
   private final SupabaseStorageService storage;
@@ -38,7 +49,11 @@ public class HelperService {
   private final TaskRepository tasks;
   private final MatchingService matching;
   private final Executor realtimeDispatchExecutor;
-  private final HelperPayoutAccountRepository payoutAccounts;
+  private final PayoutAccountService payoutAccountService;
+  private final com.helpinminutes.api.config.AppProperties props;
+
+  @org.springframework.beans.factory.annotation.Value("${GO_ONLINE_DISPATCH_LIMIT:15}")
+  private int goOnlineDispatchLimit = 15;
 
   public HelperService(
       HelperProfileRepository profiles,
@@ -48,7 +63,8 @@ public class HelperService {
       TaskRepository tasks,
       MatchingService matching,
       @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor,
-      HelperPayoutAccountRepository payoutAccounts) {
+      PayoutAccountService payoutAccountService,
+      com.helpinminutes.api.config.AppProperties props) {
     this.profiles = profiles;
     this.presence = presence;
     this.storage = storage;
@@ -56,7 +72,8 @@ public class HelperService {
     this.tasks = tasks;
     this.matching = matching;
     this.realtimeDispatchExecutor = realtimeDispatchExecutor;
-    this.payoutAccounts = payoutAccounts;
+    this.payoutAccountService = payoutAccountService;
+    this.props = props;
   }
 
   public void setOnline(UUID helperId, double lat, double lng) {
@@ -67,29 +84,64 @@ public class HelperService {
       throw new ForbiddenException("Helper is not KYC approved");
     }
 
-    presence.setOnline(helperId, lat, lng);
+    var update = presence.setOnline(helperId, lat, lng);
 
-    realtimeDispatchExecutor.execute(() -> dispatchNearbySearchingTasks(helperId, lat, lng));
+    // Only sweep on a genuine offline→online transition. The apps call this every
+    // ~15s while online, and the sweep is the highest-fanout path in the system:
+    // up to GO_ONLINE_DISPATCH_LIMIT full dispatch cycles, each with a row lock and
+    // ~100 Redis commands. Running it per heartbeat also meant a billable SET NX on
+    // every beat just to discover the cooldown had not elapsed.
+    //
+    // Nothing is missed by skipping it: a task created while the partner is already
+    // online is dispatched to them by the normal matching flow, re-offered by the
+    // cleanup job's escalating waves, and visible in their pull feed.
+    if (update.wasOffline()) {
+      realtimeDispatchExecutor.execute(() -> dispatchNearbySearchingTasks(helperId, lat, lng));
+    }
   }
 
+  /**
+   * Re-offers nearby open tasks to a partner who has just come online.
+   *
+   * <p>This is the highest-fanout path in the system and needs two guards.
+   *
+   * <p>First, a per-helper Redis lock. Only reached on an offline→online transition
+   * now (see {@link #setOnline}), but a partner rapidly toggling availability would
+   * still re-run the whole sweep each time, and the lock is what makes that claim
+   * atomic across instances.
+   *
+   * <p>Second, a hard cap. Every {@code dispatchOffers} takes a PESSIMISTIC_WRITE
+   * row lock on the task and issues several Redis and database round trips, so an
+   * unbounded loop over a 100-row page meant a single tap could trigger a hundred
+   * full dispatch cycles. The cap is applied after the exact-radius filter, so it
+   * bounds real work rather than candidates.
+   */
   private void dispatchNearbySearchingTasks(UUID helperId, double lat, double lng) {
     try {
-      double radiusMeters = 3000d;
-      double latDelta = radiusMeters / 111_320d;
-      double cosLat = Math.max(0.1d, Math.abs(Math.cos(Math.toRadians(lat))));
-      double lngDelta = radiusMeters / (111_320d * cosLat);
+      if (!presence.tryAcquireGoOnlineDispatchLock(helperId, GO_ONLINE_DISPATCH_COOLDOWN)) {
+        return;
+      }
+      // Same reach as the pull feed: a partner coming online should be told about
+      // every open job they could actually take, not just the ones inside wave 0.
+      double radiusMeters = props.matching().pullFeedRadiusMeters();
+      GeoUtils.BoundingBox box = GeoUtils.boundingBox(lat, lng, radiusMeters);
       java.util.List<TaskEntity> searching = tasks.findAvailableInBounds(
           TaskStatus.SEARCHING,
           helperId,
           java.time.Instant.now(),
-          lat - latDelta,
-          lat + latDelta,
-          lng - lngDelta,
-          lng + lngDelta,
-          org.springframework.data.domain.PageRequest.of(0, 100));
+          box.minLat(),
+          box.maxLat(),
+          box.minLng(),
+          box.maxLng(),
+          org.springframework.data.domain.PageRequest.of(0, GO_ONLINE_CANDIDATE_PAGE_SIZE));
+      int dispatched = 0;
       for (TaskEntity task : searching) {
+        if (dispatched >= goOnlineDispatchLimit) {
+          break;
+        }
         if (GeoUtils.distanceMeters(task.getLat(), task.getLng(), lat, lng) <= radiusMeters) {
           matching.dispatchOffers(task);
+          dispatched++;
         }
       }
     } catch (Exception e) {
@@ -108,24 +160,15 @@ public class HelperService {
     return toResponse(p);
   }
 
-  @Transactional
-  public HelperBankDetailsResponse savePayoutAccount(UUID helperId, HelperPayoutAccountRequest req) {
+  public HelperBankDetailsResponse getPayoutAccount(UUID helperId) {
     profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
-    HelperPayoutAccountEntity account = payoutAccounts
-        .findByHelperIdAndProvider(helperId, HelperPayoutAccountEntity.DEFAULT_PROVIDER)
-        .orElseGet(() -> {
-          HelperPayoutAccountEntity created = new HelperPayoutAccountEntity();
-          created.setHelperId(helperId);
-          created.setProvider(HelperPayoutAccountEntity.DEFAULT_PROVIDER);
-          created.setStatus("PENDING_KYC");
-          return created;
-        });
-    account.setAccountHolderName(trimToNull(req.accountHolderName()));
-    account.setBankName(trimToNull(req.bankName()));
-    account.setBankAccountLast4(req.bankAccountLast4());
-    account.setIfscCode(req.ifscCode().trim().toUpperCase());
-    account.setUpiIdMasked(trimToNull(req.upiIdMasked()));
-    return toBankDetails(payoutAccounts.save(account));
+    return payoutAccountService.getCurrent(helperId);
+  }
+
+  @Transactional
+  public HelperBankDetailsResponse savePayoutAccount(UUID helperId, PayoutAccountUpdateRequest req, String ipAddress) {
+    profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
+    return payoutAccountService.replace(helperId, com.helpinminutes.api.users.model.UserRole.HELPER, req, ipAddress);
   }
 
   public HelperIdCardResponse getIdCard(UUID helperId) {
@@ -162,7 +205,10 @@ public class HelperService {
       String idNumber,
       MultipartFile idFront,
       MultipartFile idBack,
-      MultipartFile selfie) {
+      MultipartFile selfie,
+      String accountHolderName,
+      String bankAccountNumber,
+      String ifscCode) {
     if (fullName == null || fullName.isBlank()) {
       throw new BadRequestException("fullName is required");
     }
@@ -173,6 +219,11 @@ public class HelperService {
     String normalizedIdNumber = normalizeAndValidateIdNumber(idNumber, normalizedDocType);
     if ("AADHAAR".equals(normalizedDocType) && (idBack == null || idBack.isEmpty())) {
       throw new BadRequestException("Aadhaar back image is required");
+    }
+    PayoutAccountService.PreparedAccount preparedBank = null;
+    if (!payoutAccountService.hasSecureCurrent(helperId)) {
+      preparedBank = payoutAccountService.prepare(
+          new HelperPayoutAccountRequest(accountHolderName, bankAccountNumber, ifscCode));
     }
 
     HelperProfileEntity p = profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
@@ -189,6 +240,9 @@ public class HelperService {
     p.setKycStatus(HelperKycStatus.PENDING);
     p.setKycRejectionReason(null);
     profiles.save(p);
+    if (preparedBank != null) {
+      payoutAccountService.replacePrepared(helperId, com.helpinminutes.api.users.model.UserRole.HELPER, preparedBank);
+    }
 
     return toResponse(p);
   }
@@ -207,26 +261,11 @@ public class HelperService {
         buildKycTokenNumber(p),
         position,
         estimatedWaitMinutes(position),
-        payoutAccounts.findByHelperIdAndProvider(p.getUserId(), HelperPayoutAccountEntity.DEFAULT_PROVIDER)
-            .map(HelperService::toBankDetails)
-            .orElse(null));
+        payoutAccountService.getCurrent(p.getUserId()));
   }
 
   public static HelperBankDetailsResponse toBankDetails(HelperPayoutAccountEntity account) {
-    if (account == null) return null;
-    return new HelperBankDetailsResponse(
-        account.getAccountHolderName(),
-        account.getBankName(),
-        account.getBankAccountLast4(),
-        account.getIfscCode(),
-        account.getUpiIdMasked(),
-        account.getUpdatedAt());
-  }
-
-  private static String trimToNull(String value) {
-    if (value == null) return null;
-    String trimmed = value.trim();
-    return trimmed.isEmpty() ? null : trimmed;
+    return PayoutAccountService.toResponse(account);
   }
 
   private static String buildKycTokenNumber(HelperProfileEntity p) {

@@ -1,0 +1,74 @@
+[Unit]
+Description=Superheroo API (Spring Boot)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=superheroo
+Group=superheroo
+WorkingDirectory=/opt/superheroo
+
+# ---------------------------------------------------------------------------
+# JVM sizing.
+#
+# Deliberately absolute (-Xmx) rather than -XX:MaxRAMPercentage. This is a bare
+# droplet, not a container: MaxRAMPercentage computes off TOTAL system RAM, so
+# 75% on a 4 GB box asks for a 3 GB heap on a machine that also runs nginx,
+# Redis and the Node realtime gateway. Backend/Dockerfile keeps the percentage
+# form because container limits make it correct there.
+#
+# 4 GB budget: nginx ~50M, redis ~256M, node gateway ~150M, OS ~400M.
+# ~3 GB left; the JVM gets ~2 GB total RSS once metaspace, direct buffers,
+# code cache and thread stacks are counted, so 1400m heap is the honest ceiling.
+#
+# Override JAVA_OPTS wholesale in /etc/superheroo/api.env to run on a 1 GB
+# droplet — see deploy/api.env.example.
+# ---------------------------------------------------------------------------
+Environment="JAVA_OPTS=-XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -Xms512m \
+  -Xmx1400m \
+  -XX:MaxMetaspaceSize=256m \
+  -XX:MaxDirectMemorySize=192m \
+  -XX:ReservedCodeCacheSize=128m \
+  -XX:+UseStringDeduplication \
+  -XX:+ExitOnOutOfMemoryError \
+  -XX:+HeapDumpOnOutOfMemoryError \
+  -XX:HeapDumpPath=/var/log/superheroo/heapdump.hprof \
+  -Djava.awt.headless=true \
+  -Dfile.encoding=UTF-8 \
+  -Duser.timezone=UTC"
+
+EnvironmentFile=/etc/superheroo/api.env
+ExecStart=/usr/bin/java $JAVA_OPTS -jar /opt/superheroo/app.jar
+
+Restart=on-failure
+RestartSec=5
+# Must exceed spring.lifecycle.timeout-per-shutdown-phase (25s) so graceful
+# shutdown can drain in-flight requests before SIGKILL.
+TimeoutStopSec=45
+KillSignal=SIGTERM
+KillMode=mixed
+# The JVM exits 143 on SIGTERM; without this systemd records every clean stop
+# as a failure.
+SuccessExitStatus=143
+
+# cgroup ceiling. A leak gets the JVM killed rather than the box swapping to
+# death and taking nginx, Redis and the gateway down with it.
+MemoryHigh=1800M
+MemoryMax=2G
+OOMPolicy=stop
+
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/superheroo /opt/superheroo
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=superheroo-api
+
+[Install]
+WantedBy=multi-user.target

@@ -37,7 +37,8 @@ class PushNotificationServiceAdminTest {
         Runnable::run,
         "",
         "",
-        "missing-firebase-service-account.json");
+        "missing-firebase-service-account.json",
+        com.helpinminutes.api.config.TestAppProperties.defaults());
     when(tokens.getTokensForUsers(anyList())).thenReturn(List.of());
   }
 

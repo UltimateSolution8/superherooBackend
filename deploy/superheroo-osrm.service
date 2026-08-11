@@ -1,0 +1,38 @@
+[Unit]
+Description=Superheroo OSRM routing (Greater Hyderabad, self-hosted)
+Documentation=file:///opt/superheroo/docs/OSRM_SETUP.md
+After=network-online.target docker.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# OSRM has no authentication. The API is its only client, so loopback binding is
+# mandatory and this unit must never be added to an nginx upstream.
+Environment="OSRM_IMAGE=ghcr.io/project-osrm/osrm-backend@sha256:3ac496ff8fd7e1af53846179d73d06a97f719c8ad2217d008ed868942398665c"
+ExecStartPre=-/usr/bin/docker rm -f superheroo-osrm
+ExecStartPre=/usr/bin/test -s /var/lib/osrm/current/greater-hyderabad.osrm.mldgr
+ExecStart=/usr/bin/docker run --rm --name superheroo-osrm \
+  --memory=512m --memory-swap=512m --cpus=1.5 \
+  -p 127.0.0.1:5001:5000 \
+  -v /var/lib/osrm/current:/data:ro \
+  ${OSRM_IMAGE} \
+  osrm-routed --algorithm mld --max-table-size 64 /data/greater-hyderabad.osrm
+ExecStop=/usr/bin/docker stop superheroo-osrm
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+StartLimitBurst=5
+StartLimitIntervalSec=300
+MemoryHigh=480M
+MemoryMax=512M
+OOMPolicy=stop
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=superheroo-osrm
+
+[Install]
+WantedBy=multi-user.target

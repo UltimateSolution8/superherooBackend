@@ -56,5 +56,16 @@ public record TaskResponse(
     UUID recurringTaskId,
     UUID batchId,
     PaymentCollectionMode paymentCollectionMode,
-    TaskVerificationMode verificationMode
+    TaskVerificationMode verificationMode,
+    /**
+     * Distance from the requesting partner to the task, when the endpoint knows
+     * where they are. Null on every other view.
+     *
+     * <p>Populated for {@code GET /tasks/available}. Its absence was a real bug:
+     * the partner app read {@code distanceMeters ?? 0}, so every polled job
+     * rendered as "0.0 km" and sorted ahead of genuinely nearer socket offers.
+     */
+    Double distanceMeters,
+    /** Driving ETA in minutes for the same view; null when unknown. */
+    Integer etaMinutes
 ) {}

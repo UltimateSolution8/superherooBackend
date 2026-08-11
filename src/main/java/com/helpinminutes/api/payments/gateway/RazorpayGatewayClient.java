@@ -24,6 +24,16 @@ public class RazorpayGatewayClient implements RazorpayGateway {
   private final String webhookSecret;
   private volatile RazorpayClient client;
 
+  /**
+   * One client for the bean's lifetime. This used to be built inside
+   * {@link #refundPayment}, which spun up a fresh selector thread, executor and
+   * connection pool on every refund call — and refunds run on a 60s scheduled
+   * retry loop.
+   */
+  private final HttpClient http = HttpClient.newBuilder()
+      .connectTimeout(Duration.ofSeconds(10))
+      .build();
+
   public RazorpayGatewayClient(
       @Value("${razorpay.key-id:}") String keyId,
       @Value("${razorpay.key-secret:}") String keySecret,
@@ -102,10 +112,7 @@ public class RazorpayGatewayClient implements RazorpayGateway {
           .header("X-Refund-Idempotency", receipt)
           .POST(HttpRequest.BodyPublishers.ofString(request.toString()))
           .build();
-      HttpResponse<String> response = HttpClient.newBuilder()
-          .connectTimeout(Duration.ofSeconds(10))
-          .build()
-          .send(httpRequest, HttpResponse.BodyHandlers.ofString());
+      HttpResponse<String> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
         throw new RazorpayGatewayException("Razorpay refund request returned HTTP " + response.statusCode());
       }

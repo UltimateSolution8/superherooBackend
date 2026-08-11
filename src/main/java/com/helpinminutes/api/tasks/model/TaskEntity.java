@@ -129,11 +129,34 @@ public class TaskEntity {
   private Instant helperRatedAt;
 
   @Enumerated(EnumType.STRING)
-  @Column(nullable = false)
+  // The column is VARCHAR(30) (V1__init.sql). Without an explicit length Hibernate
+  // assumes 255, and ddl-auto: validate does not check lengths — so a future enum
+  // constant longer than 30 characters would fail at insert time rather than at
+  // startup.
+  @Column(nullable = false, length = 30)
   private TaskStatus status;
 
   @Column(name = "assigned_helper_id")
   private UUID assignedHelperId;
+
+  /**
+   * When this task most recently entered SEARCHING.
+   *
+   * <p>The search timeout and the re-dispatch window are both measured from here,
+   * never from {@code createdAt}. A booking released from ADMIN_REVIEW hours after
+   * it was created gets a full, fresh search window — keying off createdAt meant
+   * the next cleanup tick cancelled it immediately.
+   */
+  @Column(name = "searching_started_at")
+  private Instant searchingStartedAt;
+
+  /** Dispatch tier reached so far: 0 = nearest ring, incremented per wave. */
+  @Column(name = "dispatch_wave", nullable = false)
+  private int dispatchWave;
+
+  /** Last time offers were pushed for this task; backs off the re-dispatch loop. */
+  @Column(name = "last_dispatched_at")
+  private Instant lastDispatchedAt;
 
   @Column(name = "recurring_task_id")
   private UUID recurringTaskId;
@@ -171,12 +194,30 @@ public class TaskEntity {
     if (createdAt == null) {
       createdAt = now;
     }
+    if (status == TaskStatus.SEARCHING && searchingStartedAt == null) {
+      searchingStartedAt = now;
+    }
     updatedAt = now;
   }
 
   @PreUpdate
   public void preUpdate() {
     updatedAt = Instant.now();
+  }
+
+  /**
+   * Enters SEARCHING and restarts the search clock and wave counter.
+   *
+   * <p>Every transition into SEARCHING must go through here. The cleanup job
+   * measures both the re-dispatch window and the hard timeout from
+   * {@code searchingStartedAt}, so a path that sets the status directly would
+   * inherit a stale clock and be cancelled on the next tick.
+   */
+  public void beginSearching(Instant now) {
+    this.status = TaskStatus.SEARCHING;
+    this.searchingStartedAt = now;
+    this.dispatchWave = 0;
+    this.lastDispatchedAt = null;
   }
 
   public UUID getId() {
@@ -489,6 +530,30 @@ public class TaskEntity {
 
   public void setAssignedHelperId(UUID assignedHelperId) {
     this.assignedHelperId = assignedHelperId;
+  }
+
+  public Instant getSearchingStartedAt() {
+    return searchingStartedAt;
+  }
+
+  public void setSearchingStartedAt(Instant searchingStartedAt) {
+    this.searchingStartedAt = searchingStartedAt;
+  }
+
+  public int getDispatchWave() {
+    return dispatchWave;
+  }
+
+  public void setDispatchWave(int dispatchWave) {
+    this.dispatchWave = dispatchWave;
+  }
+
+  public Instant getLastDispatchedAt() {
+    return lastDispatchedAt;
+  }
+
+  public void setLastDispatchedAt(Instant lastDispatchedAt) {
+    this.lastDispatchedAt = lastDispatchedAt;
   }
 
   public Instant getCreatedAt() {

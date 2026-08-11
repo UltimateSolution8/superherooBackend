@@ -1,0 +1,13 @@
+# Compatibility settings for legacy API deployments that do not already carry
+# the current app.matching configuration block. This file contains no secrets.
+app:
+  matching:
+    h3Resolution: 9
+    maxKRing: 6
+    offerFanout: 8
+    helperStaleAfterSeconds: 120
+    offerTtlSeconds: 45
+    waveRadiiMeters: [3000, 6000, 10000]
+    waveFanouts: [8, 15, 25]
+    pullFeedRadiusMeters: 15000
+    maxLiveOffersPerHelper: 2
