@@ -6,11 +6,16 @@ Nominatim, Photon, or a tile server on the 2 GB host.
 
 | Capability | Provider order |
 |---|---|
-| Autocomplete and place details | Ola → Google |
-| Native reverse geocode | Expo device geocoder |
-| Web reverse geocode | API proxy: Ola → Google |
+| Autocomplete and place details | Google (Places API New) → Ola → local |
+| Reverse geocode | API proxy: Google → Ola, then the Expo device geocoder |
 | Route and ETA matrix | self-hosted OSRM → Ola → Google/local estimate |
 | Map rendering | package-restricted Google Maps SDK |
+
+Search leads with Google because suggestion quality is the part citizens notice,
+and at launch volume the per-SKU free tiers absorb it; `GEO_GOOGLE_MONTHLY_CALL_CAP`
+demotes the chain to Ola for the rest of the month if that stops being true.
+Routing is the opposite trade — OSRM is free and local, so it leads, and Google is
+a residual last resort that is deliberately never capped.
 
 ## Capacity and security gate
 
