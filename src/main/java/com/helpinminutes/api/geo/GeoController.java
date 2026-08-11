@@ -35,31 +35,51 @@ public class GeoController {
   private static final int MIN_QUERY_LENGTH = 2;
 
   private final GeoProviderChain geo;
+  private final GeoProperties props;
+  private final GeoSpendGuard spendGuard;
 
-  public GeoController(GeoProviderChain geo) {
+  public GeoController(GeoProviderChain geo, GeoProperties props, GeoSpendGuard spendGuard) {
     this.geo = geo;
+    this.props = props;
+    this.spendGuard = spendGuard;
   }
 
+  /**
+   * @param context what the caller is doing, e.g. {@code task_create}. Only the
+   *     contexts on the server's allowlist reach the paid provider; everything else,
+   *     including an unrecognised value, gets the free order. The app states its
+   *     intent and the server prices it — the app never names a provider.
+   * @param sessionToken groups one address entry's keystrokes and its final details
+   *     lookup into a single billing session upstream
+   */
   @GetMapping("/autocomplete")
   public GeoDtos.SuggestionsResponse autocomplete(
       @AuthenticationPrincipal UserPrincipal principal,
       @RequestParam("q") String query,
       @RequestParam(value = "lat", required = false) Double lat,
-      @RequestParam(value = "lng", required = false) Double lng) {
+      @RequestParam(value = "lng", required = false) Double lng,
+      @RequestParam(value = "context", required = false) String context,
+      @RequestParam(value = "sessionToken", required = false) String sessionToken) {
     if (query == null || query.trim().length() < MIN_QUERY_LENGTH) {
       return new GeoDtos.SuggestionsResponse(java.util.List.of(), "none", false);
     }
-    return geo.autocomplete(query, lat, lng);
+    // The daily budget is only spent by requests that ask for the paid tier, and
+    // exhausting it downgrades the request rather than failing it: suggestions still
+    // arrive, from the free provider.
+    boolean premium = props.isPremiumContext(context)
+        && spendGuard.allowPremiumForUser(principal == null ? null : principal.userId());
+    return geo.autocomplete(query, lat, lng, premium, sessionToken);
   }
 
   @GetMapping("/place")
   public GeoDtos.GeoEnvelope<GeoDtos.PlaceDetail> placeDetails(
       @AuthenticationPrincipal UserPrincipal principal,
-      @RequestParam("placeId") String placeId) {
+      @RequestParam("placeId") String placeId,
+      @RequestParam(value = "sessionToken", required = false) String sessionToken) {
     if (placeId == null || placeId.isBlank()) {
       throw new BadRequestException("placeId is required");
     }
-    return geo.placeDetails(placeId);
+    return geo.placeDetails(placeId, sessionToken);
   }
 
   @GetMapping("/reverse")

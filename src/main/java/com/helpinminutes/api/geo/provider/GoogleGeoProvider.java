@@ -14,16 +14,15 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 /**
- * Google Maps Platform — the primary provider for place search.
+ * Google Maps Platform — reached on one screen, and as a fallback everywhere else.
  *
- * <p>Search moved here from Ola because at launch volume the quality difference is
- * worth more than the difference in bill. The numbers, on the per-SKU free tiers
- * (10k/month each on Autocomplete Requests and Place Details Essentials, then
- * $2.83/1k and $5/1k): a few hundred address entries a month is free outright, and
- * ten times that is single-digit dollars. Ola stays configured behind it and takes
- * over automatically on failure or once {@link GeoSpendGuard} trips.
+ * <p>Google answers autocomplete only for requests the server has priced as premium
+ * (see {@code GeoProperties.premiumContexts} — today, address entry while creating a
+ * task), plus the details lookup that resolving one of its suggestions requires.
+ * Every other geo call in the product is served by Ola or by self-hosted OSRM, and
+ * reaches this class only if those are down.
  *
- * <p>Two deliberate choices keep it in the cheap tier:
+ * <p>Three deliberate choices keep the resulting bill at or near zero:
  *
  * <ul>
  *   <li><b>Places API (New)</b>, not the legacy {@code /maps/api/place} endpoints.
@@ -33,15 +32,19 @@ import org.springframework.stereotype.Component;
  *       {@code formattedAddress} or {@code displayName} moves that call from the
  *       Essentials SKU to Pro — 3.4× the price and half the free tier — to fetch a
  *       label the autocomplete response already gave us.
+ *   <li><b>A session token on both halves of an address entry.</b> Without one,
+ *       every keystroke is a separately billed Autocomplete request. With one, the
+ *       keystrokes past the twelfth in a session bill as Autocomplete Session Usage,
+ *       which is free and unlimited — so a session has a bounded price no matter how
+ *       long the citizen types.
  * </ul>
  *
- * <p>Routing is a different story and stays behind OSRM and Ola: it is our
- * highest-frequency geo call by an order of magnitude, and self-hosted routing is
- * free.
+ * <p>Routing stays behind OSRM and Ola: it is our highest-frequency geo call by an
+ * order of magnitude, and self-hosted routing is free.
  *
  * <p>Note what is <i>not</i> here: map rendering. The Maps SDK for Android map load
  * is a separate SKU billed at nothing, unlimited, so the map canvas stays on Google
- * in the app with a package-restricted key. This class only replaces the calls that
+ * in the app with a package-restricted key. This class only covers the calls that
  * cost money.
  */
 @Component
@@ -98,6 +101,12 @@ public class GoogleGeoProvider implements GeoProvider {
   @Override
   public Optional<List<GeoDtos.PlaceSuggestion>> autocomplete(
       String query, Double biasLat, Double biasLng) {
+    return autocomplete(query, biasLat, biasLng, null);
+  }
+
+  @Override
+  public Optional<List<GeoDtos.PlaceSuggestion>> autocomplete(
+      String query, Double biasLat, Double biasLng, String sessionToken) {
     if (!isEnabled() || query == null || query.isBlank()) return Optional.empty();
     if (!spendGuard.tryConsume("autocomplete")) return Optional.empty();
 
@@ -118,6 +127,11 @@ public class GoogleGeoProvider implements GeoProvider {
     // Same point as the bias, so each prediction comes back with distanceMeters.
     // The app sorts on it and it costs nothing extra.
     body.put("origin", centre);
+    // Omitting this bills every keystroke separately; reusing a spent one is billed
+    // as though it were omitted, which is why the app rotates after each pick.
+    if (sessionToken != null && !sessionToken.isBlank()) {
+      body.put("sessionToken", sessionToken);
+    }
 
     return http.postJson(
             PLACES_BASE_URL + "/v1/places:autocomplete",
@@ -150,15 +164,26 @@ public class GoogleGeoProvider implements GeoProvider {
 
   @Override
   public Optional<GeoDtos.PlaceDetail> placeDetails(String providerPlaceId) {
+    return placeDetails(providerPlaceId, null);
+  }
+
+  @Override
+  public Optional<GeoDtos.PlaceDetail> placeDetails(String providerPlaceId, String sessionToken) {
     if (!isEnabled() || providerPlaceId == null || providerPlaceId.isBlank()) {
       return Optional.empty();
     }
     if (!spendGuard.tryConsume("placeDetails")) return Optional.empty();
 
+    // This call is what closes the billing session opened by the autocompletes.
+    String url = PLACES_BASE_URL + "/v1/places/" + GeoHttp.encode(providerPlaceId);
+    if (sessionToken != null && !sessionToken.isBlank()) {
+      url += "?sessionToken=" + GeoHttp.encode(sessionToken);
+    }
+
     // Essentials field mask. See the class comment: asking for the address here
     // would triple the price of a call whose only job is to supply coordinates.
     return http.getJson(
-            PLACES_BASE_URL + "/v1/places/" + GeoHttp.encode(providerPlaceId),
+            url,
             props.getPerProviderTimeoutMs(),
             NAME,
             authHeaders("id,location"))

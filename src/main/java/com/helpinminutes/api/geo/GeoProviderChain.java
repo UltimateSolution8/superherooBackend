@@ -63,17 +63,31 @@ public class GeoProviderChain {
   }
 
   public GeoDtos.SuggestionsResponse autocomplete(String query, Double biasLat, Double biasLng) {
+    return autocomplete(query, biasLat, biasLng, false, null);
+  }
+
+  /**
+   * @param premium use the premium provider order. The caller has already checked
+   *     the request's context against the allowlist — this method trusts that
+   *     decision and does not re-derive it.
+   * @param sessionToken groups this lookup with the rest of one address entry for
+   *     billing; may be null
+   */
+  public GeoDtos.SuggestionsResponse autocomplete(
+      String query, Double biasLat, Double biasLng, boolean premium, String sessionToken) {
     if (query == null || query.trim().length() < 2) {
       return new GeoDtos.SuggestionsResponse(List.of(), "none", false);
     }
     String trimmed = query.trim();
     Attempt<List<GeoDtos.PlaceSuggestion>> attempt = cachedAttempt(
-        GeoCache.autocompleteKey(trimmed, biasLat, biasLng),
-        Duration.ofSeconds(props.getCache().getAutocompleteTtlSeconds()),
+        GeoCache.autocompleteKey(trimmed, biasLat, biasLng, premium),
+        Duration.ofSeconds(premium
+            ? props.getCache().getPremiumAutocompleteTtlSeconds()
+            : props.getCache().getAutocompleteTtlSeconds()),
         new TypeReference<>() {},
-        props.getAutocompleteOrder(),
+        premium ? props.getPremiumAutocompleteOrder() : props.getAutocompleteOrder(),
         GeoProvider::supportsAutocomplete,
-        provider -> provider.autocomplete(trimmed, biasLat, biasLng),
+        provider -> provider.autocomplete(trimmed, biasLat, biasLng, sessionToken),
         "autocomplete");
 
     // Empty suggestions are a legitimate answer, not an error — the citizen can
@@ -85,6 +99,19 @@ public class GeoProviderChain {
   }
 
   public GeoDtos.GeoEnvelope<GeoDtos.PlaceDetail> placeDetails(String prefixedPlaceId) {
+    return placeDetails(prefixedPlaceId, null);
+  }
+
+  /**
+   * Resolves a suggestion to coordinates.
+   *
+   * <p>The prefix, not {@code placeDetailsOrder}, decides who answers when there is
+   * one — which is why Google still serves details for a Google suggestion even
+   * though it no longer appears in that order. Anything else would hand a foreign
+   * id to a provider that cannot read it.
+   */
+  public GeoDtos.GeoEnvelope<GeoDtos.PlaceDetail> placeDetails(
+      String prefixedPlaceId, String sessionToken) {
     ProviderScopedId scoped = ProviderScopedId.parse(prefixedPlaceId);
     // A place id is only meaningful to the provider that minted it, so the prefix
     // pins the lookup rather than walking the whole chain with a foreign id.
@@ -98,7 +125,7 @@ public class GeoProviderChain {
         new TypeReference<>() {},
         order,
         GeoProvider::supportsPlaceDetails,
-        provider -> provider.placeDetails(scoped.rawId()),
+        provider -> provider.placeDetails(scoped.rawId(), sessionToken),
         "place_details");
 
     return attempt.value == null

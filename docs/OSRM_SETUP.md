@@ -6,16 +6,29 @@ Nominatim, Photon, or a tile server on the 2 GB host.
 
 | Capability | Provider order |
 |---|---|
-| Autocomplete and place details | Google (Places API New) → Ola → local |
-| Reverse geocode | API proxy: Google → Ola, then the Expo device geocoder |
+| Autocomplete — create-task address entry | Google (Places API New) → Ola → local |
+| Autocomplete — everywhere else | Ola → local |
+| Place details | Ola → local, plus Google for its own place ids |
+| Reverse geocode | API proxy: Ola → Google, then the Expo device geocoder |
 | Route and ETA matrix | self-hosted OSRM → Ola → Google/local estimate |
 | Map rendering | package-restricted Google Maps SDK |
 
-Search leads with Google because suggestion quality is the part citizens notice,
-and at launch volume the per-SKU free tiers absorb it; `GEO_GOOGLE_MONTHLY_CALL_CAP`
-demotes the chain to Ola for the rest of the month if that stops being true.
-Routing is the opposite trade — OSRM is free and local, so it leads, and Google is
-a residual last resort that is deliberately never capped.
+Ola and OSRM lead everywhere; Google is reached on one screen. Address entry while
+creating a task is where a citizen types a place they have not saved, so suggestion
+quality decides whether the booking happens — and it is also our lowest-frequency
+text call, a couple of dozen a month at launch. `GEO_PREMIUM_CONTEXTS` is the
+server-side allowlist of request contexts allowed to reach it; clearing that
+variable turns Google off without an app release.
+
+Note that Google still serves place details for its own suggestions regardless of
+`GEO_PLACE_DETAILS_ORDER`: a `google:` place id can only be resolved by Google, so
+that is one Essentials call per accepted suggestion. Ola suggestions carry
+coordinates inline and cost no details call at all.
+
+Two ceilings bound the result — `GEO_GOOGLE_MONTHLY_CALL_CAP` on the bill and
+`GEO_GOOGLE_USER_DAILY_CALL_CAP` on any one account. Past either, the chain falls
+back to Ola. Routing is deliberately never capped: it only reaches Google when both
+OSRM and Ola are down, and no route at all is worse than the call.
 
 ## Capacity and security gate
 

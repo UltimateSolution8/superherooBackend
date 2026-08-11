@@ -49,8 +49,28 @@ public interface GeoProvider {
     return Optional.empty();
   }
 
+  /**
+   * Autocomplete within a billing session.
+   *
+   * <p>{@code sessionToken} groups the keystrokes of one address entry and the
+   * details lookup that concludes it, which is how Google stops billing each
+   * keystroke separately. Only providers that charge per request care; the default
+   * discards it, so Ola, OSRM and the local provider need no session concept.
+   *
+   * @param sessionToken opaque, may be null when the caller has no session
+   */
+  default Optional<List<GeoDtos.PlaceSuggestion>> autocomplete(
+      String query, Double biasLat, Double biasLng, String sessionToken) {
+    return autocomplete(query, biasLat, biasLng);
+  }
+
   default Optional<GeoDtos.PlaceDetail> placeDetails(String providerPlaceId) {
     return Optional.empty();
+  }
+
+  /** Place details closing the session opened by {@code sessionToken}. See above. */
+  default Optional<GeoDtos.PlaceDetail> placeDetails(String providerPlaceId, String sessionToken) {
+    return placeDetails(providerPlaceId);
   }
 
   default Optional<GeoDtos.ReverseGeocode> reverseGeocode(double lat, double lng) {

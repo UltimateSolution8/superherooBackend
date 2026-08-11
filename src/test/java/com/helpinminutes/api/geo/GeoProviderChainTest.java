@@ -39,6 +39,75 @@ class GeoProviderChainTest {
     return new GeoProviderChain(List.of(providers), props, noOpCache(), new SimpleMeterRegistry());
   }
 
+  // ─── premium tier ─────────────────────────────────────────────────────────
+
+  /**
+   * The premium order is the only way to reach the paid provider, and it is reached
+   * only when the caller has already been priced as premium. If these two ever
+   * merge, either every screen starts billing or the create-task screen stops
+   * getting the suggestions it exists for.
+   */
+  @Test
+  void usesThePremiumOrderOnlyForAPremiumRequest() {
+    props.setAutocompleteOrder(List.of("cheap"));
+    props.setPremiumAutocompleteOrder(List.of("paid", "cheap"));
+    StubProvider cheap =
+        new StubProvider("cheap").withAutocomplete(Optional.of(List.of(suggestion("Ola result"))));
+    StubProvider paid =
+        new StubProvider("paid").withAutocomplete(Optional.of(List.of(suggestion("Google result"))));
+    chain = chainOf(cheap, paid);
+
+    assertEquals("cheap", chain.autocomplete("madhapur", null, null).provider());
+    assertEquals(0, paid.autocompleteCalls.get());
+
+    assertEquals("paid", chain.autocomplete("madhapur", null, null, true, null).provider());
+    assertEquals(1, paid.autocompleteCalls.get());
+  }
+
+  /** A premium request still falls through, so a Google outage is not a dead field. */
+  @Test
+  void premiumFallsBackToTheCheapProvider() {
+    props.setPremiumAutocompleteOrder(List.of("paid", "cheap"));
+    chain = chainOf(
+        new StubProvider("paid").withAutocomplete(Optional.empty()),
+        new StubProvider("cheap").withAutocomplete(Optional.of(List.of(suggestion("Madhapur")))));
+
+    var result = chain.autocomplete("madhapur", null, null, true, null);
+
+    assertEquals("cheap", result.provider());
+    assertFalse(result.degraded());
+  }
+
+  /**
+   * The two tiers must not share a cache entry. Sharing one would let whichever
+   * request arrived first decide the quality every later one gets — and would hand
+   * Google place ids, which only Google can resolve, to callers on the free order.
+   */
+  @Test
+  void theTwoTiersUseSeparateCacheKeys() {
+    assertFalse(GeoCache.autocompleteKey("madhapur", 17.44, 78.39, false)
+        .equals(GeoCache.autocompleteKey("madhapur", 17.44, 78.39, true)));
+    // Same tier, same query: still one entry, so the shared cache keeps working.
+    assertEquals(
+        GeoCache.autocompleteKey("madhapur", 17.44, 78.39, true),
+        GeoCache.autocompleteKey("  MADHAPUR ", 17.44, 78.39, true));
+  }
+
+  /** The session token reaches the provider; nothing else may consume it on the way. */
+  @Test
+  void passesTheSessionTokenToTheProvider() {
+    props.setPremiumAutocompleteOrder(List.of("paid"));
+    StubProvider paid =
+        new StubProvider("paid").withAutocomplete(Optional.of(List.of(suggestion("Madhapur"))));
+    chain = chainOf(paid);
+
+    chain.autocomplete("madhapur", null, null, true, "session-abc");
+    assertEquals("session-abc", paid.lastSessionToken);
+
+    chain.placeDetails("paid:xyz", "session-abc");
+    assertEquals("session-abc", paid.lastSessionToken);
+  }
+
   // ─── fallthrough ──────────────────────────────────────────────────────────
 
   @Test
@@ -279,6 +348,7 @@ class GeoProviderChainTest {
     final AtomicInteger placeDetailsCalls = new AtomicInteger();
     final AtomicInteger routeCalls = new AtomicInteger();
     String lastPlaceId;
+    String lastSessionToken;
 
     StubProvider(String name) {
       this.name = name;
@@ -357,10 +427,23 @@ class GeoProviderChainTest {
 
     @Override
     public Optional<List<GeoDtos.PlaceSuggestion>> autocomplete(
+        String query, Double biasLat, Double biasLng, String sessionToken) {
+      lastSessionToken = sessionToken;
+      return autocomplete(query, biasLat, biasLng);
+    }
+
+    @Override
+    public Optional<List<GeoDtos.PlaceSuggestion>> autocomplete(
         String query, Double biasLat, Double biasLng) {
       autocompleteCalls.incrementAndGet();
       if (throwOnAutocomplete) throw new IllegalStateException("upstream returned garbage");
       return autocomplete;
+    }
+
+    @Override
+    public Optional<GeoDtos.PlaceDetail> placeDetails(String providerPlaceId, String sessionToken) {
+      lastSessionToken = sessionToken;
+      return placeDetails(providerPlaceId);
     }
 
     @Override

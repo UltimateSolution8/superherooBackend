@@ -17,10 +17,18 @@ import org.springframework.stereotype.Component;
  *       best answer.
  *   <li><b>Text APIs</b> (autocomplete, details, reverse) → Ola Maps. 500k
  *       calls/month free, India-tuned, and biasable to Hyderabad.
- *   <li><b>Google</b> → fallback only. Its per-SKU free tier is 10k/month, which
- *       comfortably absorbs residual volume. Map <i>rendering</i> stays on the
- *       Google mobile SDK, which is a separate, unlimited-free SKU.
+ *   <li><b>Google</b> → fallback only, plus the one premium exception below. Map
+ *       <i>rendering</i> stays on the Google mobile SDK, which is a separate,
+ *       unlimited-free SKU.
  * </ul>
+ *
+ * <p>The exception is {@link #premiumAutocompleteOrder}. Address entry on the
+ * create-task screen is the one place where suggestion quality is the product —
+ * a citizen who cannot find their own street does not book — and it is also our
+ * lowest-frequency text call, so it leads with Google. Every other screen is
+ * picking from saved addresses or correcting one, and Ola is fine there. Which
+ * requests qualify is decided here, on the server, from {@link #premiumContexts};
+ * the app only states what it is doing.
  *
  * <p>The public OSM demo endpoints the app used to call directly
  * (nominatim.openstreetmap.org, photon.komoot.io, router.project-osrm.org) are
@@ -32,10 +40,34 @@ import org.springframework.stereotype.Component;
 public class GeoProperties {
 
   /** Per-capability provider order. First enabled provider that answers wins. */
-  private List<String> autocompleteOrder = List.of("ola", "google", "local");
-  private List<String> placeDetailsOrder = List.of("ola", "google", "local");
+  private List<String> autocompleteOrder = List.of("ola", "local");
+  private List<String> placeDetailsOrder = List.of("ola", "local");
   private List<String> reverseGeocodeOrder = List.of("ola", "google");
   private List<String> routingOrder = List.of("osrm", "ola", "google");
+
+  /**
+   * Provider order for a request in one of {@link #premiumContexts}.
+   *
+   * <p>Note that {@code google} is absent from {@link #placeDetailsOrder} but
+   * still gets details traffic: a Google suggestion carries a {@code google:}
+   * place id and only Google can resolve it, so {@code GeoProviderChain} pins
+   * that lookup to Google by prefix. That is one details call per accepted
+   * suggestion, and it is the unavoidable other half of a premium autocomplete —
+   * not a second discretionary choice. Ola suggestions carry coordinates inline
+   * and cost no details call at all.
+   */
+  private List<String> premiumAutocompleteOrder = List.of("google", "ola", "local");
+
+  /**
+   * Request contexts allowed to use {@link #premiumAutocompleteOrder}.
+   *
+   * <p>An allowlist rather than a boolean flag: the app sends what it is doing,
+   * not which provider it wants, so widening or withdrawing the premium path is
+   * a config change here and never an app release. Anything unrecognised — including
+   * a caller inventing a context — is simply not premium, so the failure mode of a
+   * hostile client is a cheaper search, not a bigger bill.
+   */
+  private List<String> premiumContexts = List.of("task_create");
 
   /** Per-request budget for a single provider call. */
   private int perProviderTimeoutMs = 2500;
@@ -178,11 +210,22 @@ public class GeoProperties {
      * <p>Past this the chain falls through to Ola for autocomplete, place details and
      * reverse geocoding until the month rolls over. See {@code GeoSpendGuard}.
      *
-     * <p>40,000 is roughly ₹9,000 at the worst case where none of it is inside the
-     * free tier — comfortably above ten times expected launch volume, and far below
-     * what a retry loop could spend unattended. Zero disables the cap.
+     * <p>12,000 sits just above the per-SKU free tier (10k/month on both Autocomplete
+     * Requests and Place Details Essentials), so the worst a runaway can cost is the
+     * couple of thousand calls of overshoot — a few hundred rupees — rather than an
+     * open-ended month. Expected launch volume is under 100. Zero disables the cap.
      */
-    private long monthlyCallCap = 40_000L;
+    private long monthlyCallCap = 12_000L;
+
+    /**
+     * Billable Google calls one account may cause per day.
+     *
+     * <p>The monthly cap bounds the whole bill; this bounds one bad actor, and it is
+     * what stops a single scripted client from burning the shared month in an hour.
+     * 150 is around thirty address entries a day — far past what booking a couple of
+     * tasks needs, and far short of anything worth scripting. Zero disables it.
+     */
+    private long userDailyCallCap = 150L;
 
     public String getBaseUrl() {
       return baseUrl;
@@ -207,6 +250,14 @@ public class GeoProperties {
     public void setMonthlyCallCap(long monthlyCallCap) {
       this.monthlyCallCap = monthlyCallCap;
     }
+
+    public long getUserDailyCallCap() {
+      return userDailyCallCap;
+    }
+
+    public void setUserDailyCallCap(long userDailyCallCap) {
+      this.userDailyCallCap = userDailyCallCap;
+    }
   }
 
   /**
@@ -219,6 +270,18 @@ public class GeoProperties {
    */
   public static class Cache {
     private int autocompleteTtlSeconds = 86_400;
+
+    /**
+     * TTL for premium (Google-served) autocomplete, a week rather than a day.
+     *
+     * <p>Predictions for a text query barely move — "madhapur" returns the same
+     * places next Tuesday — and this is the only cached value we actually pay for,
+     * so a 7× longer window is a 7× reduction in billable calls for the queries
+     * people repeat. The cost of being stale is a shop that opened this week not
+     * appearing for a few days, against a bill that is charged per lookup.
+     */
+    private int premiumAutocompleteTtlSeconds = 604_800;
+
     private int placeDetailsTtlSeconds = 2_592_000;
     private int reverseGeocodeTtlSeconds = 2_592_000;
     private int routeTtlSeconds = 60;
@@ -229,6 +292,14 @@ public class GeoProperties {
 
     public void setAutocompleteTtlSeconds(int autocompleteTtlSeconds) {
       this.autocompleteTtlSeconds = autocompleteTtlSeconds;
+    }
+
+    public int getPremiumAutocompleteTtlSeconds() {
+      return premiumAutocompleteTtlSeconds;
+    }
+
+    public void setPremiumAutocompleteTtlSeconds(int premiumAutocompleteTtlSeconds) {
+      this.premiumAutocompleteTtlSeconds = premiumAutocompleteTtlSeconds;
     }
 
     public int getPlaceDetailsTtlSeconds() {
@@ -262,6 +333,28 @@ public class GeoProperties {
 
   public void setAutocompleteOrder(List<String> autocompleteOrder) {
     this.autocompleteOrder = autocompleteOrder;
+  }
+
+  public List<String> getPremiumAutocompleteOrder() {
+    return premiumAutocompleteOrder;
+  }
+
+  public void setPremiumAutocompleteOrder(List<String> premiumAutocompleteOrder) {
+    this.premiumAutocompleteOrder = premiumAutocompleteOrder;
+  }
+
+  public List<String> getPremiumContexts() {
+    return premiumContexts;
+  }
+
+  public void setPremiumContexts(List<String> premiumContexts) {
+    this.premiumContexts = premiumContexts;
+  }
+
+  /** True when {@code context} is on the premium allowlist. Null and unknown are not. */
+  public boolean isPremiumContext(String context) {
+    if (context == null || context.isBlank()) return false;
+    return premiumContexts.contains(context.trim());
   }
 
   public List<String> getPlaceDetailsOrder() {

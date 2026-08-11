@@ -17,9 +17,10 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
- * Google is the primary search provider, so the two things that decide the monthly
- * bill are worth pinning down: that we call the Places API (New) endpoints at all,
- * and that place details asks only for the Essentials fields.
+ * Google is the only provider we pay per call, so the things that decide the bill
+ * are worth pinning down: that we call the Places API (New) endpoints at all, that
+ * place details asks only for the Essentials fields, and that both halves of an
+ * address entry carry the session token that makes them bill as one.
  */
 class GoogleGeoProviderTest {
 
@@ -91,6 +92,46 @@ class GoogleGeoProviderTest {
     assertEquals(17.4435, detail.lat());
     assertEquals(78.3772, detail.lng());
     assertEquals("google:ChIJmadhapur", detail.placeId());
+  }
+
+  /**
+   * The session token is what stops each keystroke being billed on its own.
+   *
+   * <p>Google groups the autocompletes and the details call that shares their token
+   * into one session; past the twelfth request in a session the rest bill as
+   * Autocomplete Session Usage, which is free and unlimited. Both halves have to
+   * carry it — a details call without the token leaves the session unterminated and
+   * every autocomplete in it reverts to per-request pricing.
+   */
+  @Test
+  void carriesTheSessionTokenThroughBothHalvesOfAnAddressEntry() throws Exception {
+    RecordingGeoHttp autocompleteHttp =
+        new RecordingGeoHttp(MAPPER.readTree("{\"suggestions\":[]}"));
+    provider(autocompleteHttp).autocomplete("madhapur", 17.44, 78.39, "session-abc");
+    assertEquals(
+        "session-abc",
+        MAPPER.valueToTree(autocompleteHttp.body).path("sessionToken").asText());
+
+    RecordingGeoHttp detailsHttp = new RecordingGeoHttp(MAPPER.readTree("""
+        {"id":"ChIJmadhapur","location":{"latitude":17.4435,"longitude":78.3772}}
+        """));
+    provider(detailsHttp).placeDetails("ChIJmadhapur", "session-abc");
+    assertEquals(
+        "https://places.googleapis.com/v1/places/ChIJmadhapur?sessionToken=session-abc",
+        detailsHttp.url);
+  }
+
+  /**
+   * A caller with no session — anything reaching Google as a fallback rather than
+   * through the create-task path — must still work, just at per-request pricing.
+   */
+  @Test
+  void omitsTheSessionTokenWhenThereIsNone() throws Exception {
+    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("{\"suggestions\":[]}"));
+
+    provider(http).autocomplete("madhapur", 17.44, 78.39, "   ");
+
+    assertFalse(MAPPER.valueToTree(http.body).has("sessionToken"));
   }
 
   /** Past the monthly cap the provider declines, so the chain falls through to Ola. */

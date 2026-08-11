@@ -75,13 +75,22 @@ public class GeoCache {
    * <p>The query is normalised and the bias coordinate bucketed to ~1km, so
    * "Hitech City", "hitech  city" and the same query from two nearby users all
    * share one entry.
+   *
+   * <p>The two tiers get separate namespaces. Sharing one would let whichever
+   * request arrived first decide the quality every later one gets: a free-tier
+   * lookup would pin an Ola answer that the create-task screen then serves as if
+   * it were the premium result, and the reverse would quietly hand Google
+   * suggestions — whose ids only Google can resolve — to callers that never asked
+   * for them. Two namespaces cost a duplicate entry per shared query and nothing
+   * else; both are computed from the same normalised query, so the hit rate within
+   * each tier is unchanged.
    */
-  public static String autocompleteKey(String query, Double biasLat, Double biasLng) {
+  public static String autocompleteKey(String query, Double biasLat, Double biasLng, boolean premium) {
     String normalised = query == null ? "" : query.trim().toLowerCase().replaceAll("\\s+", " ");
     String bias = biasLat == null || biasLng == null
         ? "-"
         : round(biasLat, 2) + "," + round(biasLng, 2);
-    return "ac:" + sha1(normalised + "|" + bias);
+    return (premium ? "acp:" : "ac:") + sha1(normalised + "|" + bias);
   }
 
   public static String placeDetailsKey(String placeId) {
