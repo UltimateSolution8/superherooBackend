@@ -172,6 +172,18 @@ public class GeoProperties {
      */
     private String apiKey = "";
 
+    /**
+     * Billable Google search calls allowed per calendar month, across all instances.
+     *
+     * <p>Past this the chain falls through to Ola for autocomplete, place details and
+     * reverse geocoding until the month rolls over. See {@code GeoSpendGuard}.
+     *
+     * <p>40,000 is roughly ₹9,000 at the worst case where none of it is inside the
+     * free tier — comfortably above ten times expected launch volume, and far below
+     * what a retry loop could spend unattended. Zero disables the cap.
+     */
+    private long monthlyCallCap = 40_000L;
+
     public String getBaseUrl() {
       return baseUrl;
     }
@@ -186,6 +198,14 @@ public class GeoProperties {
 
     public void setApiKey(String apiKey) {
       this.apiKey = apiKey;
+    }
+
+    public long getMonthlyCallCap() {
+      return monthlyCallCap;
+    }
+
+    public void setMonthlyCallCap(long monthlyCallCap) {
+      this.monthlyCallCap = monthlyCallCap;
     }
   }
 

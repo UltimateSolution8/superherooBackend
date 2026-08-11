@@ -1,0 +1,209 @@
+package com.helpinminutes.api.geo.provider;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helpinminutes.api.geo.GeoDtos;
+import com.helpinminutes.api.geo.GeoHttp;
+import com.helpinminutes.api.geo.GeoProperties;
+import com.helpinminutes.api.geo.GeoSpendGuard;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Google is the primary search provider, so the two things that decide the monthly
+ * bill are worth pinning down: that we call the Places API (New) endpoints at all,
+ * and that place details asks only for the Essentials fields.
+ */
+class GoogleGeoProviderTest {
+
+  private static final ObjectMapper MAPPER = new ObjectMapper();
+
+  @Test
+  void autocompleteCallsPlacesNewAndKeepsTheKeyOutOfTheUrl() throws Exception {
+    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("""
+        {"suggestions":[{"placePrediction":{
+          "placeId":"ChIJmadhapur",
+          "text":{"text":"Madhapur, Hyderabad, Telangana"},
+          "structuredFormat":{"mainText":{"text":"Madhapur"},
+                              "secondaryText":{"text":"Hyderabad, Telangana"}},
+          "distanceMeters":4200}}]}
+        """));
+
+    List<GeoDtos.PlaceSuggestion> suggestions =
+        provider(http).autocomplete("madhapur", 17.44, 78.39).orElseThrow();
+
+    assertEquals("POST", http.method);
+    assertEquals("https://places.googleapis.com/v1/places:autocomplete", http.url);
+    // The key travels in a header, so it cannot leak through a logged URL.
+    assertFalse(http.url.contains("key"));
+    assertEquals("test-key", http.headers.get("X-Goog-Api-Key"));
+
+    GeoDtos.PlaceSuggestion first = suggestions.get(0);
+    assertEquals("google:ChIJmadhapur", first.placeId());
+    assertEquals("Madhapur", first.primaryText());
+    assertEquals("Hyderabad, Telangana", first.secondaryText());
+    assertEquals("Madhapur, Hyderabad, Telangana", first.description());
+    assertEquals(4200d, first.distanceMeters());
+    // Autocomplete never carries coordinates; null is how the caller knows to
+    // resolve them.
+    assertNull(first.lat());
+  }
+
+  @Test
+  void autocompleteBiasesToTheServiceAreaAndAsksForDistances() throws Exception {
+    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("{\"suggestions\":[]}"));
+
+    provider(http).autocomplete("madhapur", 17.44, 78.39);
+
+    JsonNode body = MAPPER.valueToTree(http.body);
+    assertEquals("madhapur", body.path("input").asText());
+    assertEquals("in", body.path("includedRegionCodes").path(0).asText());
+    assertEquals(17.44, body.path("locationBias").path("circle").path("center")
+        .path("latitude").asDouble());
+    // origin is what makes each prediction come back with distanceMeters.
+    assertEquals(17.44, body.path("origin").path("latitude").asDouble());
+  }
+
+  /**
+   * The field mask is the price of the call. {@code id,location} bills at Place
+   * Details Essentials ($5/1k, 10k free a month); adding {@code formattedAddress} or
+   * {@code displayName} moves it to Pro ($17/1k, 5k free) to fetch a label the
+   * autocomplete response already supplied.
+   */
+  @Test
+  void placeDetailsRequestsOnlyTheEssentialsFields() throws Exception {
+    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("""
+        {"id":"ChIJmadhapur","location":{"latitude":17.4435,"longitude":78.3772}}
+        """));
+
+    GeoDtos.PlaceDetail detail = provider(http).placeDetails("ChIJmadhapur").orElseThrow();
+
+    assertEquals("GET", http.method);
+    assertEquals("https://places.googleapis.com/v1/places/ChIJmadhapur", http.url);
+    assertEquals("id,location", http.headers.get("X-Goog-FieldMask"));
+    assertEquals(17.4435, detail.lat());
+    assertEquals(78.3772, detail.lng());
+    assertEquals("google:ChIJmadhapur", detail.placeId());
+  }
+
+  /** Past the monthly cap the provider declines, so the chain falls through to Ola. */
+  @Test
+  void stopsSpendingOnceTheMonthlyCapIsReached() throws Exception {
+    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("{\"suggestions\":[]}"));
+    GoogleGeoProvider provider =
+        new GoogleGeoProvider(configuredProperties(), http, new DeniedSpendGuard());
+
+    assertTrue(provider.autocomplete("madhapur", null, null).isEmpty());
+    assertTrue(provider.placeDetails("ChIJmadhapur").isEmpty());
+    assertTrue(provider.reverseGeocode(17.44, 78.39).isEmpty());
+    assertEquals(0, http.calls);
+  }
+
+  /**
+   * Routing is exempt: it only reaches Google when OSRM and Ola are both down, and a
+   * partner with no route at all is a worse failure than the cost of the call.
+   */
+  @Test
+  void routingIsNotCappedBySpend() throws Exception {
+    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("""
+        {"routes":[{"overview_polyline":{"points":"ufmiBuqk}M_@b@"},
+          "legs":[{"duration":{"value":900},"distance":{"value":5200}}]}]}
+        """));
+
+    GeoDtos.Route route =
+        new GoogleGeoProvider(configuredProperties(), http, new DeniedSpendGuard())
+            .route(17.44, 78.38, 17.38, 78.48)
+            .orElseThrow();
+
+    assertEquals(900, route.etaSeconds().intValue());
+    assertEquals(5200, route.distanceMeters().intValue());
+  }
+
+  private static GoogleGeoProvider provider(GeoHttp http) {
+    return new GoogleGeoProvider(configuredProperties(), http, new AllowingSpendGuard());
+  }
+
+  private static GeoProperties configuredProperties() {
+    GeoProperties properties = new GeoProperties();
+    properties.getGoogle().setApiKey("test-key");
+    properties.getGoogle().setBaseUrl("https://maps.test");
+    return properties;
+  }
+
+  private static final class AllowingSpendGuard extends GeoSpendGuard {
+    AllowingSpendGuard() {
+      super(null, new GeoProperties());
+    }
+
+    @Override
+    public boolean tryConsume(String capability) {
+      return true;
+    }
+  }
+
+  private static final class DeniedSpendGuard extends GeoSpendGuard {
+    DeniedSpendGuard() {
+      super(null, new GeoProperties());
+    }
+
+    @Override
+    public boolean tryConsume(String capability) {
+      return false;
+    }
+  }
+
+  private static final class RecordingGeoHttp extends GeoHttp {
+    private final JsonNode response;
+    private String url;
+    private String method;
+    private Object body;
+    private Map<String, String> headers = Map.of();
+    private int calls;
+
+    RecordingGeoHttp(JsonNode response) {
+      super(new ObjectMapper());
+      this.response = response;
+    }
+
+    @Override
+    public Optional<JsonNode> getJson(
+        String requestUrl, int timeoutMs, String providerName, Map<String, String> requestHeaders) {
+      return record("GET", requestUrl, null, requestHeaders);
+    }
+
+    @Override
+    public Optional<JsonNode> getJson(String requestUrl, int timeoutMs, String providerName) {
+      return record("GET", requestUrl, null, Map.of());
+    }
+
+    @Override
+    public Optional<JsonNode> postJson(
+        String requestUrl,
+        Object requestBody,
+        int timeoutMs,
+        String providerName,
+        Map<String, String> requestHeaders) {
+      return record("POST", requestUrl, requestBody, requestHeaders);
+    }
+
+    private Optional<JsonNode> record(
+        String requestMethod,
+        String requestUrl,
+        Object requestBody,
+        Map<String, String> requestHeaders) {
+      calls++;
+      method = requestMethod;
+      url = requestUrl;
+      body = requestBody;
+      headers = requestHeaders;
+      return Optional.of(response);
+    }
+  }
+}

@@ -296,12 +296,18 @@ app:
 # the apps keep working. Map *rendering* is unaffected either way; it runs on the
 # Google mobile SDK, whose map-load SKU is free and unlimited.
 geo:
+  # Google first for the text lookups. At launch volume the per-SKU free tiers
+  # (10k/month on Autocomplete Requests and Place Details Essentials) cover
+  # expected usage several times over, and the result quality is visibly better
+  # than Ola's — which is what citizens actually notice. Ola stays behind it and
+  # takes over on failure or once the monthly cap below trips.
+  #
   # The built-in Hyderabad locality index is the credential-free last resort.
   # Keep it after the street-level providers so missing keys or an upstream
   # outage never turns common searches such as "Madhapur" into a blank result.
-  autocompleteOrder: ${GEO_AUTOCOMPLETE_ORDER:ola,google,local}
-  placeDetailsOrder: ${GEO_PLACE_DETAILS_ORDER:ola,google,local}
-  reverseGeocodeOrder: ${GEO_REVERSE_GEOCODE_ORDER:ola,google}
+  autocompleteOrder: ${GEO_AUTOCOMPLETE_ORDER:google,ola,local}
+  placeDetailsOrder: ${GEO_PLACE_DETAILS_ORDER:google,ola,local}
+  reverseGeocodeOrder: ${GEO_REVERSE_GEOCODE_ORDER:google,ola}
   # OSRM first: self-hosted, free, and routing is our highest-frequency geo call.
   routingOrder: ${GEO_ROUTING_ORDER:osrm,ola,google}
   perProviderTimeoutMs: ${GEO_PROVIDER_TIMEOUT_MS:2500}
@@ -338,6 +344,10 @@ geo:
     # render key: this one is IP-restricted, that one is package-restricted and
     # ships inside the APK.
     apiKey: ${GOOGLE_MAPS_SERVER_API_KEY:}
+    # Billable Google search calls per calendar month before the chain falls back
+    # to Ola. Bounds the damage from a retry loop or a scraper; the Cloud Console
+    # quota cap is the hard limit behind it. 0 disables.
+    monthlyCallCap: ${GEO_GOOGLE_MONTHLY_CALL_CAP:40000}
   cache:
     autocompleteTtlSeconds: ${GEO_CACHE_AUTOCOMPLETE_TTL_SECONDS:86400}
     placeDetailsTtlSeconds: ${GEO_CACHE_PLACE_DETAILS_TTL_SECONDS:2592000}

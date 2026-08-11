@@ -5,35 +5,64 @@ import com.helpinminutes.api.geo.GeoDtos;
 import com.helpinminutes.api.geo.GeoHttp;
 import com.helpinminutes.api.geo.GeoProperties;
 import com.helpinminutes.api.geo.GeoProvider;
+import com.helpinminutes.api.geo.GeoSpendGuard;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 /**
- * Google Maps Platform — last resort for the billable text and routing SKUs.
+ * Google Maps Platform — the primary provider for place search.
  *
- * <p>Placed last on purpose. Each of these SKUs gives 10k free calls a month
- * (Autocomplete $2.83/1k, Place Details / Geocoding / Directions $5/1k beyond it),
- * so as the residual provider behind Ola and OSRM it should stay comfortably free
- * while still being the thing that answers when they are down.
+ * <p>Search moved here from Ola because at launch volume the quality difference is
+ * worth more than the difference in bill. The numbers, on the per-SKU free tiers
+ * (10k/month each on Autocomplete Requests and Place Details Essentials, then
+ * $2.83/1k and $5/1k): a few hundred address entries a month is free outright, and
+ * ten times that is single-digit dollars. Ola stays configured behind it and takes
+ * over automatically on failure or once {@link GeoSpendGuard} trips.
  *
- * <p>Note what is <i>not</i> here: map rendering. The Maps SDK for Android/iOS map
- * load is a separate SKU billed at nothing, unlimited, so the map canvas stays on
- * Google in the app with a package-restricted key. This class only replaces the
- * calls that cost money.
+ * <p>Two deliberate choices keep it in the cheap tier:
+ *
+ * <ul>
+ *   <li><b>Places API (New)</b>, not the legacy {@code /maps/api/place} endpoints.
+ *       New projects can no longer enable the legacy Places API at all, so the old
+ *       path was a trap waiting for the next key rotation.
+ *   <li><b>A field mask of {@code id,location} on place details.</b> Adding
+ *       {@code formattedAddress} or {@code displayName} moves that call from the
+ *       Essentials SKU to Pro — 3.4× the price and half the free tier — to fetch a
+ *       label the autocomplete response already gave us.
+ * </ul>
+ *
+ * <p>Routing is a different story and stays behind OSRM and Ola: it is our
+ * highest-frequency geo call by an order of magnitude, and self-hosted routing is
+ * free.
+ *
+ * <p>Note what is <i>not</i> here: map rendering. The Maps SDK for Android map load
+ * is a separate SKU billed at nothing, unlimited, so the map canvas stays on Google
+ * in the app with a package-restricted key. This class only replaces the calls that
+ * cost money.
  */
 @Component
 public class GoogleGeoProvider implements GeoProvider {
 
   private static final String NAME = "google";
 
+  /** Places API (New) lives on its own host, not on {@code maps.googleapis.com}. */
+  private static final String PLACES_BASE_URL = "https://places.googleapis.com";
+
+  /** Bias radius for autocomplete, in metres. Greater Hyderabad. */
+  private static final double BIAS_RADIUS_METERS = 25_000d;
+
   private final GeoProperties props;
   private final GeoHttp http;
+  private final GeoSpendGuard spendGuard;
 
-  public GoogleGeoProvider(GeoProperties props, GeoHttp http) {
+  public GoogleGeoProvider(GeoProperties props, GeoHttp http, GeoSpendGuard spendGuard) {
     this.props = props;
     this.http = http;
+    this.spendGuard = spendGuard;
   }
 
   @Override
@@ -70,60 +99,89 @@ public class GoogleGeoProvider implements GeoProvider {
   public Optional<List<GeoDtos.PlaceSuggestion>> autocomplete(
       String query, Double biasLat, Double biasLng) {
     if (!isEnabled() || query == null || query.isBlank()) return Optional.empty();
+    if (!spendGuard.tryConsume("autocomplete")) return Optional.empty();
+
     double lat = biasLat != null ? biasLat : props.getDefaultBiasLat();
     double lng = biasLng != null ? biasLng : props.getDefaultBiasLng();
-    String url = props.getGoogle().getBaseUrl()
-        + "/maps/api/place/autocomplete/json?input=" + GeoHttp.encode(query)
-        + "&components=country:in"
-        + "&location=" + lat + "," + lng
-        + "&radius=25000"
-        + "&key=" + GeoHttp.encode(props.getGoogle().getApiKey());
 
-    return http.getJson(url, props.getPerProviderTimeoutMs(), NAME).map(root -> {
-      List<GeoDtos.PlaceSuggestion> out = new ArrayList<>();
-      for (JsonNode prediction : root.path("predictions")) {
-        String placeId = GeoHttp.asText(prediction.path("place_id"));
-        if (placeId == null) continue;
-        // Google's autocomplete never returns coordinates; a details call is
-        // required. Leaving lat/lng null tells the caller that.
-        out.add(new GeoDtos.PlaceSuggestion(
-            NAME + ":" + placeId,
-            GeoHttp.asText(prediction.path("structured_formatting").path("main_text")),
-            GeoHttp.asText(prediction.path("structured_formatting").path("secondary_text")),
-            GeoHttp.asText(prediction.path("description")),
-            null,
-            null,
-            null));
-      }
-      return out;
-    }).filter(list -> !list.isEmpty());
+    Map<String, Object> centre = new LinkedHashMap<>();
+    centre.put("latitude", lat);
+    centre.put("longitude", lng);
+    Map<String, Object> circle = new LinkedHashMap<>();
+    circle.put("center", centre);
+    circle.put("radius", BIAS_RADIUS_METERS);
+
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("input", query);
+    body.put("includedRegionCodes", List.of("in"));
+    body.put("locationBias", Map.of("circle", circle));
+    // Same point as the bias, so each prediction comes back with distanceMeters.
+    // The app sorts on it and it costs nothing extra.
+    body.put("origin", centre);
+
+    return http.postJson(
+            PLACES_BASE_URL + "/v1/places:autocomplete",
+            body,
+            props.getPerProviderTimeoutMs(),
+            NAME,
+            authHeaders(null))
+        .map(root -> {
+          List<GeoDtos.PlaceSuggestion> out = new ArrayList<>();
+          for (JsonNode suggestion : root.path("suggestions")) {
+            JsonNode prediction = suggestion.path("placePrediction");
+            String placeId = GeoHttp.asText(prediction.path("placeId"));
+            if (placeId == null) continue;
+            JsonNode structured = prediction.path("structuredFormat");
+            out.add(new GeoDtos.PlaceSuggestion(
+                NAME + ":" + placeId,
+                GeoHttp.asText(structured.path("mainText").path("text")),
+                GeoHttp.asText(structured.path("secondaryText").path("text")),
+                GeoHttp.asText(prediction.path("text").path("text")),
+                // Autocomplete never carries coordinates; a details call resolves
+                // them. Null lat/lng is how the caller knows that.
+                null,
+                null,
+                GeoHttp.asDouble(prediction.path("distanceMeters"))));
+          }
+          return out;
+        })
+        .filter(list -> !list.isEmpty());
   }
 
   @Override
   public Optional<GeoDtos.PlaceDetail> placeDetails(String providerPlaceId) {
-    if (!isEnabled() || providerPlaceId == null || providerPlaceId.isBlank()) return Optional.empty();
-    String url = props.getGoogle().getBaseUrl()
-        + "/maps/api/place/details/json?place_id=" + GeoHttp.encode(providerPlaceId)
-        + "&fields=geometry,formatted_address,name"
-        + "&key=" + GeoHttp.encode(props.getGoogle().getApiKey());
+    if (!isEnabled() || providerPlaceId == null || providerPlaceId.isBlank()) {
+      return Optional.empty();
+    }
+    if (!spendGuard.tryConsume("placeDetails")) return Optional.empty();
 
-    return http.getJson(url, props.getPerProviderTimeoutMs(), NAME).flatMap(root -> {
-      JsonNode location = root.path("result").path("geometry").path("location");
-      Double lat = GeoHttp.asDouble(location.path("lat"));
-      Double lng = GeoHttp.asDouble(location.path("lng"));
-      if (lat == null || lng == null) return Optional.empty();
-      return Optional.of(new GeoDtos.PlaceDetail(
-          NAME + ":" + providerPlaceId,
-          GeoHttp.asText(root.path("result").path("formatted_address")),
-          GeoHttp.asText(root.path("result").path("name")),
-          lat,
-          lng));
-    });
+    // Essentials field mask. See the class comment: asking for the address here
+    // would triple the price of a call whose only job is to supply coordinates.
+    return http.getJson(
+            PLACES_BASE_URL + "/v1/places/" + GeoHttp.encode(providerPlaceId),
+            props.getPerProviderTimeoutMs(),
+            NAME,
+            authHeaders("id,location"))
+        .flatMap(root -> {
+          Double lat = GeoHttp.asDouble(root.path("location").path("latitude"));
+          Double lng = GeoHttp.asDouble(root.path("location").path("longitude"));
+          if (lat == null || lng == null) return Optional.empty();
+          return Optional.of(new GeoDtos.PlaceDetail(
+              NAME + ":" + providerPlaceId,
+              // The label comes from the suggestion the citizen tapped, which the
+              // app already holds; resolveSuggestion falls back to it.
+              null,
+              null,
+              lat,
+              lng));
+        });
   }
 
   @Override
   public Optional<GeoDtos.ReverseGeocode> reverseGeocode(double lat, double lng) {
     if (!isEnabled()) return Optional.empty();
+    if (!spendGuard.tryConsume("reverseGeocode")) return Optional.empty();
+
     String url = props.getGoogle().getBaseUrl()
         + "/maps/api/geocode/json?latlng=" + lat + "," + lng
         + "&key=" + GeoHttp.encode(props.getGoogle().getApiKey());
@@ -141,6 +199,13 @@ public class GoogleGeoProvider implements GeoProvider {
     });
   }
 
+  /**
+   * Driving route. Last resort only — OSRM and Ola answer first.
+   *
+   * <p>Not metered by {@link GeoSpendGuard}: the guard exists to bound discretionary
+   * search spend, and routing only reaches Google when both cheaper routers are
+   * already down. Cutting it off then would leave a partner with no route at all.
+   */
   @Override
   public Optional<GeoDtos.Route> route(double fromLat, double fromLng, double toLat, double toLng) {
     if (!isEnabled()) return Optional.empty();
@@ -162,6 +227,21 @@ public class GoogleGeoProvider implements GeoProvider {
           duration == null ? null : (int) Math.round(duration),
           distance == null ? null : (int) Math.round(distance)));
     });
+  }
+
+  /**
+   * Places API (New) headers.
+   *
+   * <p>The key travels in a header rather than the query string, which is strictly
+   * better: it stays out of URLs, and so out of any log line that carries one.
+   */
+  private Map<String, String> authHeaders(String fieldMask) {
+    Map<String, String> headers = new LinkedHashMap<>();
+    headers.put("X-Goog-Api-Key", props.getGoogle().getApiKey());
+    if (fieldMask != null) {
+      headers.put("X-Goog-FieldMask", fieldMask);
+    }
+    return headers;
   }
 
   private static String componentOfType(JsonNode result, String type) {

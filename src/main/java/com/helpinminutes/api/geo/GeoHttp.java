@@ -70,18 +70,57 @@ public class GeoHttp {
    */
   public Optional<JsonNode> postJson(
       String url, int timeoutMs, String providerName, Map<String, String> headers) {
-    return send("POST", url, timeoutMs, providerName, headers);
+    return send("POST", url, null, timeoutMs, providerName, headers);
+  }
+
+  /**
+   * POSTs a JSON body and parses the response as JSON.
+   *
+   * <p>For Google's Places API (New), which takes its parameters in the body and its
+   * credential in a header rather than the query string — so unlike the other calls
+   * here, this URL is safe to log.
+   */
+  public Optional<JsonNode> postJson(
+      String url,
+      Object body,
+      int timeoutMs,
+      String providerName,
+      Map<String, String> headers) {
+    String payload;
+    try {
+      payload = objectMapper.writeValueAsString(body);
+    } catch (Exception e) {
+      log.warn("Geo provider {} could not serialise its request body", providerName);
+      return Optional.empty();
+    }
+    return send("POST", url, payload, timeoutMs, providerName, headers);
   }
 
   private Optional<JsonNode> send(
       String method, String url, int timeoutMs, String providerName, Map<String, String> headers) {
+    return send(method, url, null, timeoutMs, providerName, headers);
+  }
+
+  private Optional<JsonNode> send(
+      String method,
+      String url,
+      String body,
+      int timeoutMs,
+      String providerName,
+      Map<String, String> headers) {
     try {
+      HttpRequest.BodyPublisher payload = body == null
+          ? HttpRequest.BodyPublishers.noBody()
+          : HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8);
       HttpRequest.Builder builder = HttpRequest.newBuilder()
           .uri(URI.create(url))
           .timeout(Duration.ofMillis(Math.max(200, timeoutMs)))
           .header("Accept", "application/json")
           .header("User-Agent", "Superherooo/1.0")
-          .method(method, HttpRequest.BodyPublishers.noBody());
+          .method(method, payload);
+      if (body != null) {
+        builder.header("Content-Type", "application/json");
+      }
       if (headers != null) {
         headers.forEach((name, value) -> {
           if (name != null && !name.isBlank() && value != null && !value.isBlank()) {
