@@ -15,9 +15,12 @@ import org.springframework.stereotype.Component;
  *       the highest-frequency traffic (a route refresh per active task plus the
  *       matching ETA matrix). This is the one place OSM data is unambiguously the
  *       best answer.
- *   <li><b>Text APIs</b> (autocomplete, details, reverse) → Ola Maps. 500k
- *       calls/month free, India-tuned, and biasable to Hyderabad.
- *   <li><b>Google</b> → fallback only, plus the one premium exception below. Map
+ *   <li><b>Text APIs</b> (autocomplete, details, reverse) → Ola Maps. It is
+ *       India-tuned and biasable to Hyderabad; its commercial quota is treated as
+ *       an operational setting, not embedded as a permanent promise in code.
+ *   <li><b>Google</b> → the one premium exception below. It remains available as
+ *       an operator-enabled emergency fallback, but production defaults degrade
+ *       locally instead. Map
  *       <i>rendering</i> stays on the Google mobile SDK, which is a separate,
  *       unlimited-free SKU.
  * </ul>
@@ -42,8 +45,8 @@ public class GeoProperties {
   /** Per-capability provider order. First enabled provider that answers wins. */
   private List<String> autocompleteOrder = List.of("ola", "local");
   private List<String> placeDetailsOrder = List.of("ola", "local");
-  private List<String> reverseGeocodeOrder = List.of("ola", "google");
-  private List<String> routingOrder = List.of("osrm", "ola", "google");
+  private List<String> reverseGeocodeOrder = List.of("ola");
+  private List<String> routingOrder = List.of("osrm", "ola");
 
   /**
    * Provider order for a request in one of {@link #premiumContexts}.
@@ -210,12 +213,23 @@ public class GeoProperties {
      * <p>Past this the chain falls through to Ola for autocomplete, place details and
      * reverse geocoding until the month rolls over. See {@code GeoSpendGuard}.
      *
-     * <p>12,000 sits just above the per-SKU free tier (10k/month on both Autocomplete
-     * Requests and Place Details Essentials), so the worst a runaway can cost is the
-     * couple of thousand calls of overshoot — a few hundred rupees — rather than an
-     * open-ended month. Expected launch volume is under 100. Zero disables the cap.
+     * <p>12,000 is deliberately below the current India free allowance of 70,000
+     * monthly events for both Autocomplete Requests and Place Details Essentials.
+     * The code cap remains useful defence in depth because commercial terms can
+     * change and Cloud Console quotas are the authoritative hard ceiling. Zero
+     * disables the application guard.
      */
     private long monthlyCallCap = 12_000L;
+
+    /**
+     * Calls held back for details lookups that close sessions already started.
+     *
+     * <p>Once usage reaches {@code monthlyCallCap - premiumReserveCalls}, new
+     * create-task autocomplete sessions downgrade to Ola. Existing Google place
+     * ids can still be resolved inside the hard cap instead of turning a tapped
+     * suggestion into a dead end at the exact threshold.
+     */
+    private long premiumReserveCalls = 1_000L;
 
     /**
      * Billable Google calls one account may cause per day.
@@ -251,6 +265,14 @@ public class GeoProperties {
       this.monthlyCallCap = monthlyCallCap;
     }
 
+    public long getPremiumReserveCalls() {
+      return premiumReserveCalls;
+    }
+
+    public void setPremiumReserveCalls(long premiumReserveCalls) {
+      this.premiumReserveCalls = premiumReserveCalls;
+    }
+
     public long getUserDailyCallCap() {
       return userDailyCallCap;
     }
@@ -263,22 +285,19 @@ public class GeoProperties {
   /**
    * Cache TTLs.
    *
-   * <p>A shared server-side cache is what keeps us inside Ola's free tier: one
-   * lookup of "hitech city" serves every citizen who types it, where the old
-   * per-device caches re-billed each one. Place coordinates and street addresses
-   * barely change, so their TTLs are long.
+   * <p>A shared server-side cache reduces Ola/local traffic: one lookup of "hitech
+   * city" serves every citizen who types it, where per-device caches repeat it.
+   * Google Places content is never written here (place IDs are the only general
+   * caching exception in Google's policy). Place coordinates and street addresses
+   * returned by non-Google providers barely change, so their TTLs are long.
    */
   public static class Cache {
     private int autocompleteTtlSeconds = 86_400;
 
     /**
-     * TTL for premium (Google-served) autocomplete, a week rather than a day.
-     *
-     * <p>Predictions for a text query barely move — "madhapur" returns the same
-     * places next Tuesday — and this is the only cached value we actually pay for,
-     * so a 7× longer window is a 7× reduction in billable calls for the queries
-     * people repeat. The cost of being stale is a shop that opened this week not
-     * appearing for a few days, against a bill that is charged per lookup.
+     * Legacy configuration retained so an older deployment manifest still binds.
+     * Premium predictions are session-bound Google Places content and are not
+     * cached by {@code GeoProviderChain}.
      */
     private int premiumAutocompleteTtlSeconds = 604_800;
 

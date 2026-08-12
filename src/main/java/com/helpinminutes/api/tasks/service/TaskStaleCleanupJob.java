@@ -5,7 +5,7 @@ import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskOfferRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -32,7 +32,7 @@ public class TaskStaleCleanupJob {
 
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
-  private final MatchingService matching;
+  private final NotificationQueueService notificationQueue;
   private final SupportService supportService;
   private final Duration staleAssigned;
   private final Duration searchingTimeout;
@@ -45,7 +45,7 @@ public class TaskStaleCleanupJob {
       com.helpinminutes.api.common.SchedulerLock schedulerLock,
       TaskRepository tasks,
       TaskOfferRepository offers,
-      MatchingService matching,
+      NotificationQueueService notificationQueue,
       SupportService supportService,
       RealtimePublisher realtime,
       PaymentLifecycleService paymentLifecycle,
@@ -60,7 +60,7 @@ public class TaskStaleCleanupJob {
     this.schedulerLock = schedulerLock;
     this.tasks = tasks;
     this.offers = offers;
-    this.matching = matching;
+    this.notificationQueue = notificationQueue;
     this.supportService = supportService;
     this.realtime = realtime;
     this.paymentLifecycle = paymentLifecycle;
@@ -162,17 +162,17 @@ public class TaskStaleCleanupJob {
         backedOff++;
         continue;
       }
-      try {
-        // dispatchOffers re-checks status under a row lock, so a task that was
-        // accepted between the query and here is a no-op.
-        List<java.util.UUID> offered = matching.dispatchOffers(task);
-        if (!offered.isEmpty()) redispatched++;
-      } catch (Exception e) {
-        log.warn("Re-dispatch failed for task {}", task.getId(), e);
-      }
+      // Queue the expected wave inside this short scheduler transaction. Candidate
+      // discovery and routing happen after commit in the dedicated worker, so one
+      // sweep cannot hold dozens of task locks for seconds each. A duplicate queued
+      // job carries the same wave and becomes a no-op after the first advances it.
+      task.setLastDispatchedAt(now);
+      tasks.save(task);
+      notificationQueue.enqueueMatchingDispatch(task);
+      redispatched++;
     }
     if (redispatched > 0 || backedOff > 0) {
-      log.info("Re-dispatched offers for {} unanswered searching tasks ({} backed off)",
+      log.info("Queued re-dispatch for {} unanswered searching tasks ({} backed off)",
           redispatched, backedOff);
     }
   }
@@ -222,16 +222,12 @@ public class TaskStaleCleanupJob {
       } catch (Exception e) {
         log.warn("Could not create support ticket for timed out task {}", task.getId(), e);
       }
-      try {
-        realtime.publish(
+      realtime.publish(
             "task_status_changed",
             java.util.Map.of(
                 "taskId", task.getId().toString(),
                 "buyerId", task.getBuyerId().toString(),
                 "status", TaskStatus.CANCELLED.name()));
-      } catch (Exception e) {
-        log.warn("Could not publish timeout cancellation for task {}", task.getId(), e);
-      }
     }
     if (closed > 0) {
       log.info("Auto-cancelled {} searching tasks after {} seconds timeout", closed, searchingTimeout.toSeconds());

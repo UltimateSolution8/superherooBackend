@@ -74,7 +74,7 @@ class GoogleGeoProviderTest {
 
   /**
    * The field mask is the price of the call. {@code id,location} bills at Place
-   * Details Essentials ($5/1k, 10k free a month); adding {@code formattedAddress} or
+   * Details Essentials; adding {@code formattedAddress} or
    * {@code displayName} moves it to Pro ($17/1k, 5k free) to fetch a label the
    * autocomplete response already supplied.
    */
@@ -134,7 +134,7 @@ class GoogleGeoProviderTest {
     assertFalse(MAPPER.valueToTree(http.body).has("sessionToken"));
   }
 
-  /** Past the monthly cap the provider declines, so the chain falls through to Ola. */
+  /** Past the monthly cap every paid capability declines, so the chain falls back. */
   @Test
   void stopsSpendingOnceTheMonthlyCapIsReached() throws Exception {
     RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("{\"suggestions\":[]}"));
@@ -144,27 +144,8 @@ class GoogleGeoProviderTest {
     assertTrue(provider.autocomplete("madhapur", null, null).isEmpty());
     assertTrue(provider.placeDetails("ChIJmadhapur").isEmpty());
     assertTrue(provider.reverseGeocode(17.44, 78.39).isEmpty());
+    assertTrue(provider.route(17.44, 78.38, 17.38, 78.48).isEmpty());
     assertEquals(0, http.calls);
-  }
-
-  /**
-   * Routing is exempt: it only reaches Google when OSRM and Ola are both down, and a
-   * partner with no route at all is a worse failure than the cost of the call.
-   */
-  @Test
-  void routingIsNotCappedBySpend() throws Exception {
-    RecordingGeoHttp http = new RecordingGeoHttp(MAPPER.readTree("""
-        {"routes":[{"overview_polyline":{"points":"ufmiBuqk}M_@b@"},
-          "legs":[{"duration":{"value":900},"distance":{"value":5200}}]}]}
-        """));
-
-    GeoDtos.Route route =
-        new GoogleGeoProvider(configuredProperties(), http, new DeniedSpendGuard())
-            .route(17.44, 78.38, 17.38, 78.48)
-            .orElseThrow();
-
-    assertEquals(900, route.etaSeconds().intValue());
-    assertEquals(5200, route.distanceMeters().intValue());
   }
 
   private static GoogleGeoProvider provider(GeoHttp http) {

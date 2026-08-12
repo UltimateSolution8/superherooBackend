@@ -129,6 +129,22 @@ public class TaskService {
     executor.execute(body);
   }
 
+  /** Runs a side effect only after the surrounding database commit is visible. */
+  private void afterCommitAsync(Runnable body) {
+    if (org.springframework.transaction.support.TransactionSynchronizationManager
+        .isActualTransactionActive()) {
+      org.springframework.transaction.support.TransactionSynchronizationManager
+          .registerSynchronization(new org.springframework.transaction.support.TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              dispatchAsync(body);
+            }
+          });
+      return;
+    }
+    dispatchAsync(body);
+  }
+
   public TaskService(
       TaskRepository tasks,
       TaskOfferRepository offers,
@@ -344,13 +360,11 @@ public class TaskService {
 
       bookingBatches.save(batch);
 
-      try {
-        realtime.publish("mediator.job_pending_audit", java.util.Map.of(
+      realtime.publish("mediator.job_pending_audit", java.util.Map.of(
             "batchId", batch.getId().toString(),
             "buyerId", rec.getBuyerId().toString(),
             "helperCount", rec.getHelperCount()
         ));
-      } catch (Exception ignored) {}
     }
   }
 
@@ -405,38 +419,37 @@ public class TaskService {
       finalStatus = aiTaskModeration.moderateTaskSynchronously(task);
     }
 
-    List<UUID> offeredTo = new ArrayList<>();
     if (!awaitingPrepayment) {
       if (finalStatus == TaskStatus.SEARCHING) {
-        try {
-          offeredTo = matching.dispatchOffers(task);
-        } catch (Exception e) {
-          log.error("Failed to dispatch offers on synchronous approval for task {}", task.getId(), e);
-        }
+        // Commit a matching job atomically with the task. Rabbit delivery starts
+        // immediately after commit; the database outbox retries across process or
+        // broker restarts, closing the commit-to-callback loss window.
+        notificationQueue.enqueueMatchingDispatch(task, resolvedOptions.sendOfferNotifications());
       }
     }
 
-    if (!awaitingPrepayment) try {
-      dispatchAsync(() -> {
-        try {
-          realtime.publish(
-              "task_created",
-              java.util.Map.of(
-                  "taskId", task.getId().toString(),
-                  "buyerId", buyerId.toString(),
-                  "title", task.getTitle(),
-                  "urgency", task.getUrgency().name(),
-                  "status", task.getStatus().name()));
-        } catch (Exception ignored) {
-        }
+    if (!awaitingPrepayment) {
+      // Transactional outbox write belongs inside the task transaction.
+      realtime.publish(
+          "task_created",
+          java.util.Map.of(
+              "taskId", task.getId().toString(),
+              "buyerId", buyerId.toString(),
+              "title", task.getTitle(),
+              "urgency", task.getUrgency().name(),
+              "status", task.getStatus().name()));
+      afterCommitAsync(() -> {
         try {
           pushNotifications.notifyTaskCreatedMonitor(task);
         } catch (Exception ignored) {
         }
       });
-    } catch (Exception ignored) {}
+    }
 
-    return new CreateResult(task.getId(), offeredTo);
+    // Dispatch runs from the durable job just after commit, so the creation
+    // response does not wait on Redis/routing. Realtime and the pull feed remain
+    // independent recovery paths.
+    return new CreateResult(task.getId(), List.of());
   }
 
   @Transactional
@@ -488,27 +501,16 @@ public class TaskService {
 
     tasks.save(task);
 
-    // Publish realtime event
-    try {
-      dispatchAsync(() -> {
-        try {
-          realtime.publish(
-              "task_assigned",
-              java.util.Map.of(
-                  "taskId", task.getId().toString(),
-                  "buyerId", buyerId.toString(),
-                  "helperId", helperId.toString(),
-                  "title", task.getTitle(),
-                  "status", task.getStatus().name()));
-        } catch (Exception ignored) {
-        }
-        try {
-          pushNotifications.notifyTaskOffered(java.util.List.of(helperId), task);
-        } catch (Exception ignored) {
-        }
-      });
-    } catch (Exception ignored) {
-    }
+    // Both events are durable outbox writes in the assignment transaction.
+    realtime.publish(
+          "task_assigned",
+          java.util.Map.of(
+              "taskId", task.getId().toString(),
+              "buyerId", buyerId.toString(),
+              "helperId", helperId.toString(),
+              "title", task.getTitle(),
+              "status", task.getStatus().name()));
+    notificationQueue.enqueueTaskOffered(java.util.List.of(helperId), task);
 
     return task;
   }
@@ -628,12 +630,9 @@ public class TaskService {
 
     // Only worth re-offering while the job is still looking for someone.
     if (task.getStatus() == TaskStatus.SEARCHING && task.getAssignedHelperId() == null) {
-      try {
-        matching.dispatchOffers(task);
-      } catch (Exception e) {
-        // The scheduled re-dispatch pass will pick this up shortly.
-        log.warn("Re-dispatch after decline failed for task {}", taskId, e);
-      }
+      // Queue in this transaction; do not hold the declining request open over
+      // Redis discovery and routing. The expected-wave field makes duplicates safe.
+      notificationQueue.enqueueMatchingDispatch(task);
     }
   }
 
@@ -810,16 +809,12 @@ public class TaskService {
         && status == TaskStatus.PAYMENT_PENDING ? TaskStatus.PAYMENT_PENDING : TaskStatus.SCHEDULED_PENDING);
     tasks.save(task);
 
-    try {
-      realtime.publish(
+    realtime.publish(
           "task_status_changed",
           java.util.Map.of(
               "taskId", task.getId().toString(),
               "buyerId", task.getBuyerId().toString(),
               "status", TaskStatus.SCHEDULED_PENDING.name()));
-    } catch (Exception re) {
-      log.warn("Failed to publish real-time status change for task {}", task.getId(), re);
-    }
 
     return taskMapper.toResponse(task, true);
   }
@@ -1169,15 +1164,12 @@ public class TaskService {
     task.setBudgetPaise(task.getBudgetPaise() + additionalBudgetPaise);
     tasks.save(task);
 
-    try {
-      realtime.publish(
+    realtime.publish(
           "task_status_changed",
           java.util.Map.of(
               "taskId", task.getId().toString(),
               "buyerId", task.getBuyerId().toString(),
               "status", task.getStatus().name()));
-    } catch (Exception ignored) {
-    }
 
     return taskMapper.toResponse(task, true);
   }

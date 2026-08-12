@@ -95,7 +95,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     } else if (geoLookup) {
       // Proxied Places/Directions calls cost money per request upstream. A single
       // client typing fast is normal; a script hammering this endpoint would burn
-      // the Ola free tier and then real money. Autocomplete gets the looser limit
+      // the provider quota and then real money. Autocomplete gets the looser limit
       // because one address entry legitimately fires several keystroke requests.
       limit = path.contains("/autocomplete") ? geoAutocompletePerMin : geoLookupPerMin;
       bucket = path.contains("/autocomplete") ? "/api/v1/geo/autocomplete" : "/api/v1/geo/*";

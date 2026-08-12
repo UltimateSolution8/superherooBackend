@@ -75,13 +75,12 @@ class MatchingServiceTest {
     // these cases, and a stubbed comparator would prove nothing.
     matching = new MatchingService(
         properties, h3, presence, offers, tasks, realtime, notifications, helperProfiles,
-        geo, new CandidateScorer(), Runnable::run);
+        geo, new CandidateScorer());
   }
 
   @Test
   void skipsTasksThatAreNoLongerSearchable() {
     TaskEntity task = task(TaskStatus.ASSIGNED);
-    when(tasks.findByIdForUpdate(task.getId())).thenReturn(Optional.of(task));
 
     assertEquals(List.of(), matching.dispatchOffers(task));
 
@@ -106,6 +105,18 @@ class MatchingServiceTest {
   }
 
   // ─── wave escalation ──────────────────────────────────────────────────────
+
+  @Test
+  void staleDurableJobCannotAdvanceANewerWave() {
+    TaskEntity task = task(TaskStatus.SEARCHING);
+    task.setDispatchWave(2);
+
+    assertEquals(List.of(), matching.dispatchOffers(task, true, 1));
+
+    verify(presence, never()).getNearbyActiveHelperStates(
+        anyDouble(), anyDouble(), anyDouble(), anyInt());
+    verify(tasks, never()).findByIdForUpdate(any());
+  }
 
   /**
    * The reach fix. A single 3km pass with a fanout of 5 meant a job's entire

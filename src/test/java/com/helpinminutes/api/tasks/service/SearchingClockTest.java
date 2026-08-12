@@ -16,7 +16,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.common.SchedulerLock;
 import com.helpinminutes.api.config.TestAppProperties;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.moderation.service.AdminModerationService;
 import com.helpinminutes.api.payments.service.PaymentLifecycleService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
@@ -94,7 +94,7 @@ class SearchingClockTest {
         mock(TaskAiReviewRepository.class),
         mock(TaskAuditLogRepository.class),
         mock(UserRepository.class),
-        mock(MatchingService.class),
+        mock(NotificationQueueService.class),
         new ObjectMapper());
 
     UUID taskId = UUID.randomUUID();
@@ -127,8 +127,8 @@ class SearchingClockTest {
   void cleanupCancelsBeforeRedispatching() {
     TaskRepository tasks = mock(TaskRepository.class);
     TaskOfferRepository offers = mock(TaskOfferRepository.class);
-    MatchingService matching = mock(MatchingService.class);
-    TaskStaleCleanupJob job = cleanupJob(tasks, offers, matching);
+    NotificationQueueService matchingQueue = mock(NotificationQueueService.class);
+    TaskStaleCleanupJob job = cleanupJob(tasks, offers, matchingQueue);
 
     when(tasks.findTimedOutSearchingTasks(eq(TaskStatus.SEARCHING), any(), any()))
         .thenReturn(List.of());
@@ -156,8 +156,8 @@ class SearchingClockTest {
   void doesNotRedispatchATaskInsideItsBackoffWindow() {
     TaskRepository tasks = mock(TaskRepository.class);
     TaskOfferRepository offers = mock(TaskOfferRepository.class);
-    MatchingService matching = mock(MatchingService.class);
-    TaskStaleCleanupJob job = cleanupJob(tasks, offers, matching);
+    NotificationQueueService matchingQueue = mock(NotificationQueueService.class);
+    TaskStaleCleanupJob job = cleanupJob(tasks, offers, matchingQueue);
 
     TaskEntity justDispatched = searchingTask();
     justDispatched.setDispatchWave(1);
@@ -175,15 +175,15 @@ class SearchingClockTest {
 
     job.runCleanup();
 
-    verify(matching, never()).dispatchOffers(any());
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any());
   }
 
   @Test
   void redispatchesOnceTheBackoffWindowHasElapsed() {
     TaskRepository tasks = mock(TaskRepository.class);
     TaskOfferRepository offers = mock(TaskOfferRepository.class);
-    MatchingService matching = mock(MatchingService.class);
-    TaskStaleCleanupJob job = cleanupJob(tasks, offers, matching);
+    NotificationQueueService matchingQueue = mock(NotificationQueueService.class);
+    TaskStaleCleanupJob job = cleanupJob(tasks, offers, matchingQueue);
 
     TaskEntity waiting = searchingTask();
     waiting.setDispatchWave(0);
@@ -197,13 +197,12 @@ class SearchingClockTest {
             eq(TaskStatus.SEARCHING), any(), eq(org.springframework.data.domain.PageRequest.of(0, 50))))
         .thenReturn(List.of(waiting));
     when(offers.findTaskIdsWithLiveOffers(anyList(), any())).thenReturn(List.of());
-    when(matching.dispatchOffers(waiting)).thenReturn(List.of(UUID.randomUUID()));
     when(tasks.findTop100ByStatusAndUpdatedAtBefore(eq(TaskStatus.ASSIGNED), any()))
         .thenReturn(List.of());
 
     job.runCleanup();
 
-    verify(matching).dispatchOffers(waiting);
+    verify(matchingQueue).enqueueMatchingDispatch(waiting);
   }
 
   // ─── fixtures ─────────────────────────────────────────────────────────────
@@ -222,13 +221,13 @@ class SearchingClockTest {
   }
 
   private static TaskStaleCleanupJob cleanupJob(
-      TaskRepository tasks, TaskOfferRepository offers, MatchingService matching) {
+      TaskRepository tasks, TaskOfferRepository offers, NotificationQueueService matchingQueue) {
     SchedulerLock lock = mock(SchedulerLock.class);
     return new TaskStaleCleanupJob(
         lock,
         tasks,
         offers,
-        matching,
+        matchingQueue,
         mock(SupportService.class),
         mock(RealtimePublisher.class),
         mock(PaymentLifecycleService.class),

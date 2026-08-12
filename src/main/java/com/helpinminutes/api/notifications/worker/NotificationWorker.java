@@ -3,6 +3,7 @@ package com.helpinminutes.api.notifications.worker;
 import static com.helpinminutes.api.config.RabbitConfig.QUEUE_NOTIFICATION_SEND;
 
 import com.helpinminutes.api.common.GeoUtils;
+import com.helpinminutes.api.batches.repo.BookingBatchRepository;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.notifications.queue.NotificationJob;
 import com.helpinminutes.api.notifications.queue.NotificationType;
@@ -25,14 +26,22 @@ public class NotificationWorker {
     private final PushNotificationService pushNotifications;
     private final TaskRepository tasks;
     private final HelperPresenceService presence;
+    private final BookingBatchRepository batches;
 
-    public NotificationWorker(PushNotificationService pushNotifications, TaskRepository tasks, HelperPresenceService presence) {
+    public NotificationWorker(
+            PushNotificationService pushNotifications,
+            TaskRepository tasks,
+            HelperPresenceService presence,
+            BookingBatchRepository batches) {
         this.pushNotifications = pushNotifications;
         this.tasks = tasks;
         this.presence = presence;
+        this.batches = batches;
     }
 
-    @RabbitListener(queues = QUEUE_NOTIFICATION_SEND)
+    @RabbitListener(
+            queues = QUEUE_NOTIFICATION_SEND,
+            concurrency = "${NOTIFICATION_LISTENER_CONCURRENCY:3-8}")
     public void handle(NotificationJob job) {
         if (job == null || job.type() == null) return;
         log.info("Processing notification job type={} taskId={} helperCount={}",
@@ -68,23 +77,28 @@ public class NotificationWorker {
                         pushNotifications.notifyBuyerTaskCompleted(buyerId, task);
                     }
                 }
-                case TASK_CREATED -> {
-                    if (task != null) {
-                        List<UUID> helperIds = job.helperIds();
-                        // reuse the offered notification logic which already filters tokens
-                        pushNotifications.notifyTaskCreated(
-                                helperIds, task, distancesToTask(helperIds, task));
-                    }
-                }
                 case KYC_APPROVED -> {
                     if (job.helperIds() != null && !job.helperIds().isEmpty()) {
                         pushNotifications.notifyHelperKycApproved(job.helperIds().get(0));
+                    }
+                }
+                case MEDIATOR_JOB_AVAILABLE -> {
+                    if (job.batchId() != null && job.helperIds() != null) {
+                        batches.findById(job.batchId()).ifPresent(batch ->
+                                pushNotifications.notifyMediatorBulkJobAvailable(batch, job.helperIds()));
                     }
                 }
                 default -> log.warn("Unknown notification type {}", type);
             }
         } catch (Exception e) {
             log.error("Failed to process notification job type={} taskId={}", job.type(), job.taskId(), e);
+            // Do not acknowledge a failed delivery. Spring AMQP retries five
+            // times (application.yml) and then rejects to notifications.dlq.
+            // Swallowing here previously turned every transient FCM/database
+            // failure into a permanently lost task offer.
+            throw e instanceof RuntimeException runtime
+                    ? runtime
+                    : new IllegalStateException("Notification delivery failed", e);
         }
     }
 
@@ -92,9 +106,8 @@ public class NotificationWorker {
      * Distance from each recipient to the task, for the notification copy.
      *
      * <p>One pipelined read. This was a loop calling {@code getHelperState} per
-     * helper — a separate round trip each, against a network-remote Redis. Bounded
-     * at the offer fanout for TASK_OFFERED, but TASK_CREATED can carry every helper
-     * notified across a bulk booking of up to 250 rows.
+     * helper — a separate round trip each, against a network-remote Redis. The
+     * recipient list is bounded by the matching wave's configured offer fanout.
      */
     private Map<UUID, Double> distancesToTask(List<UUID> helperIds, TaskEntity task) {
         if (helperIds == null || helperIds.isEmpty()) {

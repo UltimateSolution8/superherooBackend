@@ -152,13 +152,11 @@ public class MediatorService {
     batches.save(batch);
     paymentLifecycle.bindMediator(batchId, mediatorId);
 
-    try {
-      realtime.publish("mediator.job_accepted", Map.of(
+    realtime.publish("mediator.job_accepted", Map.of(
           "batchId", batchId.toString(),
           "mediatorId", mediatorId.toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
-    } catch (Exception ignored) {}
     try {
       pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Mediator assigned", "A mediator has accepted your bulk request \"" + batch.getTitle() + "\".", batch.getId());
     } catch (Exception ignored) {}
@@ -521,13 +519,11 @@ public class MediatorService {
     batch.setStatus(BookingBatchStatus.MEDIATOR_IN_PROGRESS);
     batches.save(batch);
 
-    try {
-      realtime.publish("mediator.job_dispatched", Map.of(
+    realtime.publish("mediator.job_dispatched", Map.of(
           "batchId", batchId.toString(),
           "mediatorId", batch.getMediatorId().toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
-    } catch (Exception ignored) {}
     try {
       pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Crew dispatched", "Your helpers have been dispatched for \"" + batch.getTitle() + "\". Share the start OTP when work begins.", batch.getId());
     } catch (Exception ignored) {}
@@ -569,13 +565,11 @@ public class MediatorService {
         taskRepo.save(task);
       }
     }
-    try {
-      realtime.publish("mediator.job_started", Map.of(
+    realtime.publish("mediator.job_started", Map.of(
           "batchId", batchId.toString(),
           "mediatorId", batch.getMediatorId().toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
-    } catch (Exception ignored) {}
     try {
       pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Work has started", "Your bulk request \"" + batch.getTitle() + "\" is now in progress.", batch.getId());
     } catch (Exception ignored) {}
@@ -598,12 +592,10 @@ public class MediatorService {
       });
     }
 
-    try {
-      realtime.publish("mediator.attendance_update", Map.of(
+    realtime.publish("mediator.attendance_update", Map.of(
           "batchId", batchId.toString(),
           "mediatorId", batch.getMediatorId().toString()
       ));
-    } catch (Exception ignored) {}
   }
 
   @Transactional
@@ -692,13 +684,11 @@ public class MediatorService {
     batches.save(batch);
     paymentLifecycle.releaseBatchEarnings(batch);
 
-    try {
-      realtime.publish("mediator.job_completed", Map.of(
+    realtime.publish("mediator.job_completed", Map.of(
           "batchId", batchId.toString(),
           "mediatorId", batch.getMediatorId().toString(),
           "buyerId", batch.getCreatedByUserId().toString()
       ));
-    } catch (Exception ignored) {}
     try {
       pushNotifications.notifyBuyerBatchUpdate(batch.getCreatedByUserId(), "Job completed", "Your bulk request \"" + batch.getTitle() + "\" has been completed.", batch.getId());
     } catch (Exception ignored) {}

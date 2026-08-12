@@ -1,102 +1,70 @@
 package com.helpinminutes.api.realtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helpinminutes.api.config.AppProperties;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import java.util.concurrent.Executor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+/**
+ * Transactional realtime event producer.
+ *
+ * <p>The former implementation published Redis only after commit. A process crash
+ * in the small gap between the database commit and that callback permanently lost
+ * the offer/status event. This producer writes an outbox row in the same database
+ * transaction as the business change, attempts delivery immediately after commit,
+ * and leaves the row for the retry worker if Redis and HTTP are unavailable.
+ */
 @Service
 public class RealtimePublisher {
-  private static final Logger log = LoggerFactory.getLogger(RealtimePublisher.class);
-
-  private final StringRedisTemplate redis;
-  private final ObjectMapper om;
-  private final AppProperties props;
-  private final HttpClient http;
-  private final java.util.concurrent.Executor dispatchExecutor;
+  private final RealtimeOutboxRepository outbox;
+  private final RealtimeOutboxDispatcher dispatcher;
+  private final ObjectMapper objectMapper;
+  private final Executor executor;
 
   public RealtimePublisher(
-      StringRedisTemplate redis,
-      ObjectMapper om,
-      AppProperties props,
-      @org.springframework.beans.factory.annotation.Qualifier("realtimeDispatchExecutor")
-          java.util.concurrent.Executor dispatchExecutor) {
-    this.redis = redis;
-    this.om = om;
-    this.props = props;
-    this.dispatchExecutor = dispatchExecutor;
-    this.http = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofMillis(Math.max(200, props.realtime().publishHttpTimeoutMs())))
-        .build();
+      RealtimeOutboxRepository outbox,
+      RealtimeOutboxDispatcher dispatcher,
+      ObjectMapper objectMapper,
+      @Qualifier("realtimeDispatchExecutor") Executor executor) {
+    this.outbox = outbox;
+    this.dispatcher = dispatcher;
+    this.objectMapper = objectMapper;
+    this.executor = executor;
   }
 
   public void publish(String type, Map<String, Object> payload) {
-    String eventId = UUID.randomUUID().toString();
-    Map<String, Object> envelope = Map.of(
-        "type", type,
-        "eventId", eventId,
-        "publishedAt", Instant.now().toString(),
-        "payload", payload
-    );
-    boolean redisDelivered = false;
+    if (type == null || type.isBlank() || payload == null) return;
+    RealtimeOutboxEntity event = new RealtimeOutboxEntity();
+    event.setId(UUID.randomUUID());
+    event.setEventType(type);
     try {
-      String msg = om.writeValueAsString(envelope);
-      String channel = props.realtime().redisPubSubChannel();
-      if (channel == null || channel.isBlank()) {
-        channel = "him:rt:events";
-      }
-      Long delivered = redis.convertAndSend(channel, msg);
-      redisDelivered = delivered != null && delivered > 0;
-      if (delivered == null || delivered <= 0) {
-        log.warn("Realtime Redis publish had no subscribers type={} eventId={} channel={}", type, eventId, channel);
-      }
+      event.setPayloadJson(objectMapper.writeValueAsString(payload));
     } catch (Exception e) {
-      log.warn("Realtime Redis publish failed type={} eventId={}", type, eventId, e);
+      throw new IllegalArgumentException("Realtime payload is not serializable", e);
     }
+    Instant now = Instant.now();
+    event.setStatus("PENDING");
+    event.setAttempts(0);
+    event.setNextAttemptAt(now);
+    event.setCreatedAt(now);
+    event.setUpdatedAt(now);
+    outbox.save(event);
 
-    String publishUrl = props.realtime().publishHttpUrl();
-    if (!redisDelivered && publishUrl != null && !publishUrl.isBlank()) {
-      // Not CompletableFuture.runAsync: that uses the common ForkJoinPool, sized
-      // availableProcessors() - 1 — a single thread on 2 vCPU — and this body
-      // makes a blocking HTTP call.
-      dispatchExecutor.execute(() -> publishHttpFallback(envelope));
-    }
-  }
-
-  private void publishHttpFallback(Map<String, Object> envelope) {
-    String publishUrl = props.realtime().publishHttpUrl();
-    if (publishUrl == null || publishUrl.isBlank()) {
-      return;
-    }
-    try {
-      String body = om.writeValueAsString(envelope);
-      HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-          .uri(URI.create(publishUrl))
-          .timeout(Duration.ofMillis(Math.max(200, props.realtime().publishHttpTimeoutMs())))
-          .header("Content-Type", "application/json")
-          .POST(HttpRequest.BodyPublishers.ofString(body));
-      String secret = props.realtime().publishHttpSecret();
-      if (secret != null && !secret.isBlank()) {
-        requestBuilder.header("x-realtime-secret", secret);
-      }
-      HttpRequest req = requestBuilder.build();
-      HttpResponse<Void> resp = http.send(req, HttpResponse.BodyHandlers.discarding());
-      if (resp.statusCode() >= 400) {
-        log.warn("Realtime HTTP publish failed status={} url={} eventId={}",
-            resp.statusCode(), publishUrl, envelope.get("eventId"));
-      }
-    } catch (Exception e) {
-      log.warn("Realtime HTTP publish failed url={} eventId={}", publishUrl, envelope.get("eventId"), e);
+    Runnable deliver = () -> executor.execute(() -> dispatcher.dispatchOne(event.getId()));
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override
+        public void afterCommit() {
+          deliver.run();
+        }
+      });
+    } else {
+      deliver.run();
     }
   }
 }

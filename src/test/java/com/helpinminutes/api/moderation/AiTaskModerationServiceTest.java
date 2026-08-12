@@ -11,7 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.moderation.dto.AIReviewResult;
 import com.helpinminutes.api.moderation.dto.TaskModerationPayload;
 import com.helpinminutes.api.moderation.llm.LlmClient;
@@ -50,7 +50,7 @@ class AiTaskModerationServiceTest {
   private TaskRepository taskRepository;
   private TaskAiReviewRepository aiReviewRepository;
   private LlmClient llmClient;
-  private MatchingService matchingService;
+  private NotificationQueueService matchingQueue;
   private PushNotificationService pushNotifications;
   private RecordingCache resultCache;
   private AiTaskModerationService service;
@@ -60,7 +60,7 @@ class AiTaskModerationServiceTest {
     taskRepository = mock(TaskRepository.class);
     aiReviewRepository = mock(TaskAiReviewRepository.class);
     llmClient = mock(LlmClient.class);
-    matchingService = mock(MatchingService.class);
+    matchingQueue = mock(NotificationQueueService.class);
     pushNotifications = mock(PushNotificationService.class);
     resultCache = new RecordingCache();
 
@@ -70,7 +70,7 @@ class AiTaskModerationServiceTest {
         mock(TaskAuditLogRepository.class),
         llmClient,
         new ModerationDecisionEngine(new TaskModerationService()),
-        matchingService,
+        matchingQueue,
         mock(RealtimePublisher.class),
         pushNotifications,
         new ObjectMapper(),
@@ -95,7 +95,7 @@ class AiTaskModerationServiceTest {
     verify(llmClient, never()).evaluateTask(any());
     // No verdict row either: there was no verdict to record.
     verify(aiReviewRepository, never()).save(any(TaskAiReviewEntity.class));
-    verify(matchingService).dispatchOffers(task, true);
+    verify(matchingQueue).enqueueMatchingDispatch(task, true);
   }
 
   @Test
@@ -109,7 +109,7 @@ class AiTaskModerationServiceTest {
     // moderator to weigh up, and the citizen should not be left waiting.
     assertEquals(TaskStatus.CANCELLED, task.getStatus());
     verify(llmClient, never()).evaluateTask(any());
-    verify(matchingService, never()).dispatchOffers(any(), anyBoolean());
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any(), anyBoolean());
   }
 
   /** The citizen must be told why, without being told which word tripped it. */
@@ -154,7 +154,7 @@ class AiTaskModerationServiceTest {
     service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
 
     assertEquals(TaskStatus.ADMIN_REVIEW, task.getStatus());
-    verify(matchingService, never()).dispatchOffers(any(), anyBoolean());
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any(), anyBoolean());
     // The citizen used to get no signal at all that their booking was held.
     verify(pushNotifications).notifyBuyerTaskUnderReview(task.getBuyerId(), task);
   }
@@ -217,7 +217,7 @@ class AiTaskModerationServiceTest {
     service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
 
     verify(llmClient, never()).evaluateTask(any());
-    verify(matchingService, never()).dispatchOffers(any(), anyBoolean());
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any(), anyBoolean());
   }
 
   // ─── fixtures ─────────────────────────────────────────────────────────────

@@ -103,7 +103,7 @@ public class PushNotificationService {
         }
       }
       if (payload == null || payload.isBlank()) {
-        log.warn("Push notifications disabled: missing FIREBASE_SERVICE_ACCOUNT_JSON or BASE64. Will use Expo push API as fallback.");
+        log.warn("Firebase push disabled: missing service-account credentials. Expo push tokens remain supported; raw FCM tokens will retry and alert.");
         return null;
       }
       if (FirebaseApp.getApps().isEmpty()) {
@@ -149,6 +149,7 @@ public class PushNotificationService {
         .map(u -> u.getId())
         .collect(java.util.stream.Collectors.toSet());
 
+    RuntimeException deliveryFailure = null;
     for (UUID helperId : helperIds) {
       // Hard guard: task-created/offered notifications are for helpers only.
       if (!confirmedHelperIds.contains(helperId)) {
@@ -186,11 +187,13 @@ public class PushNotificationService {
         data.put("type", "TASK_OFFERED");
         data.put("taskId", task.getId().toString());
         data.put("title", task.getTitle() == null ? "Task" : task.getTitle());
-        data.put("urgency", task.getUrgency().name());
+        data.put("urgency", task.getUrgency() == null ? "NORMAL" : task.getUrgency().name());
         data.put("budgetPaise", String.valueOf(budgetPaise));
         data.put("amountText", amountText == null ? "" : amountText);
-        data.put("lat", String.valueOf(task.getLat()));
-        data.put("lng", String.valueOf(task.getLng()));
+        // Push payloads are visible before acceptance. Keep the nearby context but
+        // reveal the exact citizen pin only in the assigned task response.
+        data.put("lat", String.valueOf(approximateCoordinate(task.getLat())));
+        data.put("lng", String.valueOf(approximateCoordinate(task.getLng())));
         if (bulkMeta != null) {
           data.put("bulkRequest", "true");
           data.put("batchId", bulkMeta.batchId().toString());
@@ -204,25 +207,21 @@ public class PushNotificationService {
         sendToTokens(task.getId(), helperId, tokenList, title, body, data, "tasks");
       } catch (Exception e) {
         log.warn("Failed to send push notifications for task {} to helper {}", task.getId(), helperId, e);
+        if (deliveryFailure == null) {
+          deliveryFailure = e instanceof RuntimeException runtime
+              ? runtime
+              : new IllegalStateException("Task offer push failed", e);
+        }
       }
     }
+    // The Rabbit listener must see a failure so its retry/DLQ policy can run.
+    // Successful recipients may see a duplicate on a retry; Android collapse keys
+    // coalesce those, while losing the failed recipients would be worse.
+    if (deliveryFailure != null) throw deliveryFailure;
   }
 
-  /**
-   * When a task is created we also want to nudge helpers such that they refresh
-   * even if we haven't explicitly offered to them yet.  This method simply
-   * re‑uses the task offered logic because it already handles token filtering and
-   * formatting.
-   */
-  public void notifyTaskCreated(List<UUID> helperIds, TaskEntity task) {
-    notifyTaskCreated(helperIds, task, null);
-  }
-
-  public void notifyTaskCreated(List<UUID> helperIds, TaskEntity task, Map<UUID, Double> distanceByHelper) {
-    // reuse the same implementation as offered, helpers will see a notification
-    // that looks identical to an offer (title/body) and the app treats it the
-    // same way (refresh available tasks).
-    notifyTaskOffered(helperIds, task, distanceByHelper);
+  private static double approximateCoordinate(double value) {
+    return Math.round(value * 100d) / 100d;
   }
 
   public void notifyTaskCreatedMonitor(TaskEntity task) {
@@ -311,12 +310,8 @@ public class PushNotificationService {
       }
     }
     if (tokenList.isEmpty()) return;
-    try {
-      sendToTokens(task.getId(), buyerId, tokenList, "Task accepted", "A Superheroo is on the way.",
-          Map.of("type", "TASK_ACCEPTED", "taskId", task.getId().toString()), "tasks");
-    } catch (Exception e) {
-      log.warn("Failed to send task accepted notification for task {}", task.getId(), e);
-    }
+    sendToTokens(task.getId(), buyerId, tokenList, "Task accepted", "A Superheroo is on the way.",
+        Map.of("type", "TASK_ACCEPTED", "taskId", task.getId().toString()), "tasks");
   }
 
   public void notifyBuyerTaskCompleted(UUID buyerId, TaskEntity task) {
@@ -330,12 +325,8 @@ public class PushNotificationService {
       }
     }
     if (tokenList.isEmpty()) return;
-    try {
-      sendToTokens(task.getId(), buyerId, tokenList, "Task completed", "Please rate your Superheroo.",
-          Map.of("type", "TASK_COMPLETED", "taskId", task.getId().toString()), "tasks");
-    } catch (Exception e) {
-      log.warn("Failed to send task completed notification for task {}", task.getId(), e);
-    }
+    sendToTokens(task.getId(), buyerId, tokenList, "Task completed", "Please rate your Superheroo.",
+        Map.of("type", "TASK_COMPLETED", "taskId", task.getId().toString()), "tasks");
   }
 
   public void notifyBuyerHelperArrived(UUID buyerId, TaskEntity task) {
@@ -506,13 +497,20 @@ public class PushNotificationService {
         "batchId", batch.getId().toString(),
         "helpersNeeded", String.valueOf(batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount())
     );
+    RuntimeException deliveryFailure = null;
     for (Map.Entry<UUID, List<String>> entry : tokensByUser.entrySet()) {
       try {
         sendToTokens(null, entry.getKey(), entry.getValue(), title, body, data, "tasks");
       } catch (Exception e) {
         log.warn("Failed mediator bulk push user={} batch={}", entry.getKey(), batch.getId(), e);
+        if (deliveryFailure == null) {
+          deliveryFailure = e instanceof RuntimeException runtime
+              ? runtime
+              : new IllegalStateException("Mediator job push failed", e);
+        }
       }
     }
+    if (deliveryFailure != null) throw deliveryFailure;
   }
 
   /**
@@ -547,6 +545,7 @@ public class PushNotificationService {
     if (tokenList == null || tokenList.isEmpty()) return;
     List<String> expoTokens = new ArrayList<>();
     List<String> fcmTokens = new ArrayList<>();
+    RuntimeException fcmFailure = null;
     for (String token : tokenList) {
       if (isExpoToken(token)) {
         expoTokens.add(token);
@@ -556,10 +555,10 @@ public class PushNotificationService {
     }
     if (!fcmTokens.isEmpty()) {
       if (messaging == null) {
-        // Firebase is not initialized — route FCM tokens through Expo push API as fallback.
-        // Expo can relay push notifications to FCM devices if the app uses expo-notifications.
-        log.info("Firebase not initialized; routing {} FCM token(s) through Expo push API fallback for user {} task {}", fcmTokens.size(), userId, taskId);
-        expoTokens.addAll(fcmTokens);
+        // Expo's service accepts Expo push tokens, not raw FCM registration tokens.
+        // Treat missing Firebase credentials as retryable/observable configuration
+        // failure instead of sending invalid tokens and reporting success.
+        fcmFailure = new IllegalStateException("Firebase is not initialized for FCM tokens");
       } else {
         // HIGH priority and a TTL matched to the message's usefulness.
         //
@@ -572,13 +571,18 @@ public class PushNotificationService {
         // TTL also stops a stale offer arriving when the phone wakes up an hour
         // later: FCM drops it instead.
         boolean timeCritical = TASKS_CHANNEL_ID.equals(channelId);
-        var androidConfig = com.google.firebase.messaging.AndroidConfig.builder()
+        var androidBuilder = com.google.firebase.messaging.AndroidConfig.builder()
             .setPriority(com.google.firebase.messaging.AndroidConfig.Priority.HIGH)
             .setTtl(timeCritical ? timeCriticalTtlMillis() : DEFAULT_PUSH_TTL_MILLIS)
             .setNotification(com.google.firebase.messaging.AndroidNotification.builder()
                 .setChannelId(channelId)
-                .build())
-            .build();
+                .build());
+        if (taskId != null) {
+          // At-least-once queue delivery may retry after an uncertain broker/FCM
+          // acknowledgement. Android replaces an older notification for this task.
+          androidBuilder.setCollapseKey("task:" + taskId);
+        }
+        var androidConfig = androidBuilder.build();
         MulticastMessage.Builder builder = MulticastMessage.builder()
             .addAllTokens(fcmTokens)
             .setNotification(Notification.builder().setTitle(title).setBody(body).build())
@@ -589,16 +593,25 @@ public class PushNotificationService {
           log.info("FCM push sent user={} task={}: success={}, failure={}",
                userId, taskId, response.getSuccessCount(), response.getFailureCount());
           pruneInvalidTokens(taskId, userId, fcmTokens, response);
+          List<SendResponse> results = response.getResponses();
+          for (int i = 0; i < results.size() && i < fcmTokens.size(); i++) {
+            SendResponse result = results.get(i);
+            if (!result.isSuccessful() && !isPermanentTokenError(result.getException())) {
+              fcmFailure = new IllegalStateException("FCM returned a transient delivery failure");
+            }
+          }
         } catch (Exception e) {
-          log.warn("Failed FCM push user={} task={}; falling back to Expo push API", userId, taskId, e);
-          // Fallback: try sending FCM tokens via Expo push API
-          expoTokens.addAll(fcmTokens);
+          log.warn("Failed FCM push user={} task={}; scheduling retry", userId, taskId, e);
+          fcmFailure = e instanceof RuntimeException runtime
+              ? runtime
+              : new IllegalStateException("FCM delivery failed", e);
         }
       }
     }
     if (!expoTokens.isEmpty()) {
       sendExpoPush(userId, taskId, expoTokens, title, body, data, channelId);
     }
+    if (fcmFailure != null) throw fcmFailure;
   }
 
   private boolean isExpoToken(String token) {
@@ -635,12 +648,39 @@ public class PushNotificationService {
           .build();
       HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        log.warn("Expo push failed user={} task={} status={} body={}", userId, taskId, response.statusCode(), response.body());
-        return;
+        throw new IllegalStateException("Expo push returned HTTP " + response.statusCode());
       }
+      validateExpoTickets(tokenList, response.body());
       log.info("Expo push sent user={} task={} count={}", userId, taskId, tokenList.size());
     } catch (Exception e) {
       log.warn("Failed Expo push user={} task={}", userId, taskId, e);
+      throw e instanceof RuntimeException runtime
+          ? runtime
+          : new IllegalStateException("Expo push delivery failed", e);
+    }
+  }
+
+  /** A 200 response can still contain per-token failures; surface transient ones. */
+  private void validateExpoTickets(List<String> tokenList, String responseBody) throws Exception {
+    com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(responseBody);
+    com.fasterxml.jackson.databind.JsonNode tickets = root.path("data");
+    if (!tickets.isArray() || tickets.size() != tokenList.size()) {
+      throw new IllegalStateException("Expo push response did not contain all delivery tickets");
+    }
+    List<String> permanentlyInvalid = new ArrayList<>();
+    for (int i = 0; i < tickets.size(); i++) {
+      com.fasterxml.jackson.databind.JsonNode ticket = tickets.get(i);
+      if ("ok".equalsIgnoreCase(ticket.path("status").asText())) continue;
+      String code = ticket.path("details").path("error").asText("");
+      if ("DeviceNotRegistered".equals(code) || "MismatchSenderId".equals(code)) {
+        permanentlyInvalid.add(tokenList.get(i));
+        continue;
+      }
+      throw new IllegalStateException(
+          "Expo push ticket failed" + (code.isBlank() ? "" : ": " + code));
+    }
+    if (!permanentlyInvalid.isEmpty()) {
+      tokens.removeTokens(permanentlyInvalid);
     }
   }
 

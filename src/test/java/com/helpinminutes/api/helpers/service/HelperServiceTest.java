@@ -15,7 +15,7 @@ import com.helpinminutes.api.helpers.model.HelperProfileEntity;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.helpers.presence.HelperPresenceService;
 import com.helpinminutes.api.helpers.repo.HelperProfileRepository;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.storage.SupabaseStorageService;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.repo.UserRepository;
@@ -37,7 +37,7 @@ public class HelperServiceTest {
         mock(SupabaseStorageService.class),
         mock(UserRepository.class),
         mock(TaskRepository.class),
-        mock(MatchingService.class),
+        mock(NotificationQueueService.class),
         Runnable::run,
         payoutAccounts,
         com.helpinminutes.api.config.TestAppProperties.defaults());
@@ -73,7 +73,7 @@ public class HelperServiceTest {
         storage,
         mock(UserRepository.class),
         mock(TaskRepository.class),
-        mock(MatchingService.class),
+        mock(NotificationQueueService.class),
         Runnable::run,
         payoutAccounts,
         com.helpinminutes.api.config.TestAppProperties.defaults());
@@ -100,7 +100,7 @@ public class HelperServiceTest {
     PayoutAccountService payoutAccounts = mock(PayoutAccountService.class);
     HelperService service = new HelperService(
         profiles, mock(HelperPresenceService.class), storage, mock(UserRepository.class),
-        mock(TaskRepository.class), mock(MatchingService.class), Runnable::run, payoutAccounts,
+        mock(TaskRepository.class), mock(NotificationQueueService.class), Runnable::run, payoutAccounts,
         com.helpinminutes.api.config.TestAppProperties.defaults());
     HelperProfileEntity profile = new HelperProfileEntity();
     profile.setUserId(helperId);

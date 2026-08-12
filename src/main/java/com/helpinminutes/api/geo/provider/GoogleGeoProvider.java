@@ -14,13 +14,14 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 /**
- * Google Maps Platform — reached on one screen, and as a fallback everywhere else.
+ * Google Maps Platform — reached on one premium screen by default.
  *
  * <p>Google answers autocomplete only for requests the server has priced as premium
  * (see {@code GeoProperties.premiumContexts} — today, address entry while creating a
  * task), plus the details lookup that resolving one of its suggestions requires.
- * Every other geo call in the product is served by Ola or by self-hosted OSRM, and
- * reaches this class only if those are down.
+ * Every other production-default geo call is served by Ola or self-hosted OSRM,
+ * then degrades locally. Reverse geocoding and routing remain implemented here so
+ * operators can add Google explicitly during an incident, under the same hard cap.
  *
  * <p>Three deliberate choices keep the resulting bill at or near zero:
  *
@@ -30,8 +31,8 @@ import org.springframework.stereotype.Component;
  *       path was a trap waiting for the next key rotation.
  *   <li><b>A field mask of {@code id,location} on place details.</b> Adding
  *       {@code formattedAddress} or {@code displayName} moves that call from the
- *       Essentials SKU to Pro — 3.4× the price and half the free tier — to fetch a
- *       label the autocomplete response already gave us.
+ *       IDs-only/Essentials fields toward a higher-priced field category to fetch
+ *       a label the autocomplete response already gave us.
  *   <li><b>A session token on both halves of an address entry.</b> Without one,
  *       every keystroke is a separately billed Autocomplete request. With one, the
  *       keystrokes past the twelfth in a session bill as Autocomplete Session Usage,
@@ -43,9 +44,9 @@ import org.springframework.stereotype.Component;
  * order of magnitude, and self-hosted routing is free.
  *
  * <p>Note what is <i>not</i> here: map rendering. The Maps SDK for Android map load
- * is a separate SKU billed at nothing, unlimited, so the map canvas stays on Google
- * in the app with a package-restricted key. This class only covers the calls that
- * cost money.
+ * is currently an unlimited-free India SKU, so the map canvas stays on Google in
+ * the app with a package-restricted key. This class covers server-side web-service
+ * calls, whose allowance is guarded independently.
  */
 @Component
 public class GoogleGeoProvider implements GeoProvider {
@@ -227,13 +228,15 @@ public class GoogleGeoProvider implements GeoProvider {
   /**
    * Driving route. Last resort only — OSRM and Ola answer first.
    *
-   * <p>Not metered by {@link GeoSpendGuard}: the guard exists to bound discretionary
-   * search spend, and routing only reaches Google when both cheaper routers are
-   * already down. Cutting it off then would leave a partner with no route at all.
+   * <p>Metered by {@link GeoSpendGuard} even though it is a last resort. Once the
+   * cap is reached the chain returns a straight-line ETA, so navigation remains
+   * usable without making the documented monthly ceiling porous during an OSRM +
+   * Ola incident.
    */
   @Override
   public Optional<GeoDtos.Route> route(double fromLat, double fromLng, double toLat, double toLng) {
     if (!isEnabled()) return Optional.empty();
+    if (!spendGuard.tryConsume("route")) return Optional.empty();
     String url = props.getGoogle().getBaseUrl()
         + "/maps/api/directions/json?origin=" + fromLat + "," + fromLng
         + "&destination=" + toLat + "," + toLng

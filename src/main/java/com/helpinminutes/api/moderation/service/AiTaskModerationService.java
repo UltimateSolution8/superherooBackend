@@ -1,11 +1,11 @@
 package com.helpinminutes.api.moderation.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helpinminutes.api.matching.MatchingService;
 import com.helpinminutes.api.moderation.dto.AIReviewResult;
 import com.helpinminutes.api.moderation.dto.TaskModerationPayload;
 import com.helpinminutes.api.moderation.llm.LlmClient;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.event.TaskCreatedEvent;
 import com.helpinminutes.api.tasks.model.TaskAiReviewEntity;
@@ -41,7 +41,7 @@ public class AiTaskModerationService {
   private final TaskAuditLogRepository auditLogRepository;
   private final LlmClient llmClient;
   private final ModerationDecisionEngine decisionEngine;
-  private final MatchingService matchingService;
+  private final NotificationQueueService notificationQueue;
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
   private final ObjectMapper objectMapper;
@@ -54,7 +54,7 @@ public class AiTaskModerationService {
       TaskAuditLogRepository auditLogRepository,
       LlmClient llmClient,
       ModerationDecisionEngine decisionEngine,
-      MatchingService matchingService,
+      NotificationQueueService notificationQueue,
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
       ObjectMapper objectMapper,
@@ -65,7 +65,7 @@ public class AiTaskModerationService {
     this.auditLogRepository = auditLogRepository;
     this.llmClient = llmClient;
     this.decisionEngine = decisionEngine;
-    this.matchingService = matchingService;
+    this.notificationQueue = notificationQueue;
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
     this.objectMapper = objectMapper;
@@ -103,11 +103,9 @@ public class AiTaskModerationService {
     meterRegistry.counter("ai.review.count").increment();
 
     if (finalStatus == TaskStatus.SEARCHING) {
-      try {
-        matchingService.dispatchOffers(task, event.sendOfferNotifications());
-      } catch (Exception e) {
-        log.error("Failed to dispatch offers after AI approval for task {}", taskId, e);
-      }
+      // Commit the moderation decision and expected matching wave together. The
+      // dedicated worker performs Redis/routing work only after this transaction.
+      notificationQueue.enqueueMatchingDispatch(task, event.sendOfferNotifications());
     }
   }
 
@@ -249,16 +247,12 @@ public class AiTaskModerationService {
     auditLog.setRemarks("Routed to review. Context terms: " + String.join(", ", local.contextTerms()));
     auditLogRepository.save(auditLog);
 
-    try {
-      realtime.publish(
-          "admin_moderation_required",
-          java.util.Map.of(
-              "taskId", task.getId().toString(),
-              "riskScore", aiResult == null ? 50 : aiResult.riskScore(),
-              "flags", local.reasons()));
-    } catch (Exception ignored) {
-      // Admin visibility is best-effort; the queue endpoint is the source of truth.
-    }
+    realtime.publish(
+        "admin_moderation_required",
+        java.util.Map.of(
+            "taskId", task.getId().toString(),
+            "riskScore", aiResult == null ? 50 : aiResult.riskScore(),
+            "flags", local.reasons()));
     // The citizen was never told their booking was held — PushNotificationService was
     // injected here and never called, so a flagged task just sat silent.
     try {

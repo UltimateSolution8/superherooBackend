@@ -97,8 +97,17 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USERNAME:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    # The notification outbox is marked published only after the broker confirms
+    # the durable message. `invoke(...waitForConfirmsOrDie)` requires confirms.
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     listener:
       simple:
+        # Prevent one instance from prefetching a large burst while other workers
+        # sit idle. Matching and push use separate listener pools.
+        prefetch: ${RABBIT_LISTENER_PREFETCH:10}
         retry:
           enabled: true
           max-attempts: 5
@@ -227,10 +236,16 @@ management:
     # must not remove the API from service while DB and Redis are healthy.
     mail:
       enabled: ${MANAGEMENT_HEALTH_MAIL_ENABLED:false}
-    # RabbitMQ is optional: notifications fall back to direct push when it is
-    # unavailable, so it must not mark the whole service unhealthy.
+    # RabbitMQ delivery is durable through the database outbox. A broker outage
+    # delays matching/push but must not remove every API instance from service and
+    # prevent new tasks from being committed; alert on outbox retry/dead metrics.
     rabbit:
       enabled: ${MANAGEMENT_HEALTH_RABBIT_ENABLED:false}
+  metrics:
+    distribution:
+      percentiles-histogram:
+        matching.dispatch.duration: true
+        matching.dispatch.queue.latency: true
 
 app:
   env: ${APP_ENV:dev}
@@ -288,6 +303,16 @@ app:
     publish-http-secret: ${REALTIME_HTTP_PUBLISH_SECRET:}
     publish-http-timeout-ms: ${REALTIME_HTTP_PUBLISH_TIMEOUT_MS:1500}
 
+# Durable realtime delivery polls quickly for low offer latency, then retains a
+# seven-day published ledger and a thirty-day dead-letter ledger in the database.
+realtime-outbox:
+  poll-ms: ${REALTIME_OUTBOX_POLL_MS:1000}
+  retention-cron: ${REALTIME_OUTBOX_RETENTION_CRON:0 15 4 * * *}
+
+notification-outbox:
+  poll-ms: ${NOTIFICATION_OUTBOX_POLL_MS:1000}
+  retention-cron: ${NOTIFICATION_OUTBOX_RETENTION_CRON:0 30 4 * * *}
+
 # Maps providers. Order is per capability because the right choice differs by
 # capability and cost model — see GeoProperties for the reasoning.
 #
@@ -296,25 +321,25 @@ app:
 # the apps keep working. Map *rendering* is unaffected either way; it runs on the
 # Google mobile SDK, whose map-load SKU is free and unlimited.
 geo:
-  # Ola leads every text lookup: 500k calls/month free against Google's 10k, and
-  # the quality gap only matters where a citizen is typing an address they have
-  # not saved. The built-in Hyderabad locality index is the credential-free last
-  # resort — keep it after the street-level providers so a missing key or an
-  # upstream outage never turns "Madhapur" into a blank result.
+  # Ola leads routine text lookups. Verify its current commercial quota in the Ola
+  # console rather than relying on a number embedded in an application release.
+  # The built-in Hyderabad locality index is the credential-free last resort — keep
+  # it after the street-level providers so a missing key or upstream outage never
+  # turns "Madhapur" into a blank result.
   autocompleteOrder: ${GEO_AUTOCOMPLETE_ORDER:ola,local}
   placeDetailsOrder: ${GEO_PLACE_DETAILS_ORDER:ola,local}
-  reverseGeocodeOrder: ${GEO_REVERSE_GEOCODE_ORDER:ola,google}
+  reverseGeocodeOrder: ${GEO_REVERSE_GEOCODE_ORDER:ola}
   # The one exception. Address entry while creating a task is where suggestion
   # quality is the product, and it is also the lowest-frequency text call we make
-  # — a couple of dozen a month at launch, inside Google's free tier by two orders
-  # of magnitude. premiumContexts is the allowlist of request contexts allowed to
+  # — a couple of dozen a month at launch, far inside the current India allowance.
+  # premiumContexts is the allowlist of request contexts allowed to
   # use this order; anything else, including an unrecognised value from a client,
   # gets the free order above. Emptying premiumContexts turns Google off entirely
   # without an app release.
   premiumAutocompleteOrder: ${GEO_PREMIUM_AUTOCOMPLETE_ORDER:google,ola,local}
   premiumContexts: ${GEO_PREMIUM_CONTEXTS:task_create}
   # OSRM first: self-hosted, free, and routing is our highest-frequency geo call.
-  routingOrder: ${GEO_ROUTING_ORDER:osrm,ola,google}
+  routingOrder: ${GEO_ROUTING_ORDER:osrm,ola}
   perProviderTimeoutMs: ${GEO_PROVIDER_TIMEOUT_MS:2500}
   circuitBreakerThreshold: ${GEO_CIRCUIT_BREAKER_THRESHOLD:5}
   circuitBreakerCooldownMs: ${GEO_CIRCUIT_BREAKER_COOLDOWN_MS:30000}
@@ -349,20 +374,21 @@ geo:
     # render key: this one is IP-restricted, that one is package-restricted and
     # ships inside the APK.
     apiKey: ${GOOGLE_MAPS_SERVER_API_KEY:}
-    # Billable Google calls per calendar month before the chain falls back to Ola.
-    # 12000 sits just above the 10k/month free tier, so the most an unattended
-    # retry loop can cost is the overshoot. The Cloud Console quota cap is the hard
-    # limit behind it. 0 disables.
+    # Google web-service calls per calendar month before the chain falls back to
+    # Ola. 12000 is below the current 70k India allowance for each Essentials SKU,
+    # but the Cloud Console quota is still the authoritative hard ceiling. 0 disables.
     monthlyCallCap: ${GEO_GOOGLE_MONTHLY_CALL_CAP:12000}
+    # Stop starting new Google autocomplete sessions before the hard cap so place
+    # details for suggestions already shown can still resolve. New searches use Ola.
+    premiumReserveCalls: ${GEO_GOOGLE_PREMIUM_RESERVE_CALLS:1000}
     # Premium requests one account may make per day. Bounds how fast a single
     # client can spend the shared monthly budget; exhausting it downgrades that
     # user to Ola for the rest of the day rather than failing their search.
     userDailyCallCap: ${GEO_GOOGLE_USER_DAILY_CALL_CAP:150}
   cache:
     autocompleteTtlSeconds: ${GEO_CACHE_AUTOCOMPLETE_TTL_SECONDS:86400}
-    # A week for the Google-served tier. Predictions for a text query barely move,
-    # and this is the only cached value we pay for, so the longer window is a
-    # straight reduction in billable calls for the queries people repeat.
+    # Retained for backwards-compatible configuration only. Premium predictions
+    # are not shared/cached because they carry Google session-bound content.
     premiumAutocompleteTtlSeconds: ${GEO_CACHE_PREMIUM_AUTOCOMPLETE_TTL_SECONDS:604800}
     placeDetailsTtlSeconds: ${GEO_CACHE_PLACE_DETAILS_TTL_SECONDS:2592000}
     reverseGeocodeTtlSeconds: ${GEO_CACHE_REVERSE_TTL_SECONDS:2592000}

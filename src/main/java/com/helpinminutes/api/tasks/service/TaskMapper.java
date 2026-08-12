@@ -60,11 +60,41 @@ public class TaskMapper {
             boolean includeOtp,
             Map<UUID, Double> distanceMetersByTask,
             Map<UUID, Integer> etaMinutesByTask) {
+        return toResponseList(
+                taskEntities, includeOtp, distanceMetersByTask, etaMinutesByTask, false);
+    }
+
+    /**
+     * Pre-acceptance marketplace view.
+     *
+     * <p>A nearby partner needs payout, duration, approximate area, distance and
+     * ETA to decide. They do not need the citizen's phone, exact pin, landmark or
+     * identity until assignment. Coordinates are rounded to roughly a one-kilometre
+     * cell; the full response is returned immediately after a successful accept.
+     */
+    public List<TaskResponse> toAvailableResponseList(
+            List<TaskEntity> taskEntities,
+            Map<UUID, Double> distanceMetersByTask,
+            Map<UUID, Integer> etaMinutesByTask) {
+        return toResponseList(taskEntities, false, distanceMetersByTask, etaMinutesByTask, true);
+    }
+
+    public TaskResponse toAvailableResponse(TaskEntity task) {
+        return toResponseList(List.of(task), false, Map.of(), Map.of(), true).get(0);
+    }
+
+    private List<TaskResponse> toResponseList(
+            List<TaskEntity> taskEntities,
+            boolean includeOtp,
+            Map<UUID, Double> distanceMetersByTask,
+            Map<UUID, Integer> etaMinutesByTask,
+            boolean approximateBeforeAccept) {
         if (taskEntities == null || taskEntities.isEmpty()) {
             return Collections.emptyList();
         }
 
         Set<UUID> buyerIds = taskEntities.stream()
+                .filter(task -> !shouldMask(task, approximateBeforeAccept))
                 .map(TaskEntity::getBuyerId)
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toSet());
@@ -94,7 +124,7 @@ public class TaskMapper {
 
         return taskEntities.stream()
                 .map(t -> mapToResponse(t, includeOtp, userMap, buyerStats, helperStats, batchIdsByTask,
-                        distanceMetersByTask, etaMinutesByTask))
+                        distanceMetersByTask, etaMinutesByTask, approximateBeforeAccept))
                 .collect(Collectors.toList());
     }
 
@@ -102,7 +132,8 @@ public class TaskMapper {
             Map<UUID, UserStats> buyerStatsMap, Map<UUID, UserStats> helperStatsMap,
             Map<UUID, UUID> batchIdsByTask,
             Map<UUID, Double> distanceMetersByTask,
-            Map<UUID, Integer> etaMinutesByTask) {
+            Map<UUID, Integer> etaMinutesByTask,
+            boolean approximateBeforeAccept) {
         UserEntity buyer = userMap.get(t.getBuyerId());
         UserEntity helper = userMap.get(t.getAssignedHelperId());
         UserStats buyerStats = buyerStatsMap.get(t.getBuyerId());
@@ -124,20 +155,23 @@ public class TaskMapper {
         String translatedDescription = translationService.translate(t.getDescription(), acceptLanguage);
 
         UUID batchId = batchIdsByTask.get(t.getId());
+        boolean masked = shouldMask(t, approximateBeforeAccept);
+        double responseLat = masked ? roundCoordinate(t.getLat()) : t.getLat();
+        double responseLng = masked ? roundCoordinate(t.getLng()) : t.getLng();
 
         return new TaskResponse(
                 t.getId(),
-                t.getBuyerId(),
-                buyerPhone,
-                buyerName,
+                masked ? null : t.getBuyerId(),
+                masked ? null : buyerPhone,
+                masked ? null : buyerName,
                 translatedTitle,
                 translatedDescription,
                 t.getUrgency(),
                 t.getTimeMinutes(),
                 t.getBudgetPaise(),
-                t.getLat(),
-                t.getLng(),
-                t.getAddressText(),
+                responseLat,
+                responseLng,
+                masked ? "Approximate task area" : t.getAddressText(),
                 t.getScheduledAt(),
                 t.getStatus(),
                 t.getAssignedHelperId(),
@@ -170,13 +204,23 @@ public class TaskMapper {
                 t.getCancelledByRole(),
                 t.getCancelledAt(),
                 t.getCreatedAt(),
-                t.getLandmark(),
+                masked ? null : t.getLandmark(),
                 t.getRecurringTaskId(),
                 batchId,
                 t.getPaymentCollectionMode(),
                 t.getVerificationMode(),
                 distanceMetersByTask.get(t.getId()),
                 etaMinutesByTask.get(t.getId()));
+    }
+
+    private static double roundCoordinate(double value) {
+        return Math.round(value * 100d) / 100d;
+    }
+
+    private static boolean shouldMask(TaskEntity task, boolean approximateBeforeAccept) {
+        return approximateBeforeAccept
+                && task.getStatus() == TaskStatus.SEARCHING
+                && task.getAssignedHelperId() == null;
     }
 
     private String getAcceptLanguageHeader() {

@@ -5,8 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
@@ -271,6 +274,86 @@ class GeoProviderChainTest {
     assertEquals(6, working.autocompleteCalls.get());
   }
 
+  @Test
+  void failedRecoveryProbeImmediatelyReopensCircuit() throws Exception {
+    props.setCircuitBreakerThreshold(3);
+    props.setCircuitBreakerCooldownMs(100);
+    StubProvider broken = new StubProvider("first").withAutocomplete(Optional.empty());
+    StubProvider working = new StubProvider("second")
+        .withAutocomplete(Optional.of(List.of(suggestion("Madhapur"))));
+    chain = chainOf(broken, working);
+
+    for (int i = 0; i < 3; i++) chain.autocomplete("initial" + i, null, null);
+    Thread.sleep(120);
+    for (int i = 0; i < 4; i++) chain.autocomplete("recovery" + i, null, null);
+
+    assertEquals(4, broken.autocompleteCalls.get(),
+        "only one half-open probe may reach a provider during recovery");
+  }
+
+  @Test
+  void oneCapabilityFailureDoesNotDisableAnotherCapability() {
+    props.setCircuitBreakerThreshold(1);
+    props.setCircuitBreakerCooldownMs(60_000);
+    props.setAutocompleteOrder(List.of("multi"));
+    props.setRoutingOrder(List.of("multi"));
+    StubProvider multi = new StubProvider("multi")
+        .withAutocomplete(Optional.empty())
+        .withRoute(Optional.of(route(90)));
+    chain = chainOf(multi);
+
+    chain.autocomplete("madhapur", null, null);
+    var routed = chain.route(17.385, 78.4867, 17.39, 78.49);
+
+    assertEquals("multi", routed.provider());
+    assertEquals(1, multi.routeCalls.get());
+  }
+
+  @Test
+  void premiumPredictionsAreNeverReadFromOrWrittenToSharedCache() {
+    props.setPremiumAutocompleteOrder(List.of("google"));
+    StubProvider google = new StubProvider("google")
+        .withAutocomplete(Optional.of(List.of(suggestion("Madhapur"))));
+    CountingCache cache = new CountingCache();
+    chain = new GeoProviderChain(List.of(google), props, cache, new SimpleMeterRegistry());
+
+    chain.autocomplete("madhapur", null, null, true, "session-one");
+    chain.autocomplete("madhapur", null, null, true, "session-two");
+
+    assertEquals(2, google.autocompleteCalls.get());
+    assertEquals(0, cache.reads.get());
+    assertEquals(0, cache.writes.get());
+  }
+
+  @Test
+  void googleFallbackContentIsNotWrittenToSharedCache() {
+    props.setRoutingOrder(List.of("google"));
+    StubProvider google = new StubProvider("google").withRoute(Optional.of(route(90)));
+    CountingCache cache = new CountingCache();
+    chain = new GeoProviderChain(List.of(google), props, cache, new SimpleMeterRegistry());
+
+    chain.route(17.385, 78.4867, 17.39, 78.49);
+
+    assertEquals(0, cache.reads.get());
+    assertEquals(0, cache.writes.get());
+  }
+
+  @Test
+  void nonGoogleCacheHitPreservesTheActualProviderForAttribution() {
+    props.setRoutingOrder(List.of("osrm"));
+    StubProvider osrm = new StubProvider("osrm").withRoute(Optional.of(route(90)));
+    CountingCache cache = new CountingCache();
+    chain = new GeoProviderChain(List.of(osrm), props, cache, new SimpleMeterRegistry());
+
+    var first = chain.route(17.385, 78.4867, 17.39, 78.49);
+    var cached = chain.route(17.385, 78.4867, 17.39, 78.49);
+
+    assertEquals("osrm", first.provider());
+    assertEquals("osrm", cached.provider());
+    assertEquals(1, osrm.routeCalls.get());
+    assertEquals(1, cache.writes.get());
+  }
+
   // ─── place id routing ─────────────────────────────────────────────────────
 
   @Test
@@ -319,6 +402,29 @@ class GeoProviderChainTest {
         return loader.get();
       }
     };
+  }
+
+  private static final class CountingCache extends GeoCache {
+    final AtomicInteger reads = new AtomicInteger();
+    final AtomicInteger writes = new AtomicInteger();
+    final Map<String, Object> values = new HashMap<>();
+
+    CountingCache() {
+      super(null, new com.fasterxml.jackson.databind.ObjectMapper());
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> Optional<T> get(String key, TypeReference<T> type) {
+      reads.incrementAndGet();
+      return Optional.ofNullable((T) values.get(key));
+    }
+
+    @Override
+    public void put(String key, java.time.Duration ttl, Object value) {
+      writes.incrementAndGet();
+      values.put(key, value);
+    }
   }
 
   private static GeoDtos.PlaceSuggestion suggestion(String text) {

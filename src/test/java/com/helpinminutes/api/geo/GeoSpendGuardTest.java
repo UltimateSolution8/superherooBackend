@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 /**
  * The two ceilings that stand between a bug and a five-figure Google invoice.
@@ -27,6 +28,7 @@ class GeoSpendGuardTest {
   void refusesOnceTheMonthlyCapIsExhausted() {
     GeoProperties props = new GeoProperties();
     props.getGoogle().setMonthlyCallCap(3);
+    props.getGoogle().setPremiumReserveCalls(0);
     GeoSpendGuard guard = new GeoSpendGuard(new CountingRedis(), props);
 
     assertTrue(guard.tryConsume("autocomplete"));
@@ -71,22 +73,61 @@ class GeoSpendGuardTest {
     assertFalse(new GeoSpendGuard(new CountingRedis(), props).allowPremiumForUser(null));
   }
 
-  /**
-   * Fails open. Losing address search because a counter is unreachable is a worse
-   * outcome than a day of uncapped spend, and the Cloud Console quota cap is the
-   * real hard limit behind both of these.
-   */
+  /** Redis failure closes only the Google leg; Ola/local search remains available. */
   @Test
-  void allowsEverythingWhenRedisIsDown() {
+  void fallsBackToOlaWhenRedisIsDown() {
     GeoProperties props = new GeoProperties();
     props.getGoogle().setMonthlyCallCap(1);
+    props.getGoogle().setPremiumReserveCalls(0);
     props.getGoogle().setUserDailyCallCap(1);
     GeoSpendGuard guard = new GeoSpendGuard(new BrokenRedis(), props);
 
+    assertFalse(guard.tryConsume("autocomplete"));
+    assertFalse(guard.allowPremiumForUser(USER));
+    assertFalse(guard.allowNewPremiumSession());
+  }
+
+  @Test
+  void reservesCapacityForDetailsBeforeStartingMorePremiumSessions() {
+    GeoProperties props = new GeoProperties();
+    props.getGoogle().setMonthlyCallCap(5);
+    props.getGoogle().setPremiumReserveCalls(2);
+    GeoSpendGuard guard = new GeoSpendGuard(new CountingRedis(), props);
+
+    assertTrue(guard.allowNewPremiumSession());
     assertTrue(guard.tryConsume("autocomplete"));
     assertTrue(guard.tryConsume("autocomplete"));
-    assertTrue(guard.allowPremiumForUser(USER));
-    assertTrue(guard.allowPremiumForUser(USER));
+    assertTrue(guard.tryConsume("autocomplete"));
+    // Refused searches do not increment through the reserve.
+    assertFalse(guard.tryConsume("autocomplete"));
+    assertFalse(guard.tryConsume("autocomplete"));
+    assertFalse(guard.allowNewPremiumSession());
+    // The reserved calls can still close already-issued Google suggestions.
+    assertTrue(guard.tryConsume("placeDetails"));
+    assertTrue(guard.tryConsume("placeDetails"));
+    assertFalse(guard.tryConsume("placeDetails"));
+  }
+
+  @Test
+  void detailsAuthorizationIsUserBoundAndSingleUse() {
+    GeoSpendGuard guard = new GeoSpendGuard(new CountingRedis(), new GeoProperties());
+    String token = "address-session-12345";
+
+    assertTrue(guard.authorizePremiumDetails(USER, token));
+    assertFalse(guard.consumePremiumDetailsAuthorization(UUID.randomUUID(), token));
+    assertTrue(guard.consumePremiumDetailsAuthorization(USER, token));
+    assertFalse(guard.consumePremiumDetailsAuthorization(USER, token));
+  }
+
+  @Test
+  void detailsAuthorizationRejectsMalformedTokensAndRedisFailure() {
+    GeoSpendGuard normal = new GeoSpendGuard(new CountingRedis(), new GeoProperties());
+    assertFalse(normal.authorizePremiumDetails(USER, "bad token"));
+    assertFalse(normal.consumePremiumDetailsAuthorization(USER, "short"));
+
+    GeoSpendGuard broken = new GeoSpendGuard(new BrokenRedis(), new GeoProperties());
+    assertFalse(broken.authorizePremiumDetails(USER, "address-session-12345"));
+    assertFalse(broken.consumePremiumDetailsAuthorization(USER, "address-session-12345"));
   }
 
   @Test
@@ -104,6 +145,7 @@ class GeoSpendGuardTest {
   /** Minimal in-memory stand-in: only INCR and EXPIRE are exercised. */
   private static class CountingRedis extends StringRedisTemplate {
     private final Map<String, Long> counters = new HashMap<>();
+    private final Map<String, String> values = new HashMap<>();
 
     @Override
     public ValueOperations<String, String> opsForValue() {
@@ -112,6 +154,24 @@ class GeoSpendGuardTest {
         public Long increment(String key) {
           return counters.merge(key, 1L, Long::sum);
         }
+
+        @Override
+        public String get(Object key) {
+          String stored = values.get(String.valueOf(key));
+          if (stored != null) return stored;
+          Long value = counters.get(String.valueOf(key));
+          return value == null ? null : String.valueOf(value);
+        }
+
+        @Override
+        public void set(String key, String value, Duration timeout) {
+          values.put(key, value);
+        }
+
+        @Override
+        public String getAndDelete(String key) {
+          return values.remove(key);
+        }
       };
     }
 
@@ -119,9 +179,26 @@ class GeoSpendGuardTest {
     public Boolean expire(String key, Duration timeout) {
       return true;
     }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T execute(RedisScript<T> script, java.util.List<String> keys, Object... args) {
+      String key = keys.get(0);
+      long limit = Long.parseLong(String.valueOf(args[0]));
+      long used = counters.getOrDefault(key, 0L);
+      if (used >= limit) return (T) Long.valueOf(-1L);
+      long next = used + 1L;
+      counters.put(key, next);
+      return (T) Long.valueOf(next);
+    }
   }
 
   private static final class BrokenRedis extends CountingRedis {
+    @Override
+    public <T> T execute(RedisScript<T> script, java.util.List<String> keys, Object... args) {
+      throw new IllegalStateException("redis is unreachable");
+    }
+
     @Override
     public ValueOperations<String, String> opsForValue() {
       throw new IllegalStateException("redis is unreachable");

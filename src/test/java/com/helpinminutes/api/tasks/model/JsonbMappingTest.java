@@ -27,6 +27,8 @@ class JsonbMappingTest {
 
   private static final List<Class<?>> ENTITIES_WITH_JSONB = List.of(
       TaskAiReviewEntity.class,
+      com.helpinminutes.api.realtime.RealtimeOutboxEntity.class,
+      com.helpinminutes.api.notifications.outbox.NotificationOutboxEntity.class,
       com.helpinminutes.api.learn.model.HelperAssessmentAttemptEntity.class,
       com.helpinminutes.api.learn.model.LearningAssessmentEntity.class);
 

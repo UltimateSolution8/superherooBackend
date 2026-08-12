@@ -30,7 +30,8 @@ import org.springframework.stereotype.Component;
 public class GeoCache {
 
   private static final Logger log = LoggerFactory.getLogger(GeoCache.class);
-  private static final String PREFIX = "him:geo:";
+  // v2 invalidates legacy entries that could contain Google Places content.
+  private static final String PREFIX = "him:geo:v3:";
 
   private final StringRedisTemplate redis;
   private final ObjectMapper objectMapper;
@@ -38,6 +39,38 @@ public class GeoCache {
   public GeoCache(StringRedisTemplate redis, ObjectMapper objectMapper) {
     this.redis = redis;
     this.objectMapper = objectMapper;
+  }
+
+  /** Best-effort read. Kept separate from loading so provider policy can decide writes. */
+  public <T> Optional<T> get(String key, TypeReference<T> type) {
+    String fullKey = PREFIX + key;
+    if (redis == null) return Optional.empty();
+    try {
+      String cached = redis.opsForValue().get(fullKey);
+      return cached == null
+          ? Optional.empty()
+          : Optional.of(objectMapper.readValue(cached, type));
+    } catch (Exception e) {
+      log.debug("Geo cache read failed for {}: {}", fullKey, e.getMessage());
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Best-effort write.
+   *
+   * <p>The provider chain calls this only for providers whose terms permit shared
+   * caching. In particular, Google Places predictions and place content are never
+   * written here or reused across users/billing sessions.
+   */
+  public <T> void put(String key, Duration ttl, T value) {
+    if (redis == null || value == null || ttl == null || ttl.isZero() || ttl.isNegative()) return;
+    String fullKey = PREFIX + key;
+    try {
+      redis.opsForValue().set(fullKey, objectMapper.writeValueAsString(value), ttl);
+    } catch (Exception e) {
+      log.debug("Geo cache write failed for {}: {}", fullKey, e.getMessage());
+    }
   }
 
   /**
@@ -48,24 +81,10 @@ public class GeoCache {
    */
   public <T> Optional<T> getOrLoad(
       String key, Duration ttl, TypeReference<T> type, Supplier<Optional<T>> loader) {
-    String fullKey = PREFIX + key;
-    try {
-      String cached = redis.opsForValue().get(fullKey);
-      if (cached != null) {
-        return Optional.of(objectMapper.readValue(cached, type));
-      }
-    } catch (Exception e) {
-      log.debug("Geo cache read failed for {}: {}", fullKey, e.getMessage());
-    }
-
+    Optional<T> cached = get(key, type);
+    if (cached.isPresent()) return cached;
     Optional<T> loaded = loader.get();
-    loaded.ifPresent(value -> {
-      try {
-        redis.opsForValue().set(fullKey, objectMapper.writeValueAsString(value), ttl);
-      } catch (Exception e) {
-        log.debug("Geo cache write failed for {}: {}", fullKey, e.getMessage());
-      }
-    });
+    loaded.ifPresent(value -> put(key, ttl, value));
     return loaded;
   }
 
@@ -76,7 +95,9 @@ public class GeoCache {
    * "Hitech City", "hitech  city" and the same query from two nearby users all
    * share one entry.
    *
-   * <p>The two tiers get separate namespaces. Sharing one would let whichever
+   * <p>The two tiers get separate namespaces. Premium results are intentionally
+   * not persisted, but keeping the namespace separate prevents a cheap cached
+   * answer from bypassing the premium provider order. Sharing one would let whichever
    * request arrived first decide the quality every later one gets: a free-tier
    * lookup would pin an Ola answer that the create-task screen then serves as if
    * it were the premium result, and the reverse would quietly hand Google

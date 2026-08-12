@@ -68,5 +68,16 @@ exit 1
 REMOTE
 
 echo "==> verifying the geo chain"
-ssh -o ConnectTimeout=15 "$HOST" \
-  "curl -s 'http://127.0.0.1:8080/api/v1/geo/autocomplete?q=madhapur' | head -c 400; echo"
+ssh -o ConnectTimeout=15 "$HOST" 'bash -seu' <<'REMOTE'
+PORT="$(sed -n 's/^PORT=\([0-9]\+\).*/\1/p' /etc/superheroo/api.env | tail -1)"
+PORT="${PORT:-8080}"
+# The endpoint is authenticated in production. A 401 proves that nginx/Tomcat
+# routing is live without spending a provider request or needing release-time
+# user credentials; 404/5xx and connection failures are release failures.
+code="$(curl -sS -o /dev/null -w '%{http_code}' \
+  "http://127.0.0.1:${PORT}/api/v1/geo/autocomplete?q=madhapur")"
+case "$code" in
+  200|401) echo "geo endpoint reachable on port ${PORT} (HTTP ${code})" ;;
+  *) echo "geo endpoint smoke check failed on port ${PORT} (HTTP ${code})" >&2; exit 1 ;;
+esac
+REMOTE

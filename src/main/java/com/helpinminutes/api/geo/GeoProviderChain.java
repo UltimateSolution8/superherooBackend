@@ -46,6 +46,7 @@ public class GeoProviderChain {
   private final Map<String, GeoProvider> providersByName = new LinkedHashMap<>();
   private final Map<String, AtomicInteger> consecutiveFailures = new ConcurrentHashMap<>();
   private final Map<String, Long> openUntilEpochMs = new ConcurrentHashMap<>();
+  private final java.util.Set<String> halfOpenProbes = ConcurrentHashMap.newKeySet();
 
   private final GeoProperties props;
   private final GeoCache cache;
@@ -88,7 +89,12 @@ public class GeoProviderChain {
         premium ? props.getPremiumAutocompleteOrder() : props.getAutocompleteOrder(),
         GeoProvider::supportsAutocomplete,
         provider -> provider.autocomplete(trimmed, biasLat, biasLng, sessionToken),
-        "autocomplete");
+        "autocomplete",
+        // Premium predictions carry a billing-session token and Google Places
+        // content. Reusing them across accounts/sessions is both semantically
+        // wrong and outside the shared-cache policy. Ola/local traffic remains
+        // cached on every non-premium screen.
+        !premium);
 
     // Empty suggestions are a legitimate answer, not an error — the citizen can
     // always drop a pin on the map instead. Never surface an exception here.
@@ -126,7 +132,8 @@ public class GeoProviderChain {
         order,
         GeoProvider::supportsPlaceDetails,
         provider -> provider.placeDetails(scoped.rawId(), sessionToken),
-        "place_details");
+        "place_details",
+        !"google".equalsIgnoreCase(scoped.provider()));
 
     return attempt.value == null
         ? GeoDtos.GeoEnvelope.degraded(null)
@@ -141,7 +148,8 @@ public class GeoProviderChain {
         props.getReverseGeocodeOrder(),
         GeoProvider::supportsReverseGeocode,
         provider -> provider.reverseGeocode(lat, lng),
-        "reverse_geocode");
+        "reverse_geocode",
+        true);
 
     if (attempt.value != null) {
       return GeoDtos.GeoEnvelope.served(attempt.value, attempt.provider);
@@ -161,7 +169,8 @@ public class GeoProviderChain {
         props.getRoutingOrder(),
         GeoProvider::supportsRouting,
         provider -> provider.route(fromLat, fromLng, toLat, toLng),
-        "route");
+        "route",
+        true);
 
     if (attempt.value != null) {
       return GeoDtos.GeoEnvelope.served(attempt.value, attempt.provider);
@@ -190,7 +199,7 @@ public class GeoProviderChain {
     for (String providerName : props.getRoutingOrder()) {
       GeoProvider provider = providersByName.get(providerName);
       if (provider == null || !provider.isEnabled() || !provider.supportsEtaMatrix()) continue;
-      if (isCircuitOpen(providerName)) continue;
+      if (isCircuitOpen(providerName, "eta_matrix")) continue;
       try {
         Optional<List<Integer>> matrix = provider.etaMatrixToDestination(origins, destLat, destLng);
         if (matrix.isPresent() && matrix.get().size() == origins.size()) {
@@ -223,69 +232,104 @@ public class GeoProviderChain {
       List<String> order,
       Function<GeoProvider, Boolean> supports,
       Function<GeoProvider, Optional<T>> call,
-      String capability) {
+      String capability,
+      boolean cacheAllowed) {
 
-    // The provider that served a cache hit is not worth storing separately; the
-    // envelope reports "cache" so hit rate is visible in logs and metrics.
-    String[] servedBy = {"cache"};
-    Optional<T> value = cache.getOrLoad(cacheKey, ttl, type, () -> {
-      for (String providerName : order) {
-        GeoProvider provider = providersByName.get(providerName);
-        if (provider == null || !provider.isEnabled() || !supports.apply(provider)) continue;
-        if (isCircuitOpen(providerName)) continue;
-        try {
-          Optional<T> result = call.apply(provider);
-          if (result.isPresent()) {
-            recordSuccess(providerName, capability);
-            servedBy[0] = providerName;
-            return result;
-          }
-          recordFailure(providerName, capability);
-        } catch (RuntimeException e) {
-          // A provider is contractually not allowed to throw, but a bad response
-          // shape should still fall through rather than 500 the request.
-          log.warn("Geo provider {} threw during {}: {}", providerName, capability, e.getMessage());
-          recordFailure(providerName, capability);
+    for (String providerName : order) {
+      GeoProvider provider = providersByName.get(providerName);
+      if (provider == null || !provider.isEnabled() || !supports.apply(provider)) continue;
+      boolean providerCacheAllowed = cacheAllowed && !"google".equalsIgnoreCase(providerName);
+      String providerCacheKey = cacheKey + "|provider=" + providerName.toLowerCase(java.util.Locale.ROOT);
+      if (providerCacheAllowed) {
+        Optional<T> cached = cache.get(providerCacheKey, type);
+        if (cached.isPresent()) {
+          meters.counter("geo.cache.hit", "capability", capability, "provider", providerName)
+              .increment();
+          // Preserve the source provider in the response. Returning "cache" made
+          // legal attribution impossible and obscured actual provider mix metrics.
+          return new Attempt<>(cached.get(), providerName);
         }
       }
-      return Optional.empty();
-    });
-
-    if (value.isPresent() && "cache".equals(servedBy[0])) {
-      meters.counter("geo.request", "capability", capability, "provider", "cache").increment();
+      // A provider outage must not hide a previously cached, attributable answer.
+      // Check the breaker only when an upstream call is actually needed; this also
+      // ensures the single half-open recovery probe always records success/failure.
+      if (isCircuitOpen(providerName, capability)) continue;
+      try {
+        Optional<T> result = call.apply(provider);
+        if (result.isPresent()) {
+          recordSuccess(providerName, capability);
+          // Google Places/Geocoding/Directions content must not become a shared
+          // cross-user cache entry. The inexpensive Ola/local/OSRM providers keep
+          // the cost and latency benefit of the cache.
+          if (providerCacheAllowed) {
+            cache.put(providerCacheKey, ttl, result.get());
+          }
+          return new Attempt<>(result.get(), providerName);
+        }
+        recordFailure(providerName, capability);
+      } catch (RuntimeException e) {
+        // A provider is contractually not allowed to throw, but a bad response
+        // shape should still fall through rather than 500 the request.
+        log.warn("Geo provider {} threw during {}: {}", providerName, capability, e.getMessage());
+        recordFailure(providerName, capability);
+      }
     }
-    return new Attempt<>(value.orElse(null), value.isPresent() ? servedBy[0] : "none");
+    return new Attempt<>(null, "none");
   }
 
-  private boolean isCircuitOpen(String providerName) {
-    Long openUntil = openUntilEpochMs.get(providerName);
+  private static String breakerKey(String providerName, String capability) {
+    return providerName + ":" + capability;
+  }
+
+  private boolean isCircuitOpen(String providerName, String capability) {
+    String key = breakerKey(providerName, capability);
+    Long openUntil = openUntilEpochMs.get(key);
     if (openUntil == null) return false;
     if (System.currentTimeMillis() >= openUntil) {
-      // Cooldown elapsed: let one request through to probe recovery.
-      openUntilEpochMs.remove(providerName);
-      consecutiveFailures.computeIfAbsent(providerName, k -> new AtomicInteger()).set(0);
-      return false;
+      // Cooldown elapsed: exactly one request probes recovery. Keeping the open
+      // deadline present while that probe runs prevents a 5,000-device recovery
+      // wave from stampeding the provider at once.
+      return !halfOpenProbes.add(key);
     }
     return true;
   }
 
   private void recordSuccess(String providerName, String capability) {
-    consecutiveFailures.computeIfAbsent(providerName, k -> new AtomicInteger()).set(0);
-    openUntilEpochMs.remove(providerName);
+    String key = breakerKey(providerName, capability);
+    consecutiveFailures.computeIfAbsent(key, k -> new AtomicInteger()).set(0);
+    openUntilEpochMs.remove(key);
+    halfOpenProbes.remove(key);
     meters.counter("geo.request", "capability", capability, "provider", providerName).increment();
   }
 
   private void recordFailure(String providerName, String capability) {
+    String key = breakerKey(providerName, capability);
+    if (halfOpenProbes.remove(key)) {
+      consecutiveFailures.computeIfAbsent(key, k -> new AtomicInteger())
+          .set(props.getCircuitBreakerThreshold());
+      openUntilEpochMs.put(key, System.currentTimeMillis() + props.getCircuitBreakerCooldownMs());
+      meters.counter("geo.failure", "capability", capability, "provider", providerName).increment();
+      log.warn("Geo provider {} failed its {} recovery probe; reopening for {}ms",
+          providerName, capability, props.getCircuitBreakerCooldownMs());
+      return;
+    }
     int failures = consecutiveFailures
-        .computeIfAbsent(providerName, k -> new AtomicInteger())
+        .computeIfAbsent(key, k -> new AtomicInteger())
         .incrementAndGet();
     meters.counter("geo.failure", "capability", capability, "provider", providerName).increment();
     if (failures >= props.getCircuitBreakerThreshold()) {
-      openUntilEpochMs.put(providerName, System.currentTimeMillis() + props.getCircuitBreakerCooldownMs());
-      log.warn("Geo provider {} tripped the circuit breaker after {} failures; skipping for {}ms",
-          providerName, failures, props.getCircuitBreakerCooldownMs());
+      openUntilEpochMs.put(key, System.currentTimeMillis() + props.getCircuitBreakerCooldownMs());
+      halfOpenProbes.remove(key);
+      log.warn("Geo provider {} tripped the {} circuit breaker after {} failures; skipping for {}ms",
+          providerName, capability, failures, props.getCircuitBreakerCooldownMs());
     }
   }
+
+  /*
+   * Breakers are capability-scoped. Ola autocomplete failing must not disable its
+   * routing API, and a Google budget refusal on autocomplete must not suppress a
+   * details request that closes an already-started billing session.
+   */
 
   /**
    * A place id carrying the provider that issued it, e.g. {@code ola:ChIJ...}.

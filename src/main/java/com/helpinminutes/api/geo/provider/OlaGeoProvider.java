@@ -14,9 +14,10 @@ import org.springframework.stereotype.Component;
 /**
  * Ola Maps (Krutrim) — the primary provider for the billable text APIs.
  *
- * <p>Chosen over Google for autocomplete, place details and reverse geocoding:
- * 500k calls/month free across all APIs, India-native address data, and roughly
- * half Google's rate beyond the free tier. Google's equivalent SKUs give 10k each.
+ * <p>Chosen ahead of Google for routine autocomplete, place details and reverse
+ * geocoding because it is India-native and keeps the paid Google path exceptional.
+ * Ola quota and pricing must be monitored from the account console; they are not a
+ * correctness assumption in this provider chain.
  *
  * <p>Auth is an {@code api_key} query parameter <i>plus</i> an {@code Origin} header
  * that has to match the credential's allowed-domains list — Ola checks the header,

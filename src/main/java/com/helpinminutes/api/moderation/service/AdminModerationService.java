@@ -3,7 +3,7 @@ package com.helpinminutes.api.moderation.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helpinminutes.api.errors.NotFoundException;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.moderation.dto.*;
 import com.helpinminutes.api.tasks.model.TaskAiReviewEntity;
 import com.helpinminutes.api.tasks.model.TaskAuditLogEntity;
@@ -35,7 +35,7 @@ public class AdminModerationService {
   private final TaskAiReviewRepository aiReviewRepository;
   private final TaskAuditLogRepository auditLogRepository;
   private final UserRepository userRepository;
-  private final MatchingService matchingService;
+  private final NotificationQueueService notificationQueue;
   private final ObjectMapper objectMapper;
 
   public AdminModerationService(
@@ -43,13 +43,13 @@ public class AdminModerationService {
       TaskAiReviewRepository aiReviewRepository,
       TaskAuditLogRepository auditLogRepository,
       UserRepository userRepository,
-      MatchingService matchingService,
+      NotificationQueueService notificationQueue,
       ObjectMapper objectMapper) {
     this.taskRepository = taskRepository;
     this.aiReviewRepository = aiReviewRepository;
     this.auditLogRepository = auditLogRepository;
     this.userRepository = userRepository;
-    this.matchingService = matchingService;
+    this.notificationQueue = notificationQueue;
     this.objectMapper = objectMapper;
   }
 
@@ -203,11 +203,7 @@ public class AdminModerationService {
 
     // Dispatch offers to helpers (only if it's not a future scheduled task)
     if (!isFutureScheduled) {
-      try {
-        matchingService.dispatchOffers(task, true);
-      } catch (Exception e) {
-        log.error("Failed to dispatch offers for admin-approved task {}", taskId, e);
-      }
+      notificationQueue.enqueueMatchingDispatch(task);
     }
 
     return getModerationQueueItem(task);
@@ -262,11 +258,7 @@ public class AdminModerationService {
     auditLogRepository.save(auditLog);
 
     if (!isFutureScheduled) {
-      try {
-        matchingService.dispatchOffers(task, true);
-      } catch (Exception e) {
-        log.error("Failed to dispatch offers for edited/approved task {}", taskId, e);
-      }
+      notificationQueue.enqueueMatchingDispatch(task);
     }
 
     return getModerationQueueItem(task);

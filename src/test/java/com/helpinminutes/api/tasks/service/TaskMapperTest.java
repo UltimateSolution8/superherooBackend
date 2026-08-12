@@ -1,6 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -48,6 +49,37 @@ class TaskMapperTest {
     verify(mediatorWorkers).findByTaskIdIn(any());
     verify(batchItems, never()).findByTaskId(any());
     verify(mediatorWorkers, never()).findByTaskId(any());
+  }
+
+  @Test
+  void marketplaceViewMasksCitizenIdentityAndExactLocationBeforeAcceptance() {
+    UserRepository users = mock(UserRepository.class);
+    TaskRepository tasks = mock(TaskRepository.class);
+    TranslationService translations = mock(TranslationService.class);
+    BookingBatchItemRepository batchItems = mock(BookingBatchItemRepository.class);
+    MediatorJobWorkerRepository mediatorWorkers = mock(MediatorJobWorkerRepository.class);
+    TaskMapper mapper = new TaskMapper(users, tasks, translations, batchItems, mediatorWorkers);
+    when(users.findAllById(any())).thenReturn(List.of());
+    when(tasks.findBuyerStats(any(), any())).thenReturn(List.of());
+    when(batchItems.findByTaskIdIn(any())).thenReturn(List.of());
+    when(mediatorWorkers.findByTaskIdIn(any())).thenReturn(List.of());
+    when(translations.translate(anyString(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    TaskEntity searching = task(null);
+    searching.setStatus(TaskStatus.SEARCHING);
+    searching.setLat(17.38543);
+    searching.setLng(78.48671);
+    searching.setAddressText("12 Exact Street");
+    searching.setLandmark("Private front gate");
+
+    var response = mapper.toAvailableResponse(searching);
+    assertEquals(17.39, response.lat());
+    assertEquals(78.49, response.lng());
+    assertEquals("Approximate task area", response.addressText());
+    assertNull(response.buyerId());
+    assertNull(response.buyerPhone());
+    assertNull(response.buyerName());
+    assertNull(response.landmark());
   }
 
   private TaskEntity task(UUID helperId) {

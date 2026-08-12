@@ -5,7 +5,7 @@ import com.helpinminutes.api.batches.model.BookingBatchStatus;
 import com.helpinminutes.api.batches.model.BatchPaymentMode;
 import com.helpinminutes.api.batches.repo.BookingBatchRepository;
 import com.helpinminutes.api.errors.ConflictException;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.payments.gateway.RazorpayGateway;
@@ -19,6 +19,7 @@ import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -43,7 +44,7 @@ public class PaymentLifecycleService {
   private final TaskRepository tasks;
   private final BookingBatchRepository batches;
   private final MediatorJobWorkerRepository workers;
-  private final MatchingService matching;
+  private final NotificationQueueService notificationQueue;
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
   private final RazorpayGateway razorpay;
@@ -63,7 +64,7 @@ public class PaymentLifecycleService {
       TaskRepository tasks,
       BookingBatchRepository batches,
       MediatorJobWorkerRepository workers,
-      MatchingService matching,
+      NotificationQueueService notificationQueue,
       RealtimePublisher realtime,
       PushNotificationService pushNotifications,
       RazorpayGateway razorpay,
@@ -76,7 +77,7 @@ public class PaymentLifecycleService {
     this.tasks = tasks;
     this.batches = batches;
     this.workers = workers;
-    this.matching = matching;
+    this.notificationQueue = notificationQueue;
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
     this.razorpay = razorpay;
@@ -117,11 +118,7 @@ public class PaymentLifecycleService {
     TaskStatus finalStatus = aiTaskModeration.moderateTaskSynchronously(task);
 
     if (finalStatus == TaskStatus.SEARCHING) {
-      try {
-        matching.dispatchOffers(task);
-      } catch (Exception e) {
-        log.error("Failed to dispatch offers on payment activation approval for task {}", task.getId(), e);
-      }
+      notificationQueue.enqueueMatchingDispatch(task);
     }
     publishTaskActivated(task);
   }
@@ -332,26 +329,21 @@ public class PaymentLifecycleService {
   }
 
   private void publishCancelledTask(TaskEntity task) {
-    try {
-      realtime.publish("task_status_changed", Map.of(
+    realtime.publish("task_status_changed", Map.of(
           "taskId", task.getId().toString(),
           "buyerId", task.getBuyerId().toString(),
           "status", TaskStatus.CANCELLED.name()));
-    } catch (Exception ignored) {}
   }
 
   private void publishTaskActivated(TaskEntity task) {
-    try {
-      realtime.publish("task_created", Map.of(
-          "taskId", task.getId().toString(),
-          "buyerId", task.getBuyerId().toString(),
-          "title", task.getTitle(),
-          "urgency", task.getUrgency().name(),
-          "status", task.getStatus().name()));
-    } catch (Exception ignored) {}
-    try {
-      pushNotifications.notifyTaskCreatedMonitor(task);
-    } catch (Exception ignored) {}
+    Map<String, Object> payload = new HashMap<>();
+    payload.put("taskId", task.getId().toString());
+    payload.put("buyerId", task.getBuyerId().toString());
+    payload.put("status", task.getStatus().name());
+    if (task.getTitle() != null) payload.put("title", task.getTitle());
+    if (task.getUrgency() != null) payload.put("urgency", task.getUrgency().name());
+    realtime.publish("task_created", payload);
+    runAfterCommit(() -> pushNotifications.notifyTaskCreatedMonitor(task));
   }
 
   private static String safeError(String message) {

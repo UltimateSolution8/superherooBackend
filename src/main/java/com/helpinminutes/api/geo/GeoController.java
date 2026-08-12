@@ -3,6 +3,7 @@ package com.helpinminutes.api.geo;
 import com.helpinminutes.api.common.ServiceArea;
 import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.security.UserPrincipal;
+import com.helpinminutes.api.users.model.UserRole;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -66,9 +67,23 @@ public class GeoController {
     // The daily budget is only spent by requests that ask for the paid tier, and
     // exhausting it downgrades the request rather than failing it: suggestions still
     // arrive, from the free provider.
-    boolean premium = props.isPremiumContext(context)
-        && spendGuard.allowPremiumForUser(principal == null ? null : principal.userId());
-    return geo.autocomplete(query, lat, lng, premium, sessionToken);
+    // Only the citizen role that can create a task may spend the premium budget.
+    // A context string is intent metadata, not authority.
+    boolean premium = principal != null
+        && principal.role() == UserRole.BUYER
+        && spendGuard.validSessionToken(sessionToken)
+        && props.isPremiumContext(context)
+        && spendGuard.allowNewPremiumSession()
+        && spendGuard.allowPremiumForUser(principal.userId());
+    GeoDtos.SuggestionsResponse response = geo.autocomplete(query, lat, lng, premium, sessionToken);
+    if (premium && "google".equalsIgnoreCase(response.provider())) {
+      if (!spendGuard.authorizePremiumDetails(principal.userId(), sessionToken)) {
+        // Do not display a Google suggestion that this server cannot later resolve.
+        // Retry through the Ola/local chain immediately; pin-drop remains available.
+        return geo.autocomplete(query, lat, lng, false, sessionToken);
+      }
+    }
+    return response;
   }
 
   @GetMapping("/place")
@@ -78,6 +93,14 @@ public class GeoController {
       @RequestParam(value = "sessionToken", required = false) String sessionToken) {
     if (placeId == null || placeId.isBlank()) {
       throw new BadRequestException("placeId is required");
+    }
+    if (placeId.regionMatches(true, 0, "google:", 0, "google:".length())
+        && (principal == null || principal.role() != UserRole.BUYER
+            || !spendGuard.consumePremiumDetailsAuthorization(principal.userId(), sessionToken))) {
+      // This is either not a Google suggestion issued to this user/session or the
+      // authorization store is unhealthy. Preserve the hard cost boundary and let
+      // the app's pin-drop flow recover instead of making an unpriced paid call.
+      return GeoDtos.GeoEnvelope.degraded(null);
     }
     return geo.placeDetails(placeId, sessionToken);
   }

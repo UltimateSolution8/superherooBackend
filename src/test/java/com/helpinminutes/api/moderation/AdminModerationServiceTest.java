@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.moderation.dto.AdminModerationDetailDto;
 import com.helpinminutes.api.moderation.dto.AdminModerationTaskDto;
 import com.helpinminutes.api.moderation.service.AdminModerationService;
@@ -32,7 +32,7 @@ class AdminModerationServiceTest {
   private TaskAiReviewRepository aiReviewRepository;
   private TaskAuditLogRepository auditLogRepository;
   private UserRepository userRepository;
-  private MatchingService matchingService;
+  private NotificationQueueService matchingQueue;
   private ObjectMapper objectMapper;
   private AdminModerationService adminModerationService;
 
@@ -42,7 +42,7 @@ class AdminModerationServiceTest {
     aiReviewRepository = mock(TaskAiReviewRepository.class);
     auditLogRepository = mock(TaskAuditLogRepository.class);
     userRepository = mock(UserRepository.class);
-    matchingService = mock(MatchingService.class);
+    matchingQueue = mock(NotificationQueueService.class);
     objectMapper = new ObjectMapper();
 
     adminModerationService = new AdminModerationService(
@@ -50,7 +50,7 @@ class AdminModerationServiceTest {
         aiReviewRepository,
         auditLogRepository,
         userRepository,
-        matchingService,
+        matchingQueue,
         objectMapper
     );
   }
@@ -154,7 +154,7 @@ class AdminModerationServiceTest {
     verify(taskRepository).save(task);
     assertEquals(TaskStatus.SEARCHING, task.getStatus());
     verify(auditLogRepository).save(any(TaskAuditLogEntity.class));
-    verify(matchingService).dispatchOffers(task, true);
+    verify(matchingQueue).enqueueMatchingDispatch(task);
     assertNotNull(result);
   }
 
@@ -201,7 +201,7 @@ class AdminModerationServiceTest {
     assertEquals("Cleaned Title", task.getTitle());
     assertEquals("Cleaned Description without phone number", task.getDescription());
     assertEquals(TaskStatus.SEARCHING, task.getStatus());
-    verify(matchingService).dispatchOffers(task, true);
+    verify(matchingQueue).enqueueMatchingDispatch(task);
     assertNotNull(result);
   }
 }

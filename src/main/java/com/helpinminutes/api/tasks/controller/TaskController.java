@@ -243,9 +243,11 @@ public class TaskController {
   public TaskResponse get(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID taskId) {
     TaskEntity task = tasks.getTask(taskId);
 
+    boolean activeOffer = principal.role() == UserRole.HELPER
+        && tasks.hasActiveOffer(taskId, principal.userId());
     boolean canSee = (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
         || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
-        || (principal.role() == UserRole.HELPER && tasks.hasActiveOffer(taskId, principal.userId()))
+        || activeOffer
         || principal.role() == UserRole.ADMIN;
 
     if (!canSee) {
@@ -253,7 +255,7 @@ public class TaskController {
     }
 
     boolean includeOtp = principal.role() == UserRole.BUYER || principal.role() == UserRole.ADMIN;
-    return taskMapper.toResponse(task, includeOtp);
+    return activeOffer ? taskMapper.toAvailableResponse(task) : taskMapper.toResponse(task, includeOtp);
   }
 
   @GetMapping("/{taskId}/helper-id-card")
@@ -281,8 +283,8 @@ public class TaskController {
     var available = tasks.listAvailableTasks(principal.userId());
     // Distance and ETA come through as response fields: the partner app sorts and
     // labels by them, and without them every polled job showed as "0.0 km".
-    return taskMapper.toResponseList(
-        available.tasks(), false, available.distanceMetersByTask(), available.etaMinutesByTask());
+    return taskMapper.toAvailableResponseList(
+        available.tasks(), available.distanceMetersByTask(), available.etaMinutesByTask());
   }
 
   @GetMapping("/mine")

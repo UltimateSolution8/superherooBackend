@@ -143,8 +143,6 @@ public class BookingBatchService {
 
     int created = 0;
     int failed = 0;
-    UUID firstCreatedTaskId = null;
-    java.util.Set<UUID> notifiedHelperIds = new java.util.LinkedHashSet<>();
     for (int i = 0; i < req.items().size(); i++) {
       BatchDtos.CreateItem line = req.items().get(i);
       BookingBatchItemEntity item = new BookingBatchItemEntity();
@@ -176,15 +174,9 @@ public class BookingBatchService {
             line.lng(),
             blankToNull(line.addressText()),
             line.scheduledAt(),
-            null), TaskService.TaskCreateOptions.silentPush());
+            null), TaskService.TaskCreateOptions.defaultOptions());
         item.setTaskId(createResult.taskId());
         item.setLineStatus(BookingBatchLineStatus.CREATED);
-        if (firstCreatedTaskId == null) {
-          firstCreatedTaskId = createResult.taskId();
-        }
-        if (createResult.offeredTo() != null && !createResult.offeredTo().isEmpty()) {
-          notifiedHelperIds.addAll(createResult.offeredTo());
-        }
         created++;
       } catch (Exception ex) {
         item.setLineStatus(BookingBatchLineStatus.FAILED);
@@ -192,11 +184,6 @@ public class BookingBatchService {
         failed++;
       }
       items.save(item);
-    }
-
-    if (firstCreatedTaskId != null && !notifiedHelperIds.isEmpty()) {
-      taskRepo.findById(firstCreatedTaskId).ifPresent(seedTask ->
-          notificationQueue.enqueueTaskCreated(new java.util.ArrayList<>(notifiedHelperIds), seedTask));
     }
 
     batch.setStatus(failed > 0 ? BookingBatchStatus.PARTIAL : BookingBatchStatus.COMPLETED);
@@ -675,13 +662,11 @@ public class BookingBatchService {
     } else {
       batch.setStatus(BookingBatchStatus.PENDING_AUDIT);
       batches.save(batch);
-      try {
-        realtime.publish("mediator.job_pending_audit", Map.of(
+      realtime.publish("mediator.job_pending_audit", Map.of(
             "batchId", batchId.toString(),
             "buyerId", batch.getCreatedByUserId().toString(),
             "status", "PENDING_AUDIT"
         ));
-      } catch (Exception ignored) {}
     }
   }
 
@@ -690,16 +675,12 @@ public class BookingBatchService {
         .filter(u -> u.getStatus() == UserStatus.ACTIVE)
         .map(UserEntity::getId)
         .toList();
-    try {
-      realtime.publish("mediator.job_available", Map.of(
+    realtime.publish("mediator.job_available", Map.of(
           "batchId", batch.getId().toString(),
           "buyerId", batch.getCreatedByUserId().toString(),
           "helperCount", batch.getRequestedHelperCount() == null ? 1 : batch.getRequestedHelperCount()
       ));
-    } catch (Exception ignored) {}
-    try {
-      pushNotifications.notifyMediatorBulkJobAvailable(batch, mediatorIds);
-    } catch (Exception ignored) {}
+    notificationQueue.enqueueMediatorJobAvailable(batch.getId(), mediatorIds);
   }
 
   private void ensureBatchOtp(BookingBatchEntity batch) {

@@ -26,13 +26,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Offers a task to partners.
@@ -114,7 +111,13 @@ public class MatchingService {
   private final HelperProfileRepository helperProfiles;
   private final GeoProviderChain geo;
   private final CandidateScorer scorer;
-  private final Executor realtimeDispatchExecutor;
+
+  /**
+   * Suspends any caller transaction while Redis discovery and routing run.
+   * Optional only for direct unit construction; Spring always supplies it.
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
   public MatchingService(
       AppProperties props,
@@ -126,8 +129,7 @@ public class MatchingService {
       NotificationQueueService notificationQueue,
       HelperProfileRepository helperProfiles,
       GeoProviderChain geo,
-      CandidateScorer scorer,
-      @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor) {
+      CandidateScorer scorer) {
     this.props = props;
     this.h3 = h3;
     this.presence = presence;
@@ -138,50 +140,52 @@ public class MatchingService {
     this.helperProfiles = helperProfiles;
     this.geo = geo;
     this.scorer = scorer;
-    this.realtimeDispatchExecutor = realtimeDispatchExecutor;
   }
 
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MatchingService.class);
 
   @Transactional
   public List<UUID> dispatchOffers(TaskEntity task) {
-    return dispatchOffers(task, true);
+    return dispatchOffers(task, true, null);
   }
 
   @Transactional
   public List<UUID> dispatchOffers(TaskEntity task, boolean sendPushNotifications) {
-    task = tasks.findByIdForUpdate(task.getId()).orElse(null);
-    if (task == null || task.getStatus() != TaskStatus.SEARCHING || task.getAssignedHelperId() != null) {
+    return dispatchOffers(task, sendPushNotifications, null);
+  }
+
+  /** Dispatches only if the task is still on the wave captured by a durable job. */
+  @Transactional
+  public List<UUID> dispatchOffers(
+      TaskEntity task, boolean sendPushNotifications, Integer expectedWave) {
+    if (task == null || task.getId() == null || task.getStatus() != TaskStatus.SEARCHING
+        || task.getAssignedHelperId() != null) {
       return List.of();
     }
 
     int wave = Math.max(0, task.getDispatchWave());
+    if (expectedWave != null && wave != expectedWave) return List.of();
     double radiusMeters = props.matching().radiusForWave(wave);
     int fanout = props.matching().fanoutForWave(wave);
 
-    CandidatePool pool = findCandidatePool(task, radiusMeters, fanout);
-    Map<UUID, HelperPresenceService.HelperState> nearbyStates = pool.states();
-    Set<UUID> eligible = pool.eligible();
+    // Candidate discovery includes network Redis calls and an HTTP ETA matrix.
+    // Suspend the caller transaction so none of it runs while holding a Postgres
+    // row lock (create/cleanup callers already have transactions of their own).
+    TaskEntity snapshot = task;
+    PreparedDispatch prepared = outsideTransaction(
+        () -> prepareDispatch(snapshot, radiusMeters, fanout));
 
-    Map<UUID, Double> distanceByHelper = new HashMap<>();
-    Set<UUID> excludedHelperIds = excludedHelperIds(task.getId());
-    for (UUID helperId : eligible) {
-      if (excludedHelperIds.contains(helperId)) continue;
-      var state = nearbyStates.get(helperId);
-      if (!isEligibleOnlineHelper(state)) continue;
-      double distanceMeters =
-          GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
-      if (distanceMeters <= radiusMeters) {
-        distanceByHelper.merge(helperId, distanceMeters, Math::min);
-      }
+    // Lock only for the short compare-and-write phase. A concurrent dispatcher
+    // that already advanced this wave wins; this invocation becomes a no-op.
+    task = tasks.findByIdForUpdate(task.getId()).orElse(null);
+    if (task == null || task.getStatus() != TaskStatus.SEARCHING
+        || task.getAssignedHelperId() != null || task.getDispatchWave() != wave) {
+      return List.of();
     }
-
-    List<CandidateScorer.ScoredCandidate> ranked =
-        rankCandidates(task, distanceByHelper, nearbyStates);
-    List<CandidateScorer.ScoredCandidate> chosen = ranked.stream().limit(fanout).toList();
+    List<CandidateScorer.ScoredCandidate> chosen = prepared.chosen();
 
     log.info("Matching task {} wave {} - radius {}m, fanout {}, nearby {}, eligible {}, chosen {}",
-        task.getId(), wave, (long) radiusMeters, fanout, nearbyStates.size(), eligible.size(),
+        task.getId(), wave, (long) radiusMeters, fanout, prepared.nearbyCount(), prepared.eligibleCount(),
         chosen.size());
 
     List<UUID> helperIds = writeOffers(task, chosen);
@@ -201,6 +205,39 @@ public class MatchingService {
     return helperIds;
   }
 
+  private record PreparedDispatch(
+      List<CandidateScorer.ScoredCandidate> chosen, int nearbyCount, int eligibleCount) {}
+
+  private PreparedDispatch prepareDispatch(TaskEntity task, double radiusMeters, int fanout) {
+    CandidatePool pool = findCandidatePool(task, radiusMeters, fanout);
+    Map<UUID, HelperPresenceService.HelperState> nearbyStates = pool.states();
+    Set<UUID> eligible = pool.eligible();
+    Map<UUID, Double> distanceByHelper = new HashMap<>();
+    Set<UUID> excludedHelperIds = excludedHelperIds(task.getId());
+    for (UUID helperId : eligible) {
+      if (excludedHelperIds.contains(helperId)) continue;
+      var state = nearbyStates.get(helperId);
+      if (!isEligibleOnlineHelper(state)) continue;
+      double distanceMeters =
+          GeoUtils.distanceMeters(task.getLat(), task.getLng(), state.lat(), state.lng());
+      if (distanceMeters <= radiusMeters) {
+        distanceByHelper.merge(helperId, distanceMeters, Math::min);
+      }
+    }
+    List<CandidateScorer.ScoredCandidate> chosen =
+        rankCandidates(task, distanceByHelper, nearbyStates).stream().limit(fanout).toList();
+    return new PreparedDispatch(chosen, nearbyStates.size(), eligible.size());
+  }
+
+  private <T> T outsideTransaction(Supplier<T> work) {
+    if (transactionManager == null) return work.get();
+    org.springframework.transaction.support.TransactionTemplate template =
+        new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+    template.setPropagationBehavior(
+        org.springframework.transaction.TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
+    return template.execute(status -> work.get());
+  }
+
   /** Nearby online partners, plus the subset actually eligible for this task. */
   private record CandidatePool(
       Map<UUID, HelperPresenceService.HelperState> states, Set<UUID> eligible) {}
@@ -215,13 +252,24 @@ public class MatchingService {
     Map<UUID, HelperPresenceService.HelperState> nearbyStates =
         new LinkedHashMap<>(presence.getNearbyActiveHelperStates(
             task.getLat(), task.getLng(), radiusMeters, GEO_CANDIDATE_LIMIT));
+    boolean alreadyWidened = false;
+
+    if (nearbyStates.isEmpty()) {
+      // The presence service removes expired GEO members while reading. If the
+      // nearest page consisted entirely of partners who force-quit, ask once for a
+      // wider page after that cleanup instead of hiding a valid 65th partner behind
+      // stale entries and delaying the offer until the next dispatch wave.
+      nearbyStates.putAll(presence.getNearbyActiveHelperStates(
+          task.getLat(), task.getLng(), radiusMeters, GEO_CANDIDATE_LIMIT_WIDE));
+      alreadyWidened = true;
+    }
 
     if (!nearbyStates.isEmpty()) {
       Set<UUID> eligible = eligibleHelpers(nearbyStates.keySet(), task.getBuyerId(), fanout);
       // Widen only when the nearest window came back mostly busy or ineligible. This
       // keeps the common case cheap while stopping a small top-N cutoff from hiding
       // available partners in a dense area.
-      if (eligible.size() < fanout) {
+      if (eligible.size() < fanout && !alreadyWidened) {
         nearbyStates.putAll(presence.getNearbyActiveHelperStates(
             task.getLat(), task.getLng(), radiusMeters, GEO_CANDIDATE_LIMIT_WIDE));
         eligible = eligibleHelpers(nearbyStates.keySet(), task.getBuyerId(), fanout);
@@ -341,7 +389,7 @@ public class MatchingService {
       helperIds.add(candidate.helperId());
     }
     offers.saveAllAndFlush(offerList);
-    publishOffersAfterCommit(task, chosen, expires);
+    enqueueOfferEvents(task, chosen, expires);
     return helperIds;
   }
 
@@ -356,38 +404,35 @@ public class MatchingService {
     helperProfiles.saveAll(profiles);
   }
 
-  private void publishOffersAfterCommit(
+  private void enqueueOfferEvents(
       TaskEntity task, List<CandidateScorer.ScoredCandidate> chosen, Instant expires) {
-    Runnable publish = () -> realtimeDispatchExecutor.execute(() -> {
-      for (CandidateScorer.ScoredCandidate candidate : chosen) {
-        realtime.publish(
-            "task.offered",
-            java.util.Map.ofEntries(
+    // RealtimePublisher writes a transactional outbox row now and performs the
+    // network delivery after commit. Enqueue here, inside the offer transaction,
+    // so a crash after commit cannot leave a live offer with no event.
+    String description = task.getDescription() == null ? "" : task.getDescription();
+    String urgency = task.getUrgency() == null ? "NORMAL" : task.getUrgency().name();
+    int timeMinutes = task.getTimeMinutes() == null ? 30 : task.getTimeMinutes();
+    long budgetPaise = task.getBudgetPaise() == null ? 0L : task.getBudgetPaise();
+    for (CandidateScorer.ScoredCandidate candidate : chosen) {
+      realtime.publish(
+          "task.offered",
+          java.util.Map.ofEntries(
                 java.util.Map.entry("helperId", candidate.helperId().toString()),
                 java.util.Map.entry("taskId", task.getId().toString()),
                 java.util.Map.entry("title", task.getTitle() == null ? "Task" : task.getTitle()),
-                java.util.Map.entry("description", task.getDescription()),
-                java.util.Map.entry("urgency", task.getUrgency().name()),
-                java.util.Map.entry("timeMinutes", task.getTimeMinutes()),
-                java.util.Map.entry("budgetPaise", task.getBudgetPaise()),
-                java.util.Map.entry("lat", task.getLat()),
-                java.util.Map.entry("lng", task.getLng()),
+                java.util.Map.entry("description", description),
+                java.util.Map.entry("urgency", urgency),
+                java.util.Map.entry("timeMinutes", timeMinutes),
+                java.util.Map.entry("budgetPaise", budgetPaise),
+                // Exact citizen location is revealed only after assignment. About
+                // 1km precision is enough for an offer decision alongside ETA.
+                java.util.Map.entry("lat", approximateCoordinate(task.getLat())),
+                java.util.Map.entry("lng", approximateCoordinate(task.getLng())),
                 java.util.Map.entry("distanceMeters", candidate.distanceMeters()),
                 // The app drives its countdown from expiresAt rather than a
                 // hardcoded number, so the two can no longer disagree.
                 java.util.Map.entry("etaSeconds", candidate.etaSeconds()),
                 java.util.Map.entry("expiresAt", expires.toString())));
-      }
-    });
-    if (TransactionSynchronizationManager.isActualTransactionActive()) {
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-        @Override
-        public void afterCommit() {
-          publish.run();
-        }
-      });
-    } else {
-      publish.run();
     }
   }
 
@@ -398,6 +443,10 @@ public class MatchingService {
     long staleMs = Math.max(10, props.matching().helperStaleAfterSeconds()) * 1000L;
     long ageMs = Math.max(0L, Instant.now().toEpochMilli() - state.lastSeenEpochMs());
     return ageMs <= staleMs;
+  }
+
+  private static double approximateCoordinate(double value) {
+    return Math.round(value * 100d) / 100d;
   }
 
   /**

@@ -28,6 +28,8 @@ public class RabbitConfig {
     public static final String ROUTING_KEY_NOTIFICATION_SEND = "notifications.send";
     public static final String QUEUE_NOTIFICATION_DLQ = "notifications.dlq";
     public static final String ROUTING_KEY_NOTIFICATION_DLQ = "notifications.dlq";
+    public static final String QUEUE_MATCHING_DISPATCH = "matching.dispatch.queue";
+    public static final String ROUTING_KEY_MATCHING_DISPATCH = "matching.dispatch";
 
     public static final String EXCHANGE_KYC = "him.kyc";
     public static final String QUEUE_KYC_PROCESSING = "kyc.processing.queue";
@@ -89,6 +91,22 @@ public class RabbitConfig {
     @Bean
     public Binding notificationDlqBinding(Queue notificationDlq, DirectExchange notificationsExchange) {
         return BindingBuilder.bind(notificationDlq).to(notificationsExchange).with(ROUTING_KEY_NOTIFICATION_DLQ);
+    }
+
+    @Bean
+    public Queue matchingDispatchQueue() {
+        return QueueBuilder.durable(QUEUE_MATCHING_DISPATCH)
+                .withArgument("x-dead-letter-exchange", EXCHANGE_NOTIFICATIONS)
+                .withArgument("x-dead-letter-routing-key", ROUTING_KEY_NOTIFICATION_DLQ)
+                .build();
+    }
+
+    @Bean
+    public Binding matchingDispatchBinding(
+            Queue matchingDispatchQueue, DirectExchange notificationsExchange) {
+        return BindingBuilder.bind(matchingDispatchQueue)
+                .to(notificationsExchange)
+                .with(ROUTING_KEY_MATCHING_DISPATCH);
     }
 
     @Bean

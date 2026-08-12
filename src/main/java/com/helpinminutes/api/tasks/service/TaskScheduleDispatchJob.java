@@ -1,7 +1,7 @@
 package com.helpinminutes.api.tasks.service;
 
 import com.helpinminutes.api.common.SchedulerLock;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
 import com.helpinminutes.api.realtime.RealtimePublisher;
 import com.helpinminutes.api.tasks.model.TaskEntity;
@@ -23,7 +23,7 @@ public class TaskScheduleDispatchJob {
   private final SchedulerLock schedulerLock;
   private final TaskRepository tasks;
   private final TaskOfferRepository offers;
-  private final MatchingService matching;
+  private final NotificationQueueService notificationQueue;
   private final RealtimePublisher realtime;
   private final PushNotificationService pushNotifications;
 
@@ -31,13 +31,13 @@ public class TaskScheduleDispatchJob {
       SchedulerLock schedulerLock,
       TaskRepository tasks,
       TaskOfferRepository offers,
-      MatchingService matching,
+      NotificationQueueService notificationQueue,
       RealtimePublisher realtime,
       PushNotificationService pushNotifications) {
     this.schedulerLock = schedulerLock;
     this.tasks = tasks;
     this.offers = offers;
-    this.matching = matching;
+    this.notificationQueue = notificationQueue;
     this.realtime = realtime;
     this.pushNotifications = pushNotifications;
   }
@@ -73,23 +73,21 @@ public class TaskScheduleDispatchJob {
         task.beginSearching(now);
         tasks.save(task);
 
-        try {
-          realtime.publish(
+        realtime.publish(
               "task_status_changed",
               java.util.Map.of(
                   "taskId", task.getId().toString(),
                   "buyerId", task.getBuyerId().toString(),
                   "status", TaskStatus.SEARCHING.name()));
-        } catch (Exception re) {
-          log.warn("Failed to publish real-time status change for task {}", task.getId(), re);
-        }
         try {
           pushNotifications.notifyBuyerScheduledTaskActivated(task.getBuyerId(), task);
         } catch (Exception pe) {
           log.warn("Failed to notify buyer for scheduled task activation {}", task.getId(), pe);
         }
 
-        matching.dispatchOffers(task);
+        // Candidate discovery runs in the dedicated matching worker after this
+        // scheduler transaction commits; it must not hold locks across Redis/HTTP.
+        notificationQueue.enqueueMatchingDispatch(task);
         dispatched++;
         try {
           pushNotifications.notifyBuyerScheduleSearchStarted(task.getBuyerId(), task);

@@ -19,7 +19,7 @@ import com.helpinminutes.api.users.repo.UserRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.common.GeoUtils;
 import java.time.Instant;
 import java.util.UUID;
@@ -47,7 +47,7 @@ public class HelperService {
   private final SupabaseStorageService storage;
   private final UserRepository users;
   private final TaskRepository tasks;
-  private final MatchingService matching;
+  private final NotificationQueueService notificationQueue;
   private final Executor realtimeDispatchExecutor;
   private final PayoutAccountService payoutAccountService;
   private final com.helpinminutes.api.config.AppProperties props;
@@ -61,7 +61,7 @@ public class HelperService {
       SupabaseStorageService storage,
       UserRepository users,
       TaskRepository tasks,
-      MatchingService matching,
+      NotificationQueueService notificationQueue,
       @Qualifier("realtimeDispatchExecutor") Executor realtimeDispatchExecutor,
       PayoutAccountService payoutAccountService,
       com.helpinminutes.api.config.AppProperties props) {
@@ -70,13 +70,18 @@ public class HelperService {
     this.storage = storage;
     this.users = users;
     this.tasks = tasks;
-    this.matching = matching;
+    this.notificationQueue = notificationQueue;
     this.realtimeDispatchExecutor = realtimeDispatchExecutor;
     this.payoutAccountService = payoutAccountService;
     this.props = props;
   }
 
   public void setOnline(UUID helperId, double lat, double lng) {
+    if (!Double.isFinite(lat) || !Double.isFinite(lng)
+        || !com.helpinminutes.api.common.ServiceArea.isWithinIndia(lat, lng)) {
+      throw new com.helpinminutes.api.errors.BadRequestException(
+          "Partner location is outside the supported region");
+    }
     HelperProfileEntity profile = profiles.findById(helperId)
         .orElseThrow(() -> new ForbiddenException("Not a helper"));
 
@@ -140,7 +145,7 @@ public class HelperService {
           break;
         }
         if (GeoUtils.distanceMeters(task.getLat(), task.getLng(), lat, lng) <= radiusMeters) {
-          matching.dispatchOffers(task);
+          notificationQueue.enqueueMatchingDispatch(task);
           dispatched++;
         }
       }

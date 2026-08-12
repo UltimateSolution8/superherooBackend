@@ -13,7 +13,7 @@ import com.helpinminutes.api.batches.repo.BookingBatchRepository;
 import com.helpinminutes.api.batches.model.BatchPaymentMode;
 import com.helpinminutes.api.batches.model.BookingBatchEntity;
 import com.helpinminutes.api.batches.model.BookingBatchStatus;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.mediator.model.MediatorJobWorkerEntity;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.notifications.service.PushNotificationService;
@@ -40,7 +40,7 @@ import org.springframework.transaction.TransactionStatus;
 class PaymentLifecycleServiceTest {
   private PaymentRepository payments;
   private TaskRepository tasks;
-  private MatchingService matching;
+  private NotificationQueueService matchingQueue;
   private RazorpayGateway razorpay;
   private BookingBatchRepository batches;
   private MediatorJobWorkerRepository workers;
@@ -53,7 +53,7 @@ class PaymentLifecycleServiceTest {
   void setUp() {
     payments = mock(PaymentRepository.class);
     tasks = mock(TaskRepository.class);
-    matching = mock(MatchingService.class);
+    matchingQueue = mock(NotificationQueueService.class);
     razorpay = mock(RazorpayGateway.class);
     batches = mock(BookingBatchRepository.class);
     workers = mock(MediatorJobWorkerRepository.class);
@@ -64,7 +64,7 @@ class PaymentLifecycleServiceTest {
     com.helpinminutes.api.batches.service.BookingBatchService bookingBatchService = mock(com.helpinminutes.api.batches.service.BookingBatchService.class);
     service = new PaymentLifecycleService(
         inlineSchedulerLock(), payments, tasks, batches, workers,
-        matching, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
+        matchingQueue, mock(RealtimePublisher.class), mock(PushNotificationService.class), razorpay,
         transactionManager, Runnable::run, eventPublisher, aiTaskModeration, bookingBatchService);
     when(payments.save(any(PaymentEntity.class))).thenAnswer(call -> call.getArgument(0));
   }
@@ -90,7 +90,6 @@ class PaymentLifecycleServiceTest {
     PaymentEntity payment = payment(taskId, PaymentStatus.CAPTURED, PaymentFulfillmentStatus.HELD);
     when(tasks.findById(taskId)).thenReturn(Optional.of(task));
     when(tasks.findByIdForUpdate(taskId)).thenReturn(Optional.of(task));
-    when(matching.dispatchOffers(task)).thenReturn(List.of());
     when(aiTaskModeration.moderateTaskSynchronously(task)).thenAnswer(invocation -> {
       TaskEntity t = invocation.getArgument(0);
       t.setStatus(TaskStatus.SEARCHING);
@@ -100,6 +99,7 @@ class PaymentLifecycleServiceTest {
     service.activateCapturedPayment(payment);
 
     assertEquals(TaskStatus.SEARCHING, task.getStatus());
+    verify(matchingQueue).enqueueMatchingDispatch(task);
   }
 
   @Test
@@ -217,7 +217,7 @@ class PaymentLifecycleServiceTest {
 
     assertEquals(TaskStatus.CANCELLED, task.getStatus());
     assertEquals(BookingBatchStatus.CANCELLED, batch.getStatus());
-    verify(matching, never()).dispatchOffers(any(TaskEntity.class));
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any(TaskEntity.class));
   }
 
   @Test
@@ -233,7 +233,7 @@ class PaymentLifecycleServiceTest {
     assertEquals(PaymentFulfillmentStatus.REFUND_PENDING, payment.getFulfillmentStatus());
     assertEquals(payment.getAmountPaise(), payment.getRefundRequestedAmountPaise());
     verify(tasks, never()).findByIdForUpdate(taskId);
-    verify(matching, never()).dispatchOffers(any(TaskEntity.class));
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any(TaskEntity.class));
   }
 
   private static MediatorJobWorkerEntity worker(long amountPaise, String status) {

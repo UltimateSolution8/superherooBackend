@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helpinminutes.api.matching.MatchingService;
+import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.moderation.dto.AIReviewResult;
 import com.helpinminutes.api.moderation.dto.AdminModerationDetailDto;
 import com.helpinminutes.api.moderation.dto.AdminModerationTaskDto;
@@ -43,7 +43,7 @@ class AiModerationQueueIntegrationTest {
   private UserRepository userRepository;
   private LlmClient llmClient;
   private ModerationDecisionEngine decisionEngine;
-  private MatchingService matchingService;
+  private NotificationQueueService matchingQueue;
   private RealtimePublisher realtime;
   private PushNotificationService pushNotifications;
   private ObjectMapper objectMapper;
@@ -64,7 +64,7 @@ class AiModerationQueueIntegrationTest {
     // the tier decision that determines whether a queue row exists at all.
     decisionEngine = new ModerationDecisionEngine(
         new com.helpinminutes.api.tasks.service.TaskModerationService());
-    matchingService = mock(MatchingService.class);
+    matchingQueue = mock(NotificationQueueService.class);
     realtime = mock(RealtimePublisher.class);
     pushNotifications = mock(PushNotificationService.class);
     objectMapper = new ObjectMapper();
@@ -76,7 +76,7 @@ class AiModerationQueueIntegrationTest {
         auditLogRepository,
         llmClient,
         decisionEngine,
-        matchingService,
+        matchingQueue,
         realtime,
         pushNotifications,
         objectMapper,
@@ -89,7 +89,7 @@ class AiModerationQueueIntegrationTest {
         aiReviewRepository,
         auditLogRepository,
         userRepository,
-        matchingService,
+        matchingQueue,
         objectMapper
     );
   }
@@ -177,6 +177,6 @@ class AiModerationQueueIntegrationTest {
     // 7. Test Admin Approval Action
     adminModerationService.approveTask(taskId, "support_admin", "Cleaned up by admin");
     assertEquals(TaskStatus.SEARCHING, task.getStatus());
-    verify(matchingService).dispatchOffers(task, true);
+    verify(matchingQueue).enqueueMatchingDispatch(task);
   }
 }
