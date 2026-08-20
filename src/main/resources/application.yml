@@ -261,15 +261,44 @@ app:
 
   otp:
     ttl-seconds: ${OTP_TTL_SECONDS:300}
-    # Local development only. Returning the OTP in the API response is an
-    # authentication bypass and must stay false in every deployed environment.
-    return-otp-in-response: ${OTP_RETURN_IN_RESPONSE:false}
+    # There is deliberately no flag to echo the code back in the response. It was an
+    # authentication bypass one environment variable away from being live, and the
+    # field it populated has been removed from every OTP response DTO.
 
   payments:
     # Online card/UPI checkout is disabled at launch. Cash and UPI are collected
     # offline and confirmed in-app by the partner. Flip to true (with live
     # Razorpay keys) to re-enable prepaid checkout.
     online-enabled: ${PAYMENTS_ONLINE_ENABLED:false}
+    # The ledger only records what already happened, so it is safe with payouts
+    # off — and leaving it off means every partner balance starts at zero on the
+    # day payouts go live, with no history to reconcile against.
+    ledger-enabled: ${PAYMENTS_LEDGER_ENABLED:true}
+    # Executing payouts against RazorpayX. Off until the account exists and one
+    # settlement has been reconciled by hand. See docs/PAYMENTS_GO_LIVE.md.
+    payouts-enabled: ${PAYOUTS_ENABLED:false}
+    # Basis points. 1500 = 15%, the rate the revenue reports already assume.
+    commission-bps: ${PLATFORM_COMMISSION_BPS:1500}
+    # ₹100. Below this the transfer fee is a meaningful share of the transfer.
+    min-payout-paise: ${MIN_PAYOUT_PAISE:10000}
+
+  # Force-update gate. These are version NAMES ("1.1.0"), not version codes —
+  # version codes carry a per-variant offset and are not comparable across apps.
+  #
+  # Every minimum defaults to empty, which means "no gate". Set one only to the
+  # version that is already live on the Play Store: anything higher locks out
+  # users who have no build to update to.
+  app-versions:
+    min-buyer: ${APP_MIN_VERSION_BUYER:}
+    min-helper: ${APP_MIN_VERSION_HELPER:}
+    min-mediator: ${APP_MIN_VERSION_MEDIATOR:}
+    latest-buyer: ${APP_LATEST_VERSION_BUYER:}
+    latest-helper: ${APP_LATEST_VERSION_HELPER:}
+    latest-mediator: ${APP_LATEST_VERSION_MEDIATOR:}
+    store-url-buyer: ${APP_STORE_URL_BUYER:}
+    store-url-helper: ${APP_STORE_URL_HELPER:}
+    store-url-mediator: ${APP_STORE_URL_MEDIATOR:}
+    update-message: ${APP_UPDATE_MESSAGE:}
 
   matching:
     h3-resolution: ${MATCH_H3_RESOLUTION:9}
@@ -394,6 +423,10 @@ geo:
     reverseGeocodeTtlSeconds: ${GEO_CACHE_REVERSE_TTL_SECONDS:2592000}
     routeTtlSeconds: ${GEO_CACHE_ROUTE_TTL_SECONDS:60}
 
+resend:
+  api-key: ${RESEND_API_KEY:}
+  from-email: ${RESEND_FROM_EMAIL:Superherooo <onboarding@resend.dev>}
+
 mojoauth:
   api-key: ${MOJOAUTH_API_KEY:}
 
@@ -410,10 +443,27 @@ exotel:
   subdomain: ${EXOTEL_SUBDOMAIN:api.exotel.com}
   from: ${EXOTEL_FROM:}
 
+msg91:
+  enabled: ${MSG91_ENABLED:true}
+  authKey: ${MSG91_AUTH_KEY:}
+  templateId: ${MSG91_TEMPLATE_ID:6a85becbf5bcf6948c0385e4}
+  senderId: ${MSG91_SENDER_ID:SPHROO}
+  dltTemplateId: ${MSG91_DLT_TEMPLATE_ID:1777178714738592069}
+  otpExpiryMinutes: ${MSG91_OTP_EXPIRY_MINUTES:5}
+
 razorpay:
   key-id: ${RAZORPAY_KEY_ID:}
   key-secret: ${RAZORPAY_KEY_SECRET:}
   webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+
+# Money out. Deliberately a separate credential from the collection key above: an
+# account that can only take payments cannot be used to drain a balance.
+razorpayx:
+  key-id: ${RAZORPAYX_KEY_ID:}
+  key-secret: ${RAZORPAYX_KEY_SECRET:}
+  # The virtual account payouts are funded from. RazorpayX rejects a payout without it.
+  account-number: ${RAZORPAYX_ACCOUNT_NUMBER:}
+  webhook-secret: ${RAZORPAYX_WEBHOOK_SECRET:}
 
 banking:
   encryption-keys: ${BANK_ACCOUNT_ENCRYPTION_KEYS:}

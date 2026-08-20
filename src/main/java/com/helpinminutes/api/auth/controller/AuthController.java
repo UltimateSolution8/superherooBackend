@@ -43,8 +43,8 @@ public class AuthController {
 
   @PostMapping("/otp/start")
   public OtpStartResponse start(@Valid @RequestBody OtpStartRequest req) {
-    String otp = auth.startOtp(req.phone(), req.channel());
-    return new OtpStartResponse(req.phone(), true, props.otp().returnOtpInResponse() ? otp : null);
+    auth.startOtp(req.phone(), req.channel(), req.appHash(), req.role());
+    return new OtpStartResponse(req.phone(), true);
   }
 
   @PostMapping("/otp/verify")
@@ -72,9 +72,8 @@ public class AuthController {
    */
   @PostMapping("/password/forgot")
   public ForgotPasswordResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest req) {
-    String otp = auth.startPasswordReset(req.email());
-    return new ForgotPasswordResponse(
-        req.email(), true, props.otp().returnOtpInResponse() ? otp : null);
+    auth.startPasswordReset(req.email());
+    return new ForgotPasswordResponse(req.email(), true);
   }
 
   @PostMapping("/password/reset")
@@ -91,8 +90,8 @@ public class AuthController {
 
   @PostMapping("/email/otp/start")
   public EmailOtpStartResponse startEmailOtp(@Valid @RequestBody EmailOtpStartRequest req) {
-    String otp = auth.startEmailOtp(req.email());
-    return new EmailOtpStartResponse(req.email(), true, props.otp().returnOtpInResponse() ? otp : null);
+    auth.startEmailOtp(req.email());
+    return new EmailOtpStartResponse(req.email(), true);
   }
 
   @PostMapping("/email/otp/verify")
@@ -119,7 +118,7 @@ public class AuthController {
 
   public record EmailOtpStartRequest(@NotBlank @Email String email) {}
 
-  public record EmailOtpStartResponse(String email, boolean sent, String devOtp) {}
+  public record EmailOtpStartResponse(String email, boolean sent) {}
 
   public record EmailOtpVerifyRequest(@NotBlank @Email String email, @NotBlank String otp) {}
 }

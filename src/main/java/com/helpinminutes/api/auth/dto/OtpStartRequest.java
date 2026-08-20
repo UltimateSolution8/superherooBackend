@@ -8,5 +8,10 @@ import jakarta.validation.constraints.Pattern;
 public record OtpStartRequest(
     @NotBlank @Pattern(regexp = "^[6-9]\\d{9}$", message = "phone must be a valid Indian mobile number") String phone,
     @NotNull UserRole role,
-    String channel
-) {}
+    String channel,
+    String appHash
+) {
+  public OtpStartRequest(String phone, UserRole role, String channel) {
+    this(phone, role, channel, null);
+  }
+}

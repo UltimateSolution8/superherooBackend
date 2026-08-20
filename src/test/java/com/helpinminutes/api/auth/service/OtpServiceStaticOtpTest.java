@@ -8,6 +8,8 @@ import static org.mockito.Mockito.when;
 
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.config.ExotelProperties;
+import com.helpinminutes.api.config.Msg91Properties;
+import com.helpinminutes.api.config.ReviewerPhoneProperties;
 import com.helpinminutes.api.config.TwilioProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -30,10 +32,10 @@ class OtpServiceStaticOtpTest {
 
     AppProperties props = mock(AppProperties.class);
     // Dev flag ON — the worst case. Verification must still be strict.
-    when(props.otp()).thenReturn(new AppProperties.Otp(300, true));
+    when(props.otp()).thenReturn(new AppProperties.Otp(300));
 
     return new OtpService(redis, props, mock(TwilioProperties.class), mock(ExotelProperties.class),
-        Runnable::run);
+        mock(Msg91Properties.class), new ReviewerPhoneProperties(null, null), Runnable::run);
   }
 
   @Test

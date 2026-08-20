@@ -3,6 +3,7 @@ package com.helpinminutes.api.tasks.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -13,6 +14,7 @@ import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
 import com.helpinminutes.api.common.TranslationService;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
 import com.helpinminutes.api.payments.model.PaymentCollectionMode;
+import com.helpinminutes.api.payments.service.LedgerService;
 import com.helpinminutes.api.tasks.model.TaskEntity;
 import com.helpinminutes.api.tasks.model.TaskStatus;
 import com.helpinminutes.api.tasks.model.TaskUrgency;
@@ -31,7 +33,9 @@ class TaskMapperTest {
     TranslationService translations = mock(TranslationService.class);
     BookingBatchItemRepository batchItems = mock(BookingBatchItemRepository.class);
     MediatorJobWorkerRepository mediatorWorkers = mock(MediatorJobWorkerRepository.class);
-    TaskMapper mapper = new TaskMapper(users, tasks, translations, batchItems, mediatorWorkers);
+    LedgerService ledger = mock(LedgerService.class);
+    when(ledger.commissionPaise(anyLong())).thenAnswer(i -> (long) i.getArgument(0) * 15 / 100);
+    TaskMapper mapper = new TaskMapper(users, tasks, translations, batchItems, mediatorWorkers, ledger);
 
     when(users.findAllById(any())).thenReturn(List.of());
     when(tasks.findBuyerStats(any(), any())).thenReturn(List.of());
@@ -58,7 +62,9 @@ class TaskMapperTest {
     TranslationService translations = mock(TranslationService.class);
     BookingBatchItemRepository batchItems = mock(BookingBatchItemRepository.class);
     MediatorJobWorkerRepository mediatorWorkers = mock(MediatorJobWorkerRepository.class);
-    TaskMapper mapper = new TaskMapper(users, tasks, translations, batchItems, mediatorWorkers);
+    LedgerService ledger = mock(LedgerService.class);
+    when(ledger.commissionPaise(anyLong())).thenAnswer(i -> (long) i.getArgument(0) * 15 / 100);
+    TaskMapper mapper = new TaskMapper(users, tasks, translations, batchItems, mediatorWorkers, ledger);
     when(users.findAllById(any())).thenReturn(List.of());
     when(tasks.findBuyerStats(any(), any())).thenReturn(List.of());
     when(batchItems.findByTaskIdIn(any())).thenReturn(List.of());
@@ -80,6 +86,34 @@ class TaskMapperTest {
     assertNull(response.buyerPhone());
     assertNull(response.buyerName());
     assertNull(response.landmark());
+  }
+
+  @Test
+  void reportsCommissionAndNetEarningSoThePartnerAppNeedNotGuessARate() {
+    UserRepository users = mock(UserRepository.class);
+    TaskRepository tasks = mock(TaskRepository.class);
+    TranslationService translations = mock(TranslationService.class);
+    BookingBatchItemRepository batchItems = mock(BookingBatchItemRepository.class);
+    MediatorJobWorkerRepository mediatorWorkers = mock(MediatorJobWorkerRepository.class);
+    LedgerService ledger = mock(LedgerService.class);
+    when(ledger.commissionPaise(anyLong())).thenAnswer(i -> (long) i.getArgument(0) * 15 / 100);
+    TaskMapper mapper =
+        new TaskMapper(users, tasks, translations, batchItems, mediatorWorkers, ledger);
+
+    when(users.findAllById(any())).thenReturn(List.of());
+    when(tasks.findBuyerStats(any(), any())).thenReturn(List.of());
+    when(tasks.findHelperStats(any(), any())).thenReturn(List.of());
+    when(batchItems.findByTaskIdIn(any())).thenReturn(List.of());
+    when(mediatorWorkers.findByTaskIdIn(any())).thenReturn(List.of());
+    when(translations.translate(anyString(), any())).thenAnswer(i -> i.getArgument(0));
+
+    var response = mapper.toResponse(task(UUID.randomUUID()), false);
+
+    // Budget is 10,000 paise; at 15% the commission is 1,500 and the partner keeps
+    // 8,500. The partner app used to render this as "Deductions ₹0, payout ₹100".
+    assertEquals(10_000L, response.budgetPaise());
+    assertEquals(1_500L, response.platformCommissionPaise());
+    assertEquals(8_500L, response.helperEarningPaise());
   }
 
   private TaskEntity task(UUID helperId) {

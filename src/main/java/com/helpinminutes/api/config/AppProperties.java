@@ -17,7 +17,8 @@ public record AppProperties(
     @NotNull Otp otp,
     @NotNull Matching matching,
     @NotNull Realtime realtime,
-    Payments payments
+    Payments payments,
+    AppVersions appVersions
 ) {
   public AppProperties {
     // Constructor-bound nested records may be passed as null when an older
@@ -31,17 +32,85 @@ public record AppProperties(
       realtime = new Realtime("him:rt:events", null, null, 1500);
     }
     if (payments == null) {
-      payments = new Payments(false);
+      payments = new Payments(false, true, false, 1500, 10_000L);
+    }
+    if (appVersions == null) {
+      appVersions = AppVersions.unconfigured();
     }
   }
 
   /**
-   * @param onlineEnabled whether the online gateway (Razorpay) may be used.
-   *     Off at launch: jobs are settled in cash or UPI between citizen and
-   *     partner, and the partner confirms collection in-app. Turning this on
-   *     with live keys re-enables the prepaid flow — no code changes needed.
+   * Convenience for callers predating the force-update gate. Binding still uses the
+   * canonical constructor; this only keeps hand-built instances compiling.
    */
-  public record Payments(boolean onlineEnabled) {}
+  public AppProperties(
+      String env, Jwt jwt, Otp otp, Matching matching, Realtime realtime, Payments payments) {
+    this(env, jwt, otp, matching, realtime, payments, null);
+  }
+
+  /**
+   * Minimum and latest published client versions, per app.
+   *
+   * <p>All fields default to blank, and a blank minimum means "no gate". That is
+   * deliberate: an unconfigured deployment must never lock every user out of every
+   * app. Turning the gate on is an explicit act — set APP_MIN_VERSION_BUYER and so
+   * on, to the version that is already live on the store.
+   *
+   * <p>These are version <em>names</em> ("1.1.0"), not version codes. Version codes
+   * carry a per-variant offset and are not comparable across the three apps.
+   */
+  public record AppVersions(
+      String minBuyer,
+      String minHelper,
+      String minMediator,
+      String latestBuyer,
+      String latestHelper,
+      String latestMediator,
+      String storeUrlBuyer,
+      String storeUrlHelper,
+      String storeUrlMediator,
+      String updateMessage
+  ) {
+    public static AppVersions unconfigured() {
+      return new AppVersions(null, null, null, null, null, null, null, null, null, null);
+    }
+  }
+
+  /**
+   * The three money switches, all independent.
+   *
+   * <p>They are separate because they carry different risk and are turned on at
+   * different times. The ledger is the one that should be on from the start: it
+   * only records what happened, and if it is off during the cash-only period then
+   * every balance starts from zero on the day payouts go live, with no history to
+   * reconcile against.
+   *
+   * @param onlineEnabled whether the online gateway (Razorpay) may be used for
+   *     collection. Off at launch: jobs are settled in cash or UPI between citizen
+   *     and partner, and the partner confirms collection in-app. Turning this on
+   *     with live keys re-enables the prepaid flow — no code changes needed.
+   * @param ledgerEnabled whether completed work books earning and commission
+   *     entries. Recording is safe with payouts off, and is what makes balances
+   *     correct and auditable the day they are.
+   * @param payoutsEnabled whether partner payouts may actually be executed against
+   *     RazorpayX. Off until the account exists and has been reconciled once.
+   * @param commissionBps the platform's take, in basis points. 1500 = 15%, which is
+   *     what the revenue reports have always assumed.
+   * @param minPayoutPaise the smallest payout worth making. Below this the transfer
+   *     fee is a meaningful share of the transfer.
+   */
+  public record Payments(
+      boolean onlineEnabled,
+      boolean ledgerEnabled,
+      boolean payoutsEnabled,
+      @Min(0) @Max(5000) int commissionBps,
+      @Min(0) long minPayoutPaise
+  ) {
+    /** Older configurations set only onlineEnabled; keep them bootable. */
+    public Payments(boolean onlineEnabled) {
+      this(onlineEnabled, true, false, 1500, 10_000L);
+    }
+  }
   public record Jwt(
       @NotBlank String accessSecret,
       @NotBlank String refreshSecret,
@@ -84,9 +153,14 @@ public record AppProperties(
     }
   }
 
+  /**
+   * The {@code returnOtpInResponse} flag is gone, not defaulted off. It echoed the
+   * code back to the caller, which is a complete authentication bypass for anyone
+   * who can reach the endpoint. There is no environment in which that is the right
+   * trade, so there is no longer a switch for it.
+   */
   public record Otp(
-      @Min(60) @Max(3600) long ttlSeconds,
-      boolean returnOtpInResponse
+      @Min(60) @Max(3600) long ttlSeconds
   ) {}
 
   /**

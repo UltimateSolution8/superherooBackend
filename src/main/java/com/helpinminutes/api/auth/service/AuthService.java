@@ -85,7 +85,11 @@ public class AuthService {
   }
 
   public String startOtp(String phone, String channel) {
-    return otp.startOtp(phone, channel);
+    return otp.startOtp(phone, channel, null, null);
+  }
+
+  public String startOtp(String phone, String channel, String appHash, UserRole role) {
+    return otp.startOtp(phone, channel, appHash, role);
   }
 
   @Transactional

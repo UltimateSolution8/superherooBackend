@@ -67,5 +67,22 @@ public record TaskResponse(
      */
     Double distanceMeters,
     /** Driving ETA in minutes for the same view; null when unknown. */
-    Integer etaMinutes
+    Integer etaMinutes,
+    /**
+     * Platform commission on this task, in paise, at the rate that applies to it.
+     *
+     * <p>Exposed because the partner app previously showed "Deductions ₹0" and
+     * called the citizen-facing price the partner's payout, which the ledger
+     * flatly contradicted. Deriving it on the client would just move the guess.
+     */
+    Long platformCommissionPaise,
+    /**
+     * What the partner ends up with: {@code budgetPaise - platformCommissionPaise}.
+     *
+     * <p>How it reaches them depends on {@code paymentCollectionMode}. On
+     * ONLINE_PREPAID it is paid out to their bank; on a direct-collection task
+     * they take the full budget in hand and the commission is owed back to the
+     * platform. Either way this is the number that is theirs.
+     */
+    Long helperEarningPaise
 ) {}

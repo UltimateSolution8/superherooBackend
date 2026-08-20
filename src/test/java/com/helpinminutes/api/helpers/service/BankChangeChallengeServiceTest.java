@@ -32,7 +32,7 @@ class BankChangeChallengeServiceTest {
     UserRepository users = mock(UserRepository.class);
     OtpService otp = mock(OtpService.class);
     AppProperties props = mock(AppProperties.class);
-    AppProperties.Otp otpProps = new AppProperties.Otp(300, true);
+    AppProperties.Otp otpProps = new AppProperties.Otp(300);
     when(props.otp()).thenReturn(otpProps);
     when(redis.opsForValue()).thenReturn(values);
     UserEntity user = new UserEntity();
@@ -45,7 +45,6 @@ class BankChangeChallengeServiceTest {
 
     var challenge = service.start(userId, UserRole.HELPER);
     assertEquals("••••••3210", challenge.maskedPhone());
-    assertEquals("123456", challenge.devOtp());
     String payload = userId + "|HELPER|9876543210";
     when(values.get("him:bank-change:challenge:" + challenge.challengeId())).thenReturn(payload);
     when(otp.verifyOtp("9876543210", "123456")).thenReturn(true);

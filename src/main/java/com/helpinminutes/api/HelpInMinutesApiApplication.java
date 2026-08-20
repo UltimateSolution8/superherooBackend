@@ -4,6 +4,7 @@ import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.config.ExotelProperties;
 import com.helpinminutes.api.config.TwilioProperties;
 import com.helpinminutes.api.config.LiveKitProperties;
+import com.helpinminutes.api.config.Msg91Properties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -13,7 +14,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling
 @EnableAsync
-@EnableConfigurationProperties({AppProperties.class, TwilioProperties.class, ExotelProperties.class, LiveKitProperties.class})
+@EnableConfigurationProperties({AppProperties.class, TwilioProperties.class, ExotelProperties.class, LiveKitProperties.class, Msg91Properties.class})
 public class HelpInMinutesApiApplication {
   public static void main(String[] args) {
     SpringApplication.run(HelpInMinutesApiApplication.class, args);

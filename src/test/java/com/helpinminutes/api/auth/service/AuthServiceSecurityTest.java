@@ -53,13 +53,15 @@ public class AuthServiceSecurityTest {
   @Test
   public void startOtpDelegatesToOtpServiceForEveryPhone() {
     OtpService otp = mock(OtpService.class);
-    when(otp.startOtp(anyString(), any())).thenReturn("654321");
+    // AuthService delegates through the four-argument overload, which also carries
+    // the SMS Retriever app hash and the role MSG91 needs to pick a template.
+    when(otp.startOtp(anyString(), any(), any(), any())).thenReturn("654321");
     AuthService service = newService(otp, mock(UserRepository.class));
 
     for (String phone : FORMER_REVIEWER_PHONES) {
       // Must not short-circuit to a hardcoded "123456".
       assertEquals("654321", service.startOtp(phone, null));
-      verify(otp).startOtp(phone, null);
+      verify(otp).startOtp(phone, null, null, null);
     }
   }
 

@@ -56,6 +56,7 @@ public class AdminController {
   private final PushNotificationService pushNotifications;
   private final AdminActionCenterService actionCenter;
   private final PayoutAccountService payoutAccounts;
+  private final com.helpinminutes.api.payments.service.LedgerService ledgerService;
 
   public AdminController(
       AdminService admin,
@@ -63,13 +64,15 @@ public class AdminController {
       UserRepository users,
       PushNotificationService pushNotifications,
       AdminActionCenterService actionCenter,
-      PayoutAccountService payoutAccounts) {
+      PayoutAccountService payoutAccounts,
+      com.helpinminutes.api.payments.service.LedgerService ledgerService) {
     this.admin = admin;
     this.tasks = tasks;
     this.users = users;
     this.pushNotifications = pushNotifications;
     this.actionCenter = actionCenter;
     this.payoutAccounts = payoutAccounts;
+    this.ledgerService = ledgerService;
   }
 
   @GetMapping("/users/{userId}/payout-account-history")
@@ -410,7 +413,10 @@ public class AdminController {
           // Distance and ETA are relative to a requesting partner. An admin list
           // has no viewer position, so there is nothing to report.
           null,
-          null);
+          null,
+          ledgerService.commissionPaise(t.getBudgetPaise() == null ? 0L : t.getBudgetPaise()),
+          (t.getBudgetPaise() == null ? 0L : t.getBudgetPaise())
+              - ledgerService.commissionPaise(t.getBudgetPaise() == null ? 0L : t.getBudgetPaise()));
     }).toList();
   }
 

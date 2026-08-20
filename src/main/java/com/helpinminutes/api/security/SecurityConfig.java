@@ -26,7 +26,8 @@ public class SecurityConfig {
   public SecurityFilterChain securityFilterChain(
       HttpSecurity http,
       JwtService jwtService,
-      StringRedisTemplate redis) throws Exception {
+      StringRedisTemplate redis,
+      com.helpinminutes.api.appversion.AppVersionService appVersions) throws Exception {
     http
         .csrf(csrf -> csrf.disable())
         .cors(Customizer.withDefaults())
@@ -39,9 +40,19 @@ public class SecurityConfig {
         .authorizeHttpRequests(auth -> auth
             .requestMatchers("/health", "/api/v1/health", "/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
             .requestMatchers("/api/v1/auth/**").permitAll()
+            // A client blocked by the version gate must still be able to ask what
+            // version it needs and where to get it.
+            .requestMatchers("/api/v1/app/version").permitAll()
             .requestMatchers("/api/public/**").permitAll()
             .requestMatchers("/api/v1/payments/webhooks/razorpay").permitAll()
+            // Signature-verified, not authenticated — the provider has no token.
+            .requestMatchers("/api/v1/payouts/webhooks/razorpayx").permitAll()
             .anyRequest().authenticated())
+        // Ahead of rate limiting and authentication: a withdrawn build should be
+        // told to update rather than have its requests counted or authenticated.
+        .addFilterBefore(
+            new com.helpinminutes.api.appversion.AppVersionGateFilter(appVersions),
+            UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(new RateLimitFilter(redis), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
 

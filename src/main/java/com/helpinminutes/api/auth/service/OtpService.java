@@ -3,8 +3,11 @@ package com.helpinminutes.api.auth.service;
 import com.helpinminutes.api.common.LogMasking;
 import com.helpinminutes.api.config.AppProperties;
 import com.helpinminutes.api.config.ExotelProperties;
+import com.helpinminutes.api.config.Msg91Properties;
+import com.helpinminutes.api.config.ReviewerPhoneProperties;
 import com.helpinminutes.api.config.TwilioProperties;
 import com.helpinminutes.api.errors.BadRequestException;
+import com.helpinminutes.api.users.model.UserRole;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -37,6 +40,8 @@ public class OtpService {
   private final AppProperties props;
   private final TwilioProperties twilio;
   private final ExotelProperties exotel;
+  private final Msg91Properties msg91;
+  private final ReviewerPhoneProperties reviewerPhones;
   private final Executor otpDeliveryExecutor;
   private final ConcurrentHashMap<String, LocalOtp> localFallback = new ConcurrentHashMap<>();
   private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -46,15 +51,23 @@ public class OtpService {
       AppProperties props,
       TwilioProperties twilio,
       ExotelProperties exotel,
+      Msg91Properties msg91,
+      ReviewerPhoneProperties reviewerPhones,
       @Qualifier("otpDeliveryExecutor") Executor otpDeliveryExecutor) {
     this.redis = redis;
     this.props = props;
     this.twilio = twilio;
     this.exotel = exotel;
+    this.msg91 = msg91;
+    this.reviewerPhones = reviewerPhones;
     this.otpDeliveryExecutor = otpDeliveryExecutor;
   }
 
   public String startOtp(String phone, String channel) {
+    return startOtp(phone, channel, null, null);
+  }
+
+  public String startOtp(String phone, String channel, String appHash, UserRole role) {
     if (phone == null || phone.isBlank()) {
       throw new BadRequestException("Phone number is required");
     }
@@ -77,18 +90,39 @@ public class OtpService {
       log.warn("Redis OTP rate limiting failed for {}: {}", LogMasking.phone(phone), e.getMessage());
     }
 
-    if (exotel != null && exotel.enabled()) {
+    // A provisioned code for an allowlisted number. Stored exactly where a random
+    // one would be, so verification cannot tell the difference — see
+    // ReviewerPhoneProperties for why this exists and what it does not grant.
+    String provisioned = reviewerPhones == null ? null : reviewerPhones.codeFor(phone);
+    if (provisioned != null) {
+      storeOtp(phone, provisioned);
+      log.warn("Provisioned reviewer OTP issued for {} — no SMS sent", LogMasking.phone(phone));
+      return provisioned;
+    }
+
+    // Selected on canSendSms rather than enabled: a provider that is switched on but
+    // has no credentials cannot deliver anything, and taking its branch anyway meant
+    // a configured fallback was skipped in favour of an OTP nobody would ever see.
+    if (msg91 != null && msg91.canSendSms()) {
       String otp = createAndStoreLocalOtp(phone);
-      if (exotel.canSendSms()) {
-        try {
-          // OTP generation must not wait on an external SMS gateway. Delivery is
-          // best-effort and dev OTP remains available as the configured fallback.
-          otpDeliveryExecutor.execute(() -> sendExotelOtp(phone, otp));
-        } catch (RejectedExecutionException e) {
-          log.warn("Exotel OTP delivery queue is full for {}. Using dev/local OTP.", LogMasking.phone(phone));
-        }
-      } else {
-        log.warn("Exotel OTP is enabled but SMS is not sent because EXOTEL_FROM or credentials are missing. Using dev/local OTP.");
+      try {
+        // OTP generation must not wait on an external SMS gateway.
+        otpDeliveryExecutor.execute(() -> sendMsg91Otp(phone, otp, appHash, role));
+      } catch (RejectedExecutionException e) {
+        log.warn("MSG91 OTP delivery queue is full for {}; the code was not sent.", LogMasking.phone(phone));
+      }
+      return otp;
+    }
+    if (msg91 != null && msg91.enabled()) {
+      log.warn("MSG91 is enabled but authKey or templateId are missing — falling through to the next provider.");
+    }
+
+    if (exotel != null && exotel.canSendSms()) {
+      String otp = createAndStoreLocalOtp(phone);
+      try {
+        otpDeliveryExecutor.execute(() -> sendExotelOtp(phone, otp));
+      } catch (RejectedExecutionException e) {
+        log.warn("Exotel OTP delivery queue is full for {}; the code was not sent.", LogMasking.phone(phone));
       }
       return otp;
     }
@@ -113,6 +147,69 @@ public class OtpService {
       return localOtp;
     }
     return createAndStoreLocalOtp(phone);
+  }
+
+  private void sendMsg91Otp(String phone, String otp, String appHash, UserRole role) {
+    try {
+      String to = toIndiaRecipient(phone);
+      int expiryMin = msg91.normalizedOtpExpiryMinutes();
+      String resolvedHash = org.springframework.util.StringUtils.hasText(appHash) ? appHash.trim() : resolveDefaultAppHash(role);
+      String templateId = msg91.templateId() != null ? msg91.templateId().trim() : "";
+      String authKey = msg91.authKey() != null ? msg91.authKey().trim() : "";
+
+      String url = "https://control.msg91.com/api/v5/flow";
+      String jsonBody = "{"
+          + "\"template_id\":\"" + encJson(templateId) + "\","
+          + "\"short_url\":\"0\","
+          + "\"recipients\":[{"
+          + "\"mobiles\":\"" + encJson(to) + "\","
+          + "\"var1\":\"" + encJson(otp) + "\","
+          + "\"var2\":\"" + expiryMin + "\","
+          + "\"var3\":\"" + encJson(resolvedHash) + "\""
+          + "}]"
+          + "}";
+
+      HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+          .timeout(Duration.ofSeconds(10))
+          .header("Content-Type", "application/json")
+          .header("authkey", authKey)
+          .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+          .build();
+      HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+      String body = res.body();
+      if (res.statusCode() < 200 || res.statusCode() >= 300 || (body != null && body.contains("\"type\":\"error\""))) {
+        log.warn("MSG91 OTP SMS failed for {} status={} body={}", LogMasking.phone(to), res.statusCode(), safeLogBody(body));
+      } else {
+        log.info("MSG91 OTP SMS sent successfully for {} body={}", LogMasking.phone(to), safeLogBody(body));
+      }
+    } catch (Exception e) {
+      log.warn("MSG91 OTP SMS failed for {}: {}", LogMasking.phone(phone), e.getMessage());
+    }
+  }
+
+  /**
+   * Last-resort SMS Retriever hashes, one per app.
+   *
+   * The client sends its own hash and that is what should be used: an app hash is
+   * derived from the signing certificate, so these constants are only correct for
+   * the keystore they were generated against. A build signed with a different key —
+   * or by Play App Signing after re-signing — produces a different hash, and an SMS
+   * carrying the wrong one means zero-touch auto-read silently never fires.
+   *
+   * Reaching this at all is worth a warning for that reason.
+   */
+  private static String resolveDefaultAppHash(UserRole role) {
+    log.warn("No SMS Retriever app hash supplied by the client for role {} — falling back to the "
+        + "built-in hash, which is only correct for the original keystore. Auto-read may not fire.", role);
+    if (role == UserRole.BUYER) return "QxF6BzNczWU";
+    if (role == UserRole.HELPER) return "Q5vrW5aH4wx";
+    if (role == UserRole.MEDIATOR) return "xQNwzZe+Qv8";
+    return "";
+  }
+
+  private static String encJson(String value) {
+    if (value == null) return "";
+    return value.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 
   private void sendExotelOtp(String phone, String otp) {
@@ -282,6 +379,12 @@ public class OtpService {
 
   private String createAndStoreLocalOtp(String phone) {
     String otp = String.format("%06d", RNG.nextInt(1_000_000));
+    storeOtp(phone, otp);
+    return otp;
+  }
+
+  /** Redis, with the in-process cache as the fallback when Redis is unavailable. */
+  private void storeOtp(String phone, String otp) {
     String key = key(phone);
     try {
       redis.opsForValue().set(key, otp, Duration.ofSeconds(props.otp().ttlSeconds()));
@@ -289,7 +392,6 @@ public class OtpService {
       log.warn("Redis OTP write failed, falling back to local cache: {}", e.getMessage());
       localFallback.put(key, new LocalOtp(otp, expiresAtMs()));
     }
-    return otp;
   }
 
   private void clearLocalOtp(String key) {

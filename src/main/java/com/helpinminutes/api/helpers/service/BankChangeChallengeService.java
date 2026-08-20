@@ -56,8 +56,7 @@ public class BankChangeChallengeService {
       throw new ServiceUnavailableException("Bank-change verification is temporarily unavailable");
     }
     return new BankChangeChallengeResponse(challengeId, maskPhone(phone),
-        Instant.now().plusSeconds(props.otp().ttlSeconds()), 60,
-        props.otp().returnOtpInResponse() ? code : null);
+        Instant.now().plusSeconds(props.otp().ttlSeconds()), 60);
   }
 
   public BankChangeTokenResponse verify(UUID userId, UserRole role, UUID challengeId, String code) {

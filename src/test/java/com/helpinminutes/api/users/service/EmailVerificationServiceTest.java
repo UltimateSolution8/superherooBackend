@@ -58,7 +58,7 @@ class EmailVerificationServiceTest {
 
   private AppProperties props() {
     AppProperties props = mock(AppProperties.class);
-    when(props.otp()).thenReturn(new AppProperties.Otp(300, true));
+    when(props.otp()).thenReturn(new AppProperties.Otp(300));
     return props;
   }
 

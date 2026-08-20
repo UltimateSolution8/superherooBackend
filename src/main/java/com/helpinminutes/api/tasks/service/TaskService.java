@@ -114,6 +114,17 @@ public class TaskService {
   private com.helpinminutes.api.geo.GeoProviderChain geo;
 
   /**
+   * Books the partner's earning and the platform's commission on completion.
+   *
+   * Field-injected for the same reason as the two above. Absent in the unit tests
+   * that construct this class directly, where the ledger is not what is under test —
+   * the null check below is what makes that safe rather than a silent NPE inside a
+   * status transition.
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private com.helpinminutes.api.payments.service.LedgerService ledger;
+
+  /**
    * Fire-and-forget side effects (realtime publish, push notification) that must
    * not extend the request. Explicitly not {@code CompletableFuture.runAsync}:
    * that lands on the common ForkJoinPool, sized {@code availableProcessors() - 1}
@@ -368,6 +379,33 @@ public class TaskService {
     }
   }
 
+  /**
+   * Minimum useful title and description, mirrored from the app.
+   *
+   * <p>The app has enforced 3 and 10 characters since it shipped; the server did
+   * not, so anything that was not the app could book "a" / "b" and a partner would
+   * arrive at a job with no idea what it was. Hiding a rule in the client is
+   * presentation, not enforcement.
+   *
+   * <p>Deliberately generous. This is a floor against a task nobody can act on, not
+   * a quality bar — the AI moderation pass is what judges content.
+   */
+  static final int MIN_TITLE_CHARS = 3;
+  static final int MIN_DESCRIPTION_CHARS = 10;
+
+  /** Package-private so the rule can be tested without standing up the whole service. */
+  static void requireUsableDetails(String title, String description) {
+    if (title == null || title.trim().length() < MIN_TITLE_CHARS) {
+      throw new BadRequestException(
+          "Give the task a name of at least " + MIN_TITLE_CHARS + " characters.");
+    }
+    if (description == null || description.trim().length() < MIN_DESCRIPTION_CHARS) {
+      throw new BadRequestException(
+          "Describe the task in at least " + MIN_DESCRIPTION_CHARS + " characters so a partner "
+              + "knows what they are accepting.");
+    }
+  }
+
   @Transactional
   public CreateResult createTask(UUID buyerId, CreateTaskRequest req) {
     return createTask(buyerId, req, TaskCreateOptions.defaultOptions());
@@ -382,6 +420,7 @@ public class TaskService {
       throw new BadRequestException(
           "Superherooo is currently available in Hyderabad only. Pick a location within the city to book.");
     }
+    requireUsableDetails(req.title(), req.description());
     // Safety check will run via AI moderation rather than throwing BadRequestException immediately
 
     TaskEntity task = new TaskEntity();
@@ -476,6 +515,7 @@ public class TaskService {
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
     requireVerifiedEmailForLaunchAction(buyer);
+    requireUsableDetails(req.title(), req.description());
 
     TaskEntity task = new TaskEntity();
     task.setBuyerId(buyerId);
@@ -705,6 +745,10 @@ public class TaskService {
 
     if (newStatus == TaskStatus.COMPLETED) {
       paymentLifecycle.releaseTaskEarning(task);
+      // Books the partner's earning and the platform's commission. Runs in its own
+      // transaction and swallows a duplicate, so it can neither roll back the
+      // completion nor double-count a retry.
+      if (ledger != null) ledger.recordTaskCompletion(task);
       notificationQueue.enqueueTaskCompleted(task.getBuyerId(), task);
       invoiceEmail.sendInvoiceEmailAsync(task);
     }

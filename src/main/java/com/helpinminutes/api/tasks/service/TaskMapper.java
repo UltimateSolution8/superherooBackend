@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import com.helpinminutes.api.batches.repo.BookingBatchItemRepository;
 import com.helpinminutes.api.mediator.repo.MediatorJobWorkerRepository;
+import com.helpinminutes.api.payments.service.LedgerService;
 
 @Component
 public class TaskMapper {
@@ -25,18 +26,21 @@ public class TaskMapper {
     private final com.helpinminutes.api.common.TranslationService translationService;
     private final BookingBatchItemRepository bookingBatchItems;
     private final MediatorJobWorkerRepository mediatorWorkers;
+    private final LedgerService ledger;
 
     public TaskMapper(
             UserRepository users,
             TaskRepository tasks,
             com.helpinminutes.api.common.TranslationService translationService,
             BookingBatchItemRepository bookingBatchItems,
-            MediatorJobWorkerRepository mediatorWorkers) {
+            MediatorJobWorkerRepository mediatorWorkers,
+            LedgerService ledger) {
         this.users = users;
         this.tasks = tasks;
         this.translationService = translationService;
         this.bookingBatchItems = bookingBatchItems;
         this.mediatorWorkers = mediatorWorkers;
+        this.ledger = ledger;
     }
 
     public TaskResponse toResponse(TaskEntity t, boolean includeOtp) {
@@ -154,6 +158,11 @@ public class TaskMapper {
         String translatedTitle = translationService.translate(t.getTitle(), acceptLanguage);
         String translatedDescription = translationService.translate(t.getDescription(), acceptLanguage);
 
+        // Same call the ledger books with, so what the partner is shown and what is
+        // written to ledger_entries cannot drift apart.
+        long gross = t.getBudgetPaise() == null ? 0L : t.getBudgetPaise();
+        long commission = ledger.commissionPaise(gross);
+
         UUID batchId = batchIdsByTask.get(t.getId());
         boolean masked = shouldMask(t, approximateBeforeAccept);
         double responseLat = masked ? roundCoordinate(t.getLat()) : t.getLat();
@@ -210,7 +219,9 @@ public class TaskMapper {
                 t.getPaymentCollectionMode(),
                 t.getVerificationMode(),
                 distanceMetersByTask.get(t.getId()),
-                etaMinutesByTask.get(t.getId()));
+                etaMinutesByTask.get(t.getId()),
+                commission,
+                gross - commission);
     }
 
     private static double roundCoordinate(double value) {

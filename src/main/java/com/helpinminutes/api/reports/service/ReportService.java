@@ -57,6 +57,8 @@ public class ReportService {
   private final AuditLogRepository auditLogRepo;
   private final TaskAiReviewRepository aiReviewRepo;
   private final ObjectMapper objectMapper;
+  private final com.helpinminutes.api.payments.repo.LedgerEntryRepository ledgerEntries;
+  private final com.helpinminutes.api.payments.service.CommissionService commissions;
 
   public ReportService(
       TaskRepository taskRepo,
@@ -65,7 +67,7 @@ public class ReportService {
       HelperProfileRepository helperProfileRepo,
       RecurringTaskRepository recurringTaskRepo,
       AuditLogRepository auditLogRepo) {
-    this(taskRepo, paymentRepo, userRepo, helperProfileRepo, recurringTaskRepo, auditLogRepo, null, new ObjectMapper());
+    this(taskRepo, paymentRepo, userRepo, helperProfileRepo, recurringTaskRepo, auditLogRepo, null, new ObjectMapper(), null, null);
   }
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -77,7 +79,9 @@ public class ReportService {
       RecurringTaskRepository recurringTaskRepo,
       AuditLogRepository auditLogRepo,
       TaskAiReviewRepository aiReviewRepo,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      com.helpinminutes.api.payments.repo.LedgerEntryRepository ledgerEntries,
+      com.helpinminutes.api.payments.service.CommissionService commissions) {
     this.taskRepo = taskRepo;
     this.paymentRepo = paymentRepo;
     this.userRepo = userRepo;
@@ -86,6 +90,37 @@ public class ReportService {
     this.auditLogRepo = auditLogRepo;
     this.aiReviewRepo = aiReviewRepo;
     this.objectMapper = objectMapper;
+    this.ledgerEntries = ledgerEntries;
+    this.commissions = commissions;
+  }
+
+  /**
+   * Platform commission for a window.
+   *
+   * <p>Prefers what the ledger actually booked; that is the number the partners'
+   * balances were adjusted by, so revenue reporting and the ledger cannot
+   * disagree. Falls back to applying the current rate to GMV only when there is
+   * no ledger to read — which is what this used to do unconditionally, with the
+   * rate hardcoded as 0.15 in four places.
+   */
+  private long commissionFor(Instant start, Instant end, long gmvPaise) {
+    if (ledgerEntries != null) {
+      long booked = ledgerEntries.commissionBetween(start, end);
+      if (booked > 0) return booked;
+    }
+    return applyCurrentRate(gmvPaise);
+  }
+
+  /** The configured rate as a percentage, for windows with no GMV to derive one from. */
+  private double currentTakeRatePercent() {
+    int bps = commissions != null ? commissions.globalBps() : 1500;
+    return bps / 100.0;
+  }
+
+  private long applyCurrentRate(long gmvPaise) {
+    int bps = commissions != null ? commissions.globalBps() : 1500;
+    if (gmvPaise <= 0 || bps <= 0) return 0L;
+    return Math.multiplyExact(gmvPaise, (long) bps) / 10_000L;
   }
 
   @Transactional(readOnly = true)
@@ -108,9 +143,9 @@ public class ReportService {
         .mapToLong(t -> t.getBudgetPaise() != null ? t.getBudgetPaise() : 0L)
         .sum();
 
-    long totalCommission = (long) (totalGmv * 0.15); // 15% standard commission
+    long totalCommission = commissionFor(start, end, totalGmv);
     long netRevenue = totalCommission;
-    double takeRate = totalGmv == 0 ? 15.0 : ((double) totalCommission / totalGmv) * 100.0;
+    double takeRate = totalGmv == 0 ? currentTakeRatePercent() : ((double) totalCommission / totalGmv) * 100.0;
 
     long totalBookings = periodTasks.size();
     long completedBookings = periodTasks.stream().filter(t -> t.getStatus() == TaskStatus.COMPLETED).count();
@@ -156,7 +191,7 @@ public class ReportService {
           long canCount = list.stream().filter(t -> t.getStatus() == TaskStatus.CANCELLED).count();
           long gmv = list.stream().filter(t -> t.getStatus() == TaskStatus.COMPLETED)
               .mapToLong(t -> t.getBudgetPaise() != null ? t.getBudgetPaise() : 0L).sum();
-          return new DateTrendPoint(dateStr, bCount, cCount, canCount, gmv, (long)(gmv * 0.15));
+          return new DateTrendPoint(dateStr, bCount, cCount, canCount, gmv, applyCurrentRate(gmv));
         })
         .sorted(Comparator.comparing(DateTrendPoint::dateLabel))
         .toList();
@@ -268,9 +303,9 @@ public class ReportService {
         .filter(t -> t.getStatus() == TaskStatus.COMPLETED).toList();
 
     long gmv = tasks.stream().mapToLong(t -> t.getBudgetPaise() != null ? t.getBudgetPaise() : 0L).sum();
-    long commission = (long) (gmv * 0.15);
+    long commission = commissionFor(start, end, gmv);
     long netRev = commission;
-    double takeRate = gmv == 0 ? 15.0 : ((double) commission / gmv) * 100.0;
+    double takeRate = gmv == 0 ? currentTakeRatePercent() : ((double) commission / gmv) * 100.0;
     long abv = tasks.isEmpty() ? 0L : gmv / tasks.size();
 
     Map<String, Long> byMethod = Map.of(
@@ -283,7 +318,7 @@ public class ReportService {
     List<DateTrendPoint> trend = tasksByDate.entrySet().stream()
         .map(e -> {
           long dateGmv = e.getValue().stream().mapToLong(t -> t.getBudgetPaise() != null ? t.getBudgetPaise() : 0L).sum();
-          return new DateTrendPoint(e.getKey(), e.getValue().size(), e.getValue().size(), 0L, dateGmv, (long)(dateGmv * 0.15));
+          return new DateTrendPoint(e.getKey(), e.getValue().size(), e.getValue().size(), 0L, dateGmv, applyCurrentRate(dateGmv));
         })
         .sorted(Comparator.comparing(DateTrendPoint::dateLabel))
         .toList();
@@ -397,7 +432,7 @@ public class ReportService {
 
     Map<String, Long> methodMap = Map.of("RAZORPAY", (long)(totalPaid * 0.7), "UPI", (long)(totalPaid * 0.3));
 
-    return new SettlementReportResponse(totalPaid, pending, 15.0, methodMap, items);
+    return new SettlementReportResponse(totalPaid, pending, currentTakeRatePercent(), methodMap, items);
   }
 
   @Transactional(readOnly = true)

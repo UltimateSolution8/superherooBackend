@@ -78,7 +78,7 @@ class PaymentServiceTest {
             "test-access-secret-0123456789abcdef0123456789abcdef",
             "test-refresh-secret-0123456789abcdef0123456789abcdef",
             900, 3600),
-        new com.helpinminutes.api.config.AppProperties.Otp(300, false),
+        new com.helpinminutes.api.config.AppProperties.Otp(300),
         new com.helpinminutes.api.config.AppProperties.Matching(9, 3, 5, 120, 120),
         new com.helpinminutes.api.config.AppProperties.Realtime("him:rt:events", "", "", 500),
         new com.helpinminutes.api.config.AppProperties.Payments(true));

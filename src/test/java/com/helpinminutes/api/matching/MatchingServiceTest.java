@@ -67,7 +67,7 @@ class MatchingServiceTest {
             "test-access-secret-0123456789abcdef0123456789abcdef",
             "test-refresh-secret-0123456789abcdef0123456789abcdef",
             900, 3600),
-        new AppProperties.Otp(300, true),
+        new AppProperties.Otp(300),
         new AppProperties.Matching(9, 6, 8, 120, 45, WAVE_RADII, WAVE_FANOUTS, 15000, 2),
         new AppProperties.Realtime("him:rt:events", "", "", 500),
         new AppProperties.Payments(false));

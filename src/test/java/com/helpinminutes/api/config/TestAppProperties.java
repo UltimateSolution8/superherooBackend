@@ -19,7 +19,7 @@ public final class TestAppProperties {
             "test-refresh-secret-0123456789abcdef0123456789abcdef",
             900,
             3600),
-        new AppProperties.Otp(300, true),
+        new AppProperties.Otp(300),
         new AppProperties.Matching(9, 6, 8, 120, 45),
         new AppProperties.Realtime("him:rt:events", "", "", 500),
         new AppProperties.Payments(false));

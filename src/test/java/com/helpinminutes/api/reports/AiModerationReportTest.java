@@ -53,7 +53,9 @@ class AiModerationReportTest {
         recurringTaskRepo,
         auditLogRepo,
         aiReviewRepo,
-        objectMapper
+        objectMapper,
+        null,
+        null
     );
   }
 

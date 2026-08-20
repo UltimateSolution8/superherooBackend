@@ -30,13 +30,15 @@ public class MeController {
   private final AppProperties props;
   private final OtpService otpService;
   private final SupabaseStorageService storage;
+  private final com.helpinminutes.api.appversion.AppVersionService appVersions;
 
-  public MeController(UserRepository users, EmailVerificationService emailVerificationService, AppProperties props, OtpService otpService, SupabaseStorageService storage) {
+  public MeController(UserRepository users, EmailVerificationService emailVerificationService, AppProperties props, OtpService otpService, SupabaseStorageService storage, com.helpinminutes.api.appversion.AppVersionService appVersions) {
     this.users = users;
     this.emailVerificationService = emailVerificationService;
     this.props = props;
     this.otpService = otpService;
     this.storage = storage;
+    this.appVersions = appVersions;
   }
 
   @GetMapping("/me")
@@ -94,8 +96,8 @@ public class MeController {
     if (u.getEmail() == null || u.getEmail().isBlank()) {
       throw new BadRequestException("Email is not added");
     }
-    String otp = emailVerificationService.sendVerificationEmail(u.getEmail());
-    return new SendEmailOtpResponse(true, props.otp().returnOtpInResponse() ? otp : null);
+    emailVerificationService.sendVerificationEmail(u.getEmail());
+    return new SendEmailOtpResponse(true);
   }
 
   @PutMapping("/me/email/verify")
@@ -127,8 +129,8 @@ public class MeController {
         throw new BadRequestException("Phone number already in use");
       }
     });
-    String otp = otpService.startOtp(normalized, "sms");
-    return new SendPhoneOtpResponse(true, props.otp().returnOtpInResponse() ? otp : null);
+    otpService.startOtp(normalized, "sms");
+    return new SendPhoneOtpResponse(true);
   }
 
   @PutMapping("/me/phone/verify")
@@ -165,10 +167,21 @@ public class MeController {
   }
 
   private MeResponse response(UserEntity u) {
+    // The role maps one-to-one onto the app that is asking: only the partner app
+    // signs in a HELPER, only the mediator app a MEDIATOR.
+    String variant = switch (u.getRole()) {
+      case HELPER -> "helper";
+      case MEDIATOR -> "mediator";
+      default -> "buyer";
+    };
+    var versionPolicy = appVersions.policyFor(variant);
+
     return new MeResponse(
         u.getId(), u.getRole().name(), u.getPhone(), u.getEmail(), u.isEmailVerified(),
         u.getDisplayName(), u.isBulkCsvEnabled(), u.getDob(), u.getBloodGroup(), u.getGender(),
-        u.getProfileImageUrl(), u.getCreatedAt(), props.payments().onlineEnabled());
+        u.getProfileImageUrl(), u.getCreatedAt(), props.payments().onlineEnabled(),
+        props.payments().payoutsEnabled(),
+        versionPolicy.minimumVersion(), versionPolicy.latestVersion());
   }
 
   public record UpdateMeRequest(String displayName, String email, String dob, String bloodGroup, String gender) {}
@@ -188,9 +201,17 @@ public class MeController {
       java.time.Instant createdAt,
       // Additive: lets the app hide online checkout without shipping a build.
       // Older clients simply ignore the field.
-      boolean onlinePaymentsEnabled) {}
+      boolean onlinePaymentsEnabled,
+      // Same idea for partner withdrawals. The endpoint refuses regardless — this
+      // only decides whether the app shows a control that would be refused.
+      boolean payoutsEnabled,
+      // Additive again: lets a signed-in client learn the version policy without a
+      // second round trip. The gate itself is enforced by AppVersionGateFilter, and
+      // /api/v1/app/version remains the source a signed-out client uses.
+      String minimumAppVersion,
+      String latestAppVersion) {}
 
-  public record SendEmailOtpResponse(boolean success, String otp) {}
+  public record SendEmailOtpResponse(boolean success) {}
 
-  public record SendPhoneOtpResponse(boolean success, String otp) {}
+  public record SendPhoneOtpResponse(boolean success) {}
 }
