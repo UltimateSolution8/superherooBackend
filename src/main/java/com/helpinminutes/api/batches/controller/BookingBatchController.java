@@ -98,7 +98,10 @@ public class BookingBatchController {
   public List<BatchDtos.BatchSummaryResponse> mediatorAuditQueue(
       @AuthenticationPrincipal UserPrincipal principal,
       @RequestParam(required = false) String status) {
-    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+    if (principal.role() != UserRole.ADMIN
+        && principal.role() != UserRole.ADMIN_READONLY
+        && principal.role() != UserRole.KYC
+        && principal.role() != UserRole.SUPPORT) {
       throw new com.helpinminutes.api.errors.ForbiddenException("Admin only");
     }
     return service.listMediatorAuditQueue(status);

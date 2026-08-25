@@ -248,7 +248,8 @@ public class TaskController {
     boolean canSee = (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
         || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
         || activeOffer
-        || principal.role() == UserRole.ADMIN;
+        || principal.role() == UserRole.ADMIN
+        || principal.role() == UserRole.ADMIN_READONLY;
 
     if (!canSee) {
       throw new ForbiddenException("Not allowed");
@@ -265,7 +266,8 @@ public class TaskController {
     TaskEntity task = tasks.getTask(taskId);
     boolean canSee = (principal.role() == UserRole.BUYER && principal.userId().equals(task.getBuyerId()))
         || (principal.role() == UserRole.HELPER && principal.userId().equals(task.getAssignedHelperId()))
-        || principal.role() == UserRole.ADMIN;
+        || principal.role() == UserRole.ADMIN
+        || principal.role() == UserRole.ADMIN_READONLY;
     if (!canSee) {
       throw new ForbiddenException("Not allowed");
     }

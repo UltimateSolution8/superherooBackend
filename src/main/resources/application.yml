@@ -425,7 +425,7 @@ geo:
 
 resend:
   api-key: ${RESEND_API_KEY:}
-  from-email: ${RESEND_FROM_EMAIL:Superherooo <onboarding@resend.dev>}
+  from-email: ${RESEND_FROM_EMAIL:Superherooo <noreply@mail.superherooo.com>}
 
 mojoauth:
   api-key: ${MOJOAUTH_API_KEY:}

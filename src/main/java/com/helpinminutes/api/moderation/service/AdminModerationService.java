@@ -2,6 +2,7 @@ package com.helpinminutes.api.moderation.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helpinminutes.api.errors.BadRequestException;
 import com.helpinminutes.api.errors.NotFoundException;
 import com.helpinminutes.api.notifications.service.NotificationQueueService;
 import com.helpinminutes.api.moderation.dto.*;
@@ -14,6 +15,7 @@ import com.helpinminutes.api.tasks.repo.TaskAiReviewRepository;
 import com.helpinminutes.api.tasks.repo.TaskAuditLogRepository;
 import com.helpinminutes.api.tasks.repo.TaskRepository;
 import com.helpinminutes.api.users.model.UserEntity;
+import com.helpinminutes.api.users.model.UserRole;
 import com.helpinminutes.api.users.repo.UserRepository;
 import java.util.Collections;
 import java.util.List;
@@ -37,6 +39,8 @@ public class AdminModerationService {
   private final UserRepository userRepository;
   private final NotificationQueueService notificationQueue;
   private final ObjectMapper objectMapper;
+  private final com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles;
+  private final com.helpinminutes.api.realtime.RealtimePublisher realtime;
 
   public AdminModerationService(
       TaskRepository taskRepository,
@@ -45,12 +49,27 @@ public class AdminModerationService {
       UserRepository userRepository,
       NotificationQueueService notificationQueue,
       ObjectMapper objectMapper) {
+    this(taskRepository, aiReviewRepository, auditLogRepository, userRepository, notificationQueue, objectMapper, null, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public AdminModerationService(
+      TaskRepository taskRepository,
+      TaskAiReviewRepository aiReviewRepository,
+      TaskAuditLogRepository auditLogRepository,
+      UserRepository userRepository,
+      NotificationQueueService notificationQueue,
+      ObjectMapper objectMapper,
+      com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles,
+      com.helpinminutes.api.realtime.RealtimePublisher realtime) {
     this.taskRepository = taskRepository;
     this.aiReviewRepository = aiReviewRepository;
     this.auditLogRepository = auditLogRepository;
     this.userRepository = userRepository;
     this.notificationQueue = notificationQueue;
     this.objectMapper = objectMapper;
+    this.helperProfiles = helperProfiles;
+    this.realtime = realtime;
   }
 
   public Page<AdminModerationTaskDto> getModerationQueue(String statusFilter, Pageable pageable) {
@@ -264,6 +283,63 @@ public class AdminModerationService {
     return getModerationQueueItem(task);
   }
 
+  /**
+   * TEMP: MANUAL_MODERATION_MODE — Approve a task and assign it directly to a
+   * specific helper, bypassing the automatic matching engine.
+   *
+   * <p>Validates that the helper has passed KYC and is not currently on another
+   * active task. Sends the helper a task-offered push notification so they are
+   * aware of the direct assignment.
+   */
+  @Transactional
+  public AdminModerationTaskDto approveAndAssignTask(
+      UUID taskId, UUID helperId, String adminUsername, String remarks) {
+    TaskEntity task = taskRepository.findById(taskId)
+        .orElseThrow(() -> new NotFoundException("Task not found"));
+
+    UserEntity helper = userRepository.findById(helperId)
+        .orElseThrow(() -> new NotFoundException("Helper not found"));
+    if (helper.getRole() != UserRole.HELPER) {
+      throw new BadRequestException("Selected user is not a helper");
+    }
+    var helperProfile = helperProfiles.findById(helperId)
+        .orElseThrow(() -> new NotFoundException("Helper profile not found"));
+    if (helperProfile.getKycStatus() != com.helpinminutes.api.helpers.model.HelperKycStatus.APPROVED) {
+      throw new BadRequestException("Helper KYC is not approved");
+    }
+
+    task.setAssignedHelperId(helperId);
+    task.beginSearching(java.time.Instant.now()); // reset search clock
+    task.setStatus(TaskStatus.ASSIGNED);
+    task.setPaymentCollectionMode(PaymentCollectionMode.PAY_AFTER_SERVICE);
+    taskRepository.save(task);
+
+    TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
+    auditLog.setTaskId(taskId);
+    auditLog.setAction("ADMIN_APPROVED_AND_ASSIGNED");
+    auditLog.setPerformedBy("ADMIN:" + (adminUsername != null ? adminUsername : "support"));
+    auditLog.setRemarks("Approved and directly assigned to helper " + helperId
+        + ". Remarks: " + (remarks != null ? remarks : "N/A"));
+    auditLogRepository.save(auditLog);
+
+    if (realtime != null) {
+      realtime.publish(
+          "task_assigned",
+          java.util.Map.of(
+              "taskId", task.getId().toString(),
+              "buyerId", task.getBuyerId() != null ? task.getBuyerId().toString() : "",
+              "helperId", helperId.toString(),
+              "title", task.getTitle() != null ? task.getTitle() : "",
+              "status", TaskStatus.ASSIGNED.name()));
+    }
+
+    // Notify the helper they have been directly assigned a task.
+    notificationQueue.enqueueTaskOffered(java.util.List.of(helperId), task);
+
+    return getModerationQueueItem(task);
+  }
+  // END TEMP: MANUAL_MODERATION_MODE (approveAndAssignTask)
+
   private AdminModerationTaskDto getModerationQueueItem(TaskEntity task) {
     UserEntity buyer = userRepository.findById(task.getBuyerId()).orElse(null);
     TaskAiReviewEntity aiReview = aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(task.getId()).orElse(null);
@@ -298,4 +374,26 @@ public class AdminModerationService {
       return Collections.emptyList();
     }
   }
+
+  // TEMP: MANUAL_MODERATION_MODE — lightweight helper list for the assign dropdown
+  public java.util.List<java.util.Map<String, Object>> listApprovedHelpers() {
+    var approvedProfiles = helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(
+        com.helpinminutes.api.helpers.model.HelperKycStatus.APPROVED);
+    java.util.Set<UUID> helperIds = approvedProfiles.stream()
+        .map(p -> p.getUserId())
+        .collect(java.util.stream.Collectors.toSet());
+    java.util.Map<UUID, UserEntity> usersById = helperIds.isEmpty()
+        ? java.util.Map.of()
+        : userRepository.findAllById(helperIds).stream()
+            .collect(java.util.stream.Collectors.toMap(UserEntity::getId, u -> u));
+    return approvedProfiles.stream().map(p -> {
+      UserEntity u = usersById.get(p.getUserId());
+      java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+      m.put("helperId", p.getUserId().toString());
+      m.put("name", u != null ? u.getDisplayName() : "Unknown");
+      m.put("phone", u != null ? u.getPhone() : "");
+      return m;
+    }).toList();
+  }
+  // END TEMP: MANUAL_MODERATION_MODE
 }

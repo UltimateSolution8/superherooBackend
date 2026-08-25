@@ -78,134 +78,46 @@ class AiTaskModerationServiceTest {
         resultCache);
   }
 
-  // ─── the fast paths: no model call at all ─────────────────────────────────
+  // ─── TEMP: MANUAL_MODERATION_MODE tests ───────────────────────────────────
 
-  /**
-   * The cost fix. An ordinary errand must be approved locally. Every task used to go
-   * to the model, on the request thread, with a worst case around 16 seconds.
-   */
   @Test
-  void approvesAnOrdinaryErrandWithoutCallingTheModel() {
+  void routesOrdinaryErrandDirectlyToAdminReviewWithoutCallingTheModel() {
     TaskEntity task = pendingTask("Deliver groceries", "Buy milk, eggs and bread");
     when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
 
     service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
 
-    assertEquals(TaskStatus.SEARCHING, task.getStatus());
+    assertEquals(TaskStatus.ADMIN_REVIEW, task.getStatus());
     verify(llmClient, never()).evaluateTask(any());
-    // No verdict row either: there was no verdict to record.
     verify(aiReviewRepository, never()).save(any(TaskAiReviewEntity.class));
-    verify(matchingQueue).enqueueMatchingDispatch(task, true);
+    verify(matchingQueue, never()).enqueueMatchingDispatch(any(), anyBoolean());
+    verify(pushNotifications).notifyBuyerTaskUnderReview(task.getBuyerId(), task);
   }
 
   @Test
-  void doesNotCallTheModelForAHardPolicyMatch() {
+  void routesHardPolicyMatchesToAdminReviewInsteadOfAutoCancelling() {
     TaskEntity task = pendingTask("Party", "Get me some ganja for tonight");
     when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
 
     service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
 
-    // Rejected outright rather than parked in review: there is nothing for a
-    // moderator to weigh up, and the citizen should not be left waiting.
-    assertEquals(TaskStatus.CANCELLED, task.getStatus());
+    // In manual mode, policy matches are not auto-cancelled; they go to ADMIN_REVIEW for human decision
+    assertEquals(TaskStatus.ADMIN_REVIEW, task.getStatus());
     verify(llmClient, never()).evaluateTask(any());
     verify(matchingQueue, never()).enqueueMatchingDispatch(any(), anyBoolean());
-  }
-
-  /** The citizen must be told why, without being told which word tripped it. */
-  @Test
-  void aBlockedTaskCarriesAReadableCancelReason() {
-    TaskEntity task = pendingTask("Self defence", "Buy a pistol and ammunition");
-    when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
-
-    service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
-
-    assertEquals("SYSTEM", task.getCancelledByRole());
-    org.junit.jupiter.api.Assertions.assertNotNull(task.getCancelReason());
-    org.junit.jupiter.api.Assertions.assertFalse(
-        task.getCancelReason().toLowerCase().contains("pistol"),
-        "the reason must not echo the matched term back to the citizen");
-  }
-
-  // ─── the escalated minority ───────────────────────────────────────────────
-
-  @Test
-  void asksTheModelOnlyWhenTheTextIsAmbiguous() {
-    TaskEntity task = pendingTask("Pharmacy", "Buy cough syrup with low alcohol content");
-    when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
-    when(llmClient.evaluateTask(any(TaskModerationPayload.class))).thenReturn(approved());
-
-    service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
-
-    verify(llmClient).evaluateTask(any(TaskModerationPayload.class));
-    assertEquals(TaskStatus.SEARCHING, task.getStatus());
-    verify(aiReviewRepository).save(any(TaskAiReviewEntity.class));
-  }
-
-  @Test
-  void routesAnAmbiguousTaskTheModelDoubtsToAdminReview() {
-    TaskEntity task = pendingTask("Errand", "Bring me a bottle of whisky from the shop");
-    when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
-    when(llmClient.evaluateTask(any(TaskModerationPayload.class))).thenReturn(
-        new AIReviewResult("REVIEW", 95, 80, 40,
-            List.of("Alcohol delivery is licensed in Telangana"), List.of("EXCISE"), true,
-            "{}", "gemini-2.5-flash-lite", 150L));
-
-    service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
-
-    assertEquals(TaskStatus.ADMIN_REVIEW, task.getStatus());
-    verify(matchingQueue, never()).enqueueMatchingDispatch(any(), anyBoolean());
-    // The citizen used to get no signal at all that their booking was held.
     verify(pushNotifications).notifyBuyerTaskUnderReview(task.getBuyerId(), task);
   }
 
-  /** The model's opinion cannot overturn a hard policy match found locally. */
   @Test
-  void modelApprovalCannotOverrideAHardPolicyMatch() {
-    TaskEntity task = pendingTask("Documents", "Get me a fake Aadhaar card");
+  void routesAmbiguousTasksToAdminReviewWithoutCallingModel() {
+    TaskEntity task = pendingTask("Pharmacy", "Buy cough syrup with low alcohol content");
     when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
 
     service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
 
-    assertEquals(TaskStatus.CANCELLED, task.getStatus());
     verify(llmClient, never()).evaluateTask(any());
-  }
-
-  // ─── caching ──────────────────────────────────────────────────────────────
-
-  /**
-   * Identical text was re-billed on every booking, every bulk-row retry, and again
-   * on prepaid activation, which moderates the same task twice.
-   */
-  @Test
-  void reusesAPreviousVerdictForIdenticalText() {
-    when(llmClient.evaluateTask(any(TaskModerationPayload.class))).thenReturn(approved());
-
-    for (int i = 0; i < 3; i++) {
-      TaskEntity task = pendingTask("Pharmacy", "Buy cough syrup with low alcohol content");
-      when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
-      service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
-    }
-
-    verify(llmClient, times(1)).evaluateTask(any(TaskModerationPayload.class));
-  }
-
-  /** A synthetic outage verdict must not be pinned in the cache for a month. */
-  @Test
-  void doesNotCacheAFallbackVerdict() {
-    AIReviewResult fallback = new AIReviewResult(
-        "APPROVED", 85, 10, 80,
-        List.of("providers unreachable"), Collections.emptyList(), false,
-        "{}", "fallback-fail-safe", 0L);
-    when(llmClient.evaluateTask(any(TaskModerationPayload.class))).thenReturn(fallback);
-
-    for (int i = 0; i < 2; i++) {
-      TaskEntity task = pendingTask("Pharmacy", "Buy cough syrup with low alcohol content");
-      when(taskRepository.findById(task.getId())).thenReturn(Optional.of(task));
-      service.handleTaskCreatedEvent(new TaskCreatedEvent(task.getId(), true));
-    }
-
-    verify(llmClient, times(2)).evaluateTask(any(TaskModerationPayload.class));
+    assertEquals(TaskStatus.ADMIN_REVIEW, task.getStatus());
+    verify(pushNotifications).notifyBuyerTaskUnderReview(task.getBuyerId(), task);
   }
 
   @Test

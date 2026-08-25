@@ -84,13 +84,16 @@ class AiModerationQueueIntegrationTest {
         new com.helpinminutes.api.moderation.service.ModerationResultCache(null, objectMapper)
     );
 
+    com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles = mock(com.helpinminutes.api.helpers.repo.HelperProfileRepository.class);
     adminModerationService = new AdminModerationService(
         taskRepository,
         aiReviewRepository,
         auditLogRepository,
         userRepository,
         matchingQueue,
-        objectMapper
+        objectMapper,
+        helperProfiles,
+        realtime
     );
   }
 
@@ -99,6 +102,7 @@ class AiModerationQueueIntegrationTest {
     // 1. Create a task with a phone number leak
     UUID taskId = UUID.randomUUID();
     UUID buyerId = UUID.randomUUID();
+    UUID helperId = UUID.randomUUID();
 
     TaskEntity task = new TaskEntity();
     task.setId(taskId);
@@ -114,43 +118,32 @@ class AiModerationQueueIntegrationTest {
     buyer.setPhone("+919876543210");
     buyer.setEmail("john@example.com");
 
+    UserEntity helper = new UserEntity();
+    helper.setId(helperId);
+    helper.setDisplayName("Super Helper");
+    helper.setPhone("+919876543211");
+    helper.setRole(com.helpinminutes.api.users.model.UserRole.HELPER);
+
     when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
     when(userRepository.findById(buyerId)).thenReturn(Optional.of(buyer));
+    when(userRepository.findById(helperId)).thenReturn(Optional.of(helper));
     // The moderation queue batches buyer lookups across the page.
     when(userRepository.findAllById(anyIterable())).thenReturn(List.of(buyer));
-    AIReviewResult aiResult = new AIReviewResult(
-        "REVIEW", 70, 85, 45,
-        List.of("Phone number leak detected"),
-        List.of("CONTACT_LEAK"),
-        true,
-        "{\"status\":\"REVIEW\",\"flags\":[\"CONTACT_LEAK\"]}",
-        "gemini-2.5-flash-lite",
-        115L
-    );
 
-    when(llmClient.evaluateTask(any(TaskModerationPayload.class))).thenReturn(aiResult);
-
-    // 2. Fire TaskCreatedEvent
+    // 2. Fire TaskCreatedEvent — routes directly to ADMIN_REVIEW in manual mode
     TaskCreatedEvent event = new TaskCreatedEvent(taskId, true);
     moderationService.handleTaskCreatedEvent(event);
 
-    // 3. Verify task status updated to ADMIN_REVIEW
+    // 3. Verify task status updated to ADMIN_REVIEW without calling LLM
     verify(taskRepository).save(task);
     assertEquals(TaskStatus.ADMIN_REVIEW, task.getStatus());
+    verify(llmClient, never()).evaluateTask(any());
 
-    // 4. Capture saved TaskAiReviewEntity
-    ArgumentCaptor<TaskAiReviewEntity> reviewCaptor = ArgumentCaptor.forClass(TaskAiReviewEntity.class);
-    verify(aiReviewRepository).save(reviewCaptor.capture());
-    TaskAiReviewEntity savedReview = reviewCaptor.getValue();
-    assertEquals(taskId, savedReview.getTaskId());
-    assertEquals("REVIEW", savedReview.getStatus());
-    assertEquals(85, savedReview.getRiskScore());
-
-    // 5. Query Admin Moderation Queue
+    // 4. Query Admin Moderation Queue
     when(taskRepository.findByStatus(eq(TaskStatus.ADMIN_REVIEW), any())).thenReturn(new PageImpl<>(List.of(task)));
-    when(aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(taskId)).thenReturn(Optional.of(savedReview));
+    when(aiReviewRepository.findTopByTaskIdOrderByCreatedAtDesc(taskId)).thenReturn(Optional.empty());
     when(aiReviewRepository.findByTaskIdInOrderByCreatedAtDesc(anyCollection()))
-        .thenReturn(List.of(savedReview));
+        .thenReturn(List.of());
 
     Page<AdminModerationTaskDto> queuePage = adminModerationService.getModerationQueue("ADMIN_REVIEW", PageRequest.of(0, 10));
 
@@ -162,21 +155,17 @@ class AiModerationQueueIntegrationTest {
     assertEquals("John Doe", item.customerName());
     assertEquals("+919876543210", item.customerPhone());
     assertEquals("ADMIN_REVIEW", item.status());
-    assertEquals(85, item.riskScore());
-    assertEquals("gemini-2.5-flash-lite", item.modelUsed());
-    assertTrue(item.flags().contains("CONTACT_LEAK"));
 
-    // 6. Test Admin Task Detail Retrieval
+    // 5. Test Admin Task Detail Retrieval
     AdminModerationDetailDto detail = adminModerationService.getTaskDetail(taskId);
     assertNotNull(detail);
     assertEquals(taskId, detail.taskId());
     assertEquals("John Doe", detail.customerName());
-    assertEquals(85, detail.riskScore());
-    assertEquals("gemini-2.5-flash-lite", detail.aiModel());
 
-    // 7. Test Admin Approval Action
-    adminModerationService.approveTask(taskId, "support_admin", "Cleaned up by admin");
+    // 6. Test Admin Approval Action -> SEARCHING
+    adminModerationService.approveTask(taskId, "support_admin", "Approved by customer care");
     assertEquals(TaskStatus.SEARCHING, task.getStatus());
     verify(matchingQueue).enqueueMatchingDispatch(task);
   }
 }
+

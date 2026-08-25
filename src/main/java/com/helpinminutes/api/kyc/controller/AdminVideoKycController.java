@@ -36,7 +36,10 @@ public class AdminVideoKycController {
     }
 
     private static void requireAdminConsole(UserPrincipal principal) {
-        if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+        if (principal.role() != UserRole.ADMIN
+                && principal.role() != UserRole.ADMIN_READONLY
+                && principal.role() != UserRole.KYC
+                && principal.role() != UserRole.SUPPORT) {
             throw new ForbiddenException("Not an admin");
         }
     }

@@ -204,4 +204,88 @@ class AdminModerationServiceTest {
     verify(matchingQueue).enqueueMatchingDispatch(task);
     assertNotNull(result);
   }
+
+  @Test
+  void approveAndAssignTaskAssignsDirectlyToHelperAndNotifies() {
+    UUID taskId = UUID.randomUUID();
+    UUID buyerId = UUID.randomUUID();
+    UUID helperId = UUID.randomUUID();
+    TaskEntity task = new TaskEntity();
+    task.setId(taskId);
+    task.setBuyerId(buyerId);
+    task.setTitle("Direct assign task");
+    task.setStatus(TaskStatus.ADMIN_REVIEW);
+
+    UserEntity helper = new UserEntity();
+    helper.setId(helperId);
+    helper.setRole(com.helpinminutes.api.users.model.UserRole.HELPER);
+
+    com.helpinminutes.api.helpers.model.HelperProfileEntity profile = new com.helpinminutes.api.helpers.model.HelperProfileEntity();
+    profile.setUserId(helperId);
+    profile.setKycStatus(com.helpinminutes.api.helpers.model.HelperKycStatus.APPROVED);
+
+    com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles = mock(com.helpinminutes.api.helpers.repo.HelperProfileRepository.class);
+    com.helpinminutes.api.realtime.RealtimePublisher realtime = mock(com.helpinminutes.api.realtime.RealtimePublisher.class);
+
+    AdminModerationService serviceWithHelpers = new AdminModerationService(
+        taskRepository,
+        aiReviewRepository,
+        auditLogRepository,
+        userRepository,
+        matchingQueue,
+        objectMapper,
+        helperProfiles,
+        realtime
+    );
+
+    when(taskRepository.findById(taskId)).thenReturn(Optional.of(task));
+    when(userRepository.findById(helperId)).thenReturn(Optional.of(helper));
+    when(helperProfiles.findById(helperId)).thenReturn(Optional.of(profile));
+
+    AdminModerationTaskDto result = serviceWithHelpers.approveAndAssignTask(
+        taskId, helperId, "admin_user", "Assigned directly to helper"
+    );
+
+    verify(taskRepository).save(task);
+    assertEquals(TaskStatus.ASSIGNED, task.getStatus());
+    assertEquals(helperId, task.getAssignedHelperId());
+    verify(matchingQueue).enqueueTaskOffered(List.of(helperId), task);
+    verify(realtime).publish(eq("task_assigned"), anyMap());
+    assertNotNull(result);
+  }
+
+  @Test
+  void listApprovedHelpersReturnsOnlyKycApprovedHelpers() {
+    UUID helperId = UUID.randomUUID();
+    com.helpinminutes.api.helpers.model.HelperProfileEntity profile = new com.helpinminutes.api.helpers.model.HelperProfileEntity();
+    profile.setUserId(helperId);
+    profile.setKycStatus(com.helpinminutes.api.helpers.model.HelperKycStatus.APPROVED);
+
+    UserEntity user = new UserEntity();
+    user.setId(helperId);
+    user.setDisplayName("Approved Hero");
+    user.setPhone("+919999988888");
+
+    com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles = mock(com.helpinminutes.api.helpers.repo.HelperProfileRepository.class);
+    when(helperProfiles.findAllByKycStatusOrderByCreatedAtAsc(com.helpinminutes.api.helpers.model.HelperKycStatus.APPROVED))
+        .thenReturn(List.of(profile));
+    when(userRepository.findAllById(anyCollection())).thenReturn(List.of(user));
+
+    AdminModerationService serviceWithHelpers = new AdminModerationService(
+        taskRepository,
+        aiReviewRepository,
+        auditLogRepository,
+        userRepository,
+        matchingQueue,
+        objectMapper,
+        helperProfiles,
+        mock(com.helpinminutes.api.realtime.RealtimePublisher.class)
+    );
+
+    List<java.util.Map<String, Object>> helpers = serviceWithHelpers.listApprovedHelpers();
+    assertEquals(1, helpers.size());
+    assertEquals(helperId.toString(), helpers.get(0).get("helperId"));
+    assertEquals("Approved Hero", helpers.get(0).get("name"));
+    assertEquals("+919999988888", helpers.get(0).get("phone"));
+  }
 }

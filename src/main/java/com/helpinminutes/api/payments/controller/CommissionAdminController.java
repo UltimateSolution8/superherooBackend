@@ -36,7 +36,7 @@ public class CommissionAdminController {
 
   @GetMapping
   public CommissionView current(@AuthenticationPrincipal UserPrincipal principal) {
-    requireFullAdmin(principal);
+    requireAdminOrReadOnly(principal);
     return new CommissionView(
         commissions.globalBps(), commissions.currentSettings().stream().map(RateView::of).toList());
   }
@@ -52,6 +52,12 @@ public class CommissionAdminController {
             request.commissionBps(),
             principal.userId(),
             request.note()));
+  }
+
+  private static void requireAdminOrReadOnly(UserPrincipal principal) {
+    if (principal == null || (principal.role() != UserRole.ADMIN && principal.role() != UserRole.ADMIN_READONLY)) {
+      throw new ForbiddenException("Admin only");
+    }
   }
 
   private static void requireFullAdmin(UserPrincipal principal) {

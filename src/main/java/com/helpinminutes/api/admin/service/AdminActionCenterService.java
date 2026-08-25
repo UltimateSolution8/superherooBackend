@@ -33,14 +33,14 @@ public class AdminActionCenterService {
   public AdminActionCenterResponse get(UserRole role) {
     List<AdminActionCenterResponse.ActionItem> items = new ArrayList<>();
 
-    if (role == UserRole.ADMIN || role == UserRole.KYC) {
+    if (role == UserRole.ADMIN || role == UserRole.ADMIN_READONLY || role == UserRole.KYC) {
       long count = helperProfiles.countByKycStatus(HelperKycStatus.PENDING);
       add(items, count, "KYC_REVIEW", "KYC reviews pending",
           count == 1 ? "1 partner is waiting for KYC review." : count + " partners are waiting for KYC review.",
           "/helpers/pending", count > 0 ? "HIGH" : "INFO");
     }
 
-    if (role == UserRole.ADMIN) {
+    if (role == UserRole.ADMIN || role == UserRole.ADMIN_READONLY) {
       long count = bookingBatches.countByStatus(BookingBatchStatus.PENDING_AUDIT)
           + bookingBatches.countByStatus(BookingBatchStatus.ON_HOLD);
       add(items, count, "MEDIATOR_APPROVAL", "Bulk requests need approval",
@@ -48,7 +48,7 @@ public class AdminActionCenterService {
           "/bulk-requests", count > 0 ? "HIGH" : "INFO");
     }
 
-    if (role == UserRole.ADMIN || role == UserRole.SUPPORT) {
+    if (role == UserRole.ADMIN || role == UserRole.ADMIN_READONLY || role == UserRole.SUPPORT) {
       long count = supportTickets.countByStatus(SupportTicketStatus.IN_PROGRESS);
       add(items, count, "SUPPORT_HANDOFF", "Support conversations need attention",
           count == 1 ? "1 conversation is waiting for human support." : count + " conversations are waiting for human support.",

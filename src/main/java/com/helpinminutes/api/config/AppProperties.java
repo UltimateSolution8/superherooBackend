@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.validation.annotation.Validated;
 
 @Validated
@@ -20,11 +21,16 @@ public record AppProperties(
     Payments payments,
     AppVersions appVersions
 ) {
-  public AppProperties {
-    // Constructor-bound nested records may be passed as null when an older
-    // deployment environment omits the whole group. Matching has safe,
-    // documented operational defaults, so boot with those instead of taking the
-    // entire API offline. Explicitly configured values still bind normally.
+  @ConstructorBinding
+  public AppProperties(
+      String env,
+      Jwt jwt,
+      Otp otp,
+      Matching matching,
+      Realtime realtime,
+      Payments payments,
+      AppVersions appVersions
+  ) {
     if (matching == null) {
       matching = new Matching(9, 6, 8, 120, 45);
     }
@@ -37,6 +43,13 @@ public record AppProperties(
     if (appVersions == null) {
       appVersions = AppVersions.unconfigured();
     }
+    this.env = env;
+    this.jwt = jwt;
+    this.otp = otp;
+    this.matching = matching;
+    this.realtime = realtime;
+    this.payments = payments;
+    this.appVersions = appVersions;
   }
 
   /**

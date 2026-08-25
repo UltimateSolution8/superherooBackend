@@ -124,56 +124,43 @@ public class AiTaskModerationService {
    * model, on the request thread, with a worst case of ~16s (4s connect + 8s read,
    * twice) against a documented p95 of 450ms.
    */
+  // ─── TEMP: MANUAL_MODERATION_MODE ────────────────────────────────────────
+  // AI moderation is temporarily disabled. Every task goes directly to
+  // ADMIN_REVIEW for manual customer care review regardless of content.
+  // To revert to the AI flow, restore the original moderateTaskSynchronously
+  // body (search: ORIGINAL_AI_FLOW_PRESERVED at the bottom of this file).
+  // ─────────────────────────────────────────────────────────────────────────
   @Transactional
   public TaskStatus moderateTaskSynchronously(TaskEntity task) {
     UUID taskId = task.getId();
     Timer.Sample timerSample = Timer.start(meterRegistry);
 
     try {
+      // TEMP: MANUAL_MODERATION_MODE — Skip all AI/LLM processing.
+      // Even hard-policy-blocked content is sent to ADMIN_REVIEW instead of
+      // auto-cancelling, so customer care can make the final call.
+      // Run the local pre-check only for audit/logging — verdict is not acted on.
       var local = decisionEngine.runLocalPreCheck(task.getTitle(), task.getDescription());
-
-      // A hard policy match needs no model and no human. Rejecting it here also
-      // keeps the admin queue for genuinely ambiguous work.
-      if (local.isBlocked()) {
-        meterRegistry.counter("ai.review.blocked").increment();
-        return rejectByPolicy(task, local);
+      if (!local.reasons().isEmpty()) {
+        log.info("Task {} local pre-check flags (manual mode, not auto-acting): {}",
+            taskId, local.reasons());
       }
 
-      // Locally clean: approve without spending a model call. This is the path most
-      // household errands take, and it must not depend on a provider being up.
-      if (local.verdict() == com.helpinminutes.api.tasks.service.TaskModerationService.Verdict.CLEAN) {
-        meterRegistry.counter("ai.review.auto.clean").increment();
-        return approve(task, "LOCAL_POLICY", "No policy-sensitive terms present");
-      }
-
-      AIReviewResult aiResult = evaluateWithCache(task, local.contextTerms());
-      TaskStatus finalStatus = decisionEngine.determineStatus(aiResult, local);
-      persistReview(taskId, aiResult, local);
-
-      if (finalStatus == TaskStatus.ADMIN_REJECTED) {
-        meterRegistry.counter("ai.review.blocked").increment();
-        return rejectByPolicy(task, local);
-      }
-      if (finalStatus == TaskStatus.AI_APPROVED) {
-        meterRegistry.counter("ai.review.approved").increment();
-        return approve(task, "AI_AGENT:" + aiResult.modelUsed(),
-            "Auto-approved with confidence " + aiResult.confidence() + "%");
-      }
       meterRegistry.counter("ai.review.reviewed").increment();
-      return sendToAdminReview(task, aiResult, local);
+      return sendToManualReview(task, local);
+
     } catch (Exception e) {
-      log.error("Error during synchronous AI moderation for task {}", taskId, e);
+      log.error("Error during manual moderation routing for task {}", taskId, e);
       meterRegistry.counter("ai.review.failed").increment();
 
-      // Safe fallback to ADMIN_REVIEW
       task.setStatus(TaskStatus.ADMIN_REVIEW);
       taskRepository.save(task);
 
       TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
       auditLog.setTaskId(taskId);
-      auditLog.setAction("AI_FAILED");
+      auditLog.setAction("MANUAL_REVIEW_ROUTING_FAILED");
       auditLog.setPerformedBy("SYSTEM");
-      auditLog.setRemarks("AI Moderation error occurred, falling back to manual admin review: " + e.getMessage());
+      auditLog.setRemarks("Error routing to manual review, task held in ADMIN_REVIEW: " + e.getMessage());
       auditLogRepository.save(auditLog);
 
       return TaskStatus.ADMIN_REVIEW;
@@ -181,6 +168,7 @@ public class AiTaskModerationService {
       timerSample.stop(meterRegistry.timer("ai.review.duration"));
     }
   }
+  // ─── END TEMP: MANUAL_MODERATION_MODE ────────────────────────────────────
 
   // ─── outcomes ─────────────────────────────────────────────────────────────
 
@@ -262,6 +250,38 @@ public class AiTaskModerationService {
     }
     return TaskStatus.ADMIN_REVIEW;
   }
+
+  // TEMP: MANUAL_MODERATION_MODE — routes every incoming task to ADMIN_REVIEW
+  // for manual customer care review. Fires the same realtime and push signals
+  // as the AI-escalation path so the admin panel real-time feed still works.
+  private TaskStatus sendToManualReview(
+      TaskEntity task,
+      com.helpinminutes.api.tasks.service.TaskModerationService.ScreeningResult local) {
+    task.setStatus(TaskStatus.ADMIN_REVIEW);
+    taskRepository.save(task);
+
+    String flagsSummary = local.reasons().isEmpty() ? "none" : String.join(", ", local.reasons());
+    TaskAuditLogEntity auditLog = new TaskAuditLogEntity();
+    auditLog.setTaskId(task.getId());
+    auditLog.setAction("SENT_TO_MANUAL_REVIEW");
+    auditLog.setPerformedBy("SYSTEM:MANUAL_MODE");
+    auditLog.setRemarks("Manual moderation mode active. Local pre-check flags: " + flagsSummary);
+    auditLogRepository.save(auditLog);
+
+    realtime.publish(
+        "admin_moderation_required",
+        java.util.Map.of(
+            "taskId", task.getId().toString(),
+            "riskScore", 0,
+            "flags", local.reasons()));
+    try {
+      pushNotifications.notifyBuyerTaskUnderReview(task.getBuyerId(), task);
+    } catch (Exception ignored) {
+      // Never let a push failure change the moderation outcome.
+    }
+    return TaskStatus.ADMIN_REVIEW;
+  }
+  // END TEMP: MANUAL_MODERATION_MODE
 
   // ─── model call ───────────────────────────────────────────────────────────
 

@@ -85,8 +85,19 @@ public class AdminController {
   }
 
   private static void requireAdmin(UserPrincipal principal) {
-    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+    if (principal.role() != UserRole.ADMIN
+        && principal.role() != UserRole.ADMIN_READONLY
+        && principal.role() != UserRole.KYC
+        && principal.role() != UserRole.SUPPORT) {
       throw new ForbiddenException("Admin only");
+    }
+  }
+
+  private static void requireWritableAdmin(UserPrincipal principal) {
+    if (principal.role() != UserRole.ADMIN
+        && principal.role() != UserRole.KYC
+        && principal.role() != UserRole.SUPPORT) {
+      throw new ForbiddenException("Operational admin only");
     }
   }
 
@@ -110,13 +121,13 @@ public class AdminController {
 
   @PostMapping("/helpers/{helperId}/approve")
   public void approve(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID helperId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.approveHelper(helperId);
   }
 
   @PostMapping("/helpers/{helperId}/verify-kyc")
   public void verifyKyc(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID helperId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.verifyHelperKyc(helperId);
   }
 
@@ -125,7 +136,7 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID helperId,
       @Valid @RequestBody RejectHelperRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.rejectHelper(helperId, req.reason());
   }
 
@@ -133,7 +144,7 @@ public class AdminController {
   public void approvePublicPartnerKyc(
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID submissionId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.approvePublicPartnerKyc(submissionId, principal.userId());
   }
 
@@ -142,13 +153,13 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID submissionId,
       @Valid @RequestBody RejectHelperRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.rejectPublicPartnerKyc(submissionId, principal.userId(), req.reason());
   }
 
   @PostMapping("/helpers/{helperId}/reopen-kyc")
   public void reopenKyc(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID helperId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.reopenHelperKyc(helperId);
   }
 
@@ -156,7 +167,7 @@ public class AdminController {
   public AdminBulkOperationResponse bulkPendingKycAction(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkHelperKycActionRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.bulkHelperKycAction(req.helperIds(), req.action(), req.reason());
   }
 
@@ -170,7 +181,7 @@ public class AdminController {
   public AdminManagedUserResponse createHelper(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminCreateUserRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.createUser(UserRole.HELPER, req);
   }
 
@@ -179,7 +190,7 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID helperId,
       @Valid @RequestBody AdminUpdateUserRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.updateUser(helperId, UserRole.HELPER, req);
   }
 
@@ -187,13 +198,13 @@ public class AdminController {
   public AdminBulkOperationResponse bulkUpdateHelpers(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkUserUpdateRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.bulkUpdateUsers(UserRole.HELPER, req.userIds(), req.status());
   }
 
   @PostMapping("/helpers/{helperId}/delete")
   public void deleteHelper(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID helperId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.deleteUser(helperId, UserRole.HELPER);
   }
 
@@ -207,7 +218,7 @@ public class AdminController {
   public AdminManagedUserResponse createBuyer(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminCreateUserRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.createUser(UserRole.BUYER, req);
   }
 
@@ -216,7 +227,7 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID buyerId,
       @Valid @RequestBody AdminUpdateUserRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.updateUser(buyerId, UserRole.BUYER, req);
   }
 
@@ -224,7 +235,7 @@ public class AdminController {
   public AdminBulkOperationResponse bulkUpdateBuyers(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkUserUpdateRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.bulkUpdateUsers(UserRole.BUYER, req.userIds(), req.status());
   }
 
@@ -232,19 +243,19 @@ public class AdminController {
   public AdminBulkOperationResponse bulkUpdateBuyerCsvAccess(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkBuyerCsvAccessRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return admin.bulkSetBuyerCsvAccess(req.userIds(), Boolean.TRUE.equals(req.enabled()));
   }
 
   @PostMapping("/buyers/{buyerId}/delete")
   public void deleteBuyer(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID buyerId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     admin.deleteUser(buyerId, UserRole.BUYER);
   }
 
   @GetMapping("/mediators")
   public List<AdminManagedUserResponse> listMediators(@AuthenticationPrincipal UserPrincipal principal) {
-    requireFullAdmin(principal);
+    requireAdmin(principal);
     return admin.listUsersByRole(UserRole.MEDIATOR);
   }
 
@@ -306,7 +317,7 @@ public class AdminController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID taskId,
       @Valid @RequestBody UpdateTaskStatusRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     // Completing a task releases the partner's earning, so it needs full admin
     // rather than the SUPPORT/KYC roles requireAdmin also admits.
     if (req.status() == com.helpinminutes.api.tasks.model.TaskStatus.COMPLETED) {
@@ -319,7 +330,7 @@ public class AdminController {
   public AdminBulkOperationResponse bulkUpdateTaskStatus(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminBulkTaskStatusRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     if (req.status() == com.helpinminutes.api.tasks.model.TaskStatus.COMPLETED) {
       requireFullAdmin(principal);
     }

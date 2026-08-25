@@ -34,8 +34,17 @@ public class AdminSupportController {
   }
 
   private static void requireAdmin(UserPrincipal principal) {
-    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+    if (principal.role() != UserRole.ADMIN
+        && principal.role() != UserRole.ADMIN_READONLY
+        && principal.role() != UserRole.KYC
+        && principal.role() != UserRole.SUPPORT) {
       throw new ForbiddenException("Admin only");
+    }
+  }
+
+  private static void requireWritableAdmin(UserPrincipal principal) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new ForbiddenException("Operational staff only");
     }
   }
 
@@ -60,7 +69,7 @@ public class AdminSupportController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID ticketId,
       @Valid @RequestBody AdminAssignTicketRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     support.adminAssign(ticketId, req);
   }
 
@@ -69,7 +78,7 @@ public class AdminSupportController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID ticketId,
       @Valid @RequestBody AdminUpdateTicketStatusRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     support.adminUpdateStatus(ticketId, req);
   }
 
@@ -78,7 +87,7 @@ public class AdminSupportController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID ticketId,
       @Valid @RequestBody AddMessageRequest req) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return support.adminAddMessage(principal.userId(), ticketId, req);
   }
 
@@ -86,7 +95,7 @@ public class AdminSupportController {
   public AiDraftResponse aiDraft(
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID ticketId) {
-    requireAdmin(principal);
+    requireWritableAdmin(principal);
     return support.adminAiDraft(ticketId);
   }
 }

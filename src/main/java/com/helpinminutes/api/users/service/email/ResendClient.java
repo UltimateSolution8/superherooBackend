@@ -27,10 +27,10 @@ public class ResendClient {
   public ResendClient(
       ObjectMapper mapper,
       @Value("${resend.api-key:}") String apiKey,
-      @Value("${resend.from-email:Superherooo <onboarding@resend.dev>}") String fromEmail) {
+      @Value("${resend.from-email:Superherooo <noreply@mail.superherooo.com>}") String fromEmail) {
     this.mapper = mapper;
     this.apiKey = apiKey == null ? "" : apiKey.trim();
-    this.fromEmail = fromEmail == null || fromEmail.isBlank() ? "Superherooo <onboarding@resend.dev>" : fromEmail.trim();
+    this.fromEmail = fromEmail == null || fromEmail.isBlank() ? "Superherooo <noreply@mail.superherooo.com>" : fromEmail.trim();
     this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
   }
 

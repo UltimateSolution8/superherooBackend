@@ -47,7 +47,7 @@ public class AdminLearningController {
   public TrainingMaterialResponse createMaterial(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminUpsertTrainingMaterialRequest req) {
-    onlyAdmin(principal);
+    onlyWritableAdmin(principal);
     return learning.createMaterial(principal.userId(), req);
   }
 
@@ -55,7 +55,7 @@ public class AdminLearningController {
   public AdminLearningAssetUploadResponse uploadMaterialFile(
       @AuthenticationPrincipal UserPrincipal principal,
       @RequestParam("file") MultipartFile file) {
-    onlyAdmin(principal);
+    onlyWritableAdmin(principal);
     return learning.uploadMaterialAsset(principal.userId(), file);
   }
 
@@ -64,7 +64,7 @@ public class AdminLearningController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID materialId,
       @Valid @RequestBody AdminUpsertTrainingMaterialRequest req) {
-    onlyAdmin(principal);
+    onlyWritableAdmin(principal);
     return learning.updateMaterial(materialId, req);
   }
 
@@ -87,7 +87,7 @@ public class AdminLearningController {
   public LearningAssessmentResponse createAssessment(
       @AuthenticationPrincipal UserPrincipal principal,
       @Valid @RequestBody AdminUpsertAssessmentRequest req) {
-    onlyAdmin(principal);
+    onlyWritableAdmin(principal);
     return learning.createAssessment(principal.userId(), req);
   }
 
@@ -96,7 +96,7 @@ public class AdminLearningController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID assessmentId,
       @Valid @RequestBody AdminUpsertAssessmentRequest req) {
-    onlyAdmin(principal);
+    onlyWritableAdmin(principal);
     return learning.updateAssessment(assessmentId, req);
   }
 
@@ -121,7 +121,7 @@ public class AdminLearningController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID assessmentId,
       @Valid @RequestBody AdminAssessmentAssignmentRequest req) {
-    onlyAdmin(principal);
+    onlyWritableAdmin(principal);
     return learning.assignAssessment(
         principal.userId(),
         assessmentId,
@@ -130,8 +130,17 @@ public class AdminLearningController {
   }
 
   private void onlyAdmin(UserPrincipal principal) {
-    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+    if (principal.role() != UserRole.ADMIN
+        && principal.role() != UserRole.ADMIN_READONLY
+        && principal.role() != UserRole.KYC
+        && principal.role() != UserRole.SUPPORT) {
       throw new ForbiddenException("Admin only");
+    }
+  }
+
+  private void onlyWritableAdmin(UserPrincipal principal) {
+    if (principal.role() != UserRole.ADMIN && principal.role() != UserRole.KYC && principal.role() != UserRole.SUPPORT) {
+      throw new ForbiddenException("Operational staff only");
     }
   }
 }

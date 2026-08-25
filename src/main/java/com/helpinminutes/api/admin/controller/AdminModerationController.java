@@ -22,8 +22,14 @@ public class AdminModerationController {
   }
 
   private void checkAdmin(UserPrincipal principal) {
-    if (principal == null || principal.role() != UserRole.ADMIN) {
+    if (principal == null || (principal.role() != UserRole.ADMIN && principal.role() != UserRole.ADMIN_READONLY)) {
       throw new ForbiddenException("Admin access required");
+    }
+  }
+
+  private void checkFullAdmin(UserPrincipal principal) {
+    if (principal == null || principal.role() != UserRole.ADMIN) {
+      throw new ForbiddenException("Super admin access required");
     }
   }
 
@@ -50,7 +56,7 @@ public class AdminModerationController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID id,
       @RequestBody(required = false) AdminReviewDecisionRequest request) {
-    checkAdmin(principal);
+    checkFullAdmin(principal);
     String remarks = request != null ? request.remarks() : "Approved by Admin";
     return moderationService.approveTask(id, principal.userId().toString(), remarks);
   }
@@ -60,7 +66,7 @@ public class AdminModerationController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID id,
       @RequestBody(required = false) AdminReviewDecisionRequest request) {
-    checkAdmin(principal);
+    checkFullAdmin(principal);
     String remarks = request != null ? request.remarks() : "Rejected by Admin";
     return moderationService.rejectTask(id, principal.userId().toString(), remarks);
   }
@@ -70,7 +76,7 @@ public class AdminModerationController {
       @AuthenticationPrincipal UserPrincipal principal,
       @PathVariable UUID id,
       @RequestBody AdminEditApproveRequest request) {
-    checkAdmin(principal);
+    checkFullAdmin(principal);
     return moderationService.editAndApproveTask(
         id,
         request.title(),
@@ -79,4 +85,34 @@ public class AdminModerationController {
         request.remarks()
     );
   }
+
+  // TEMP: MANUAL_MODERATION_MODE — approve a task and directly assign it to a
+  // specific helper, bypassing the automatic matching/dispatch engine.
+  @PostMapping("/tasks/{id}/approve-and-assign")
+  public AdminModerationTaskDto approveAndAssignTask(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @PathVariable UUID id,
+      @RequestBody AdminApproveAndAssignRequest request) {
+    checkFullAdmin(principal);
+    if (request.helperId() == null) {
+      throw new com.helpinminutes.api.errors.BadRequestException("helperId is required");
+    }
+    return moderationService.approveAndAssignTask(
+        id,
+        request.helperId(),
+        principal.userId().toString(),
+        request.remarks()
+    );
+  }
+
+  // TEMP: MANUAL_MODERATION_MODE — returns a lightweight list of active,
+  // KYC-approved helpers for the admin's helper picker dropdown in the
+  // moderation queue. Only name, phone, and id are returned.
+  @GetMapping("/helpers")
+  public java.util.List<java.util.Map<String, Object>> getApprovedHelpers(
+      @AuthenticationPrincipal UserPrincipal principal) {
+    checkAdmin(principal);
+    return moderationService.listApprovedHelpers();
+  }
+  // END TEMP: MANUAL_MODERATION_MODE endpoints
 }

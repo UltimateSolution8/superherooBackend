@@ -4,6 +4,7 @@ public enum UserRole {
   BUYER,
   HELPER,
   ADMIN,
+  ADMIN_READONLY,
   KYC,
   SUPPORT,
   MEDIATOR
