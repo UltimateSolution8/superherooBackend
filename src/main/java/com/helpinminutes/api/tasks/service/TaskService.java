@@ -570,8 +570,22 @@ public class TaskService {
     TaskEntity task = tasks.findById(taskId)
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
-    if (tasks.existsByAssignedHelperIdAndStatusIn(helperId, HELPER_ACTIVE_TASK_STATUSES)) {
+    // If task is already assigned to this helper (e.g. direct admin assignment or idempotent retry):
+    if (helperId.equals(task.getAssignedHelperId()) && task.getStatus() == TaskStatus.ASSIGNED) {
+      paymentLifecycle.bindHelper(taskId, helperId);
+      return taskMapper.toResponse(task, false);
+    }
+
+    if (tasks.existsByAssignedHelperIdAndStatusInAndIdNot(helperId, HELPER_ACTIVE_TASK_STATUSES, taskId)) {
       throw new ConflictException("Finish your current task before accepting another one");
+    }
+
+    // If task was assigned to this helper but status was still SEARCHING:
+    if (helperId.equals(task.getAssignedHelperId()) && task.getStatus() == TaskStatus.SEARCHING) {
+      task.setStatus(TaskStatus.ASSIGNED);
+      tasks.save(task);
+      paymentLifecycle.bindHelper(taskId, helperId);
+      return taskMapper.toResponse(task, false);
     }
 
     Instant now = Instant.now();
@@ -682,7 +696,24 @@ public class TaskService {
         .orElseThrow(() -> new NotFoundException("Task not found"));
 
     if (task.getAssignedHelperId() == null || !task.getAssignedHelperId().equals(helperId)) {
-      throw new ForbiddenException("Not assigned to this task");
+      // If helper received an active offer for this task, auto-assign upon marking arrived/started
+      var offerOpt = offers.findByTaskIdAndHelperId(taskId, helperId);
+      if (offerOpt.isPresent()
+          && (offerOpt.get().getStatus() == TaskOfferStatus.OFFERED || offerOpt.get().getStatus() == TaskOfferStatus.ACCEPTED)
+          && !offerOpt.get().getExpiresAt().isBefore(Instant.now())) {
+        int updated = tasks.assignIfUnassigned(taskId, helperId, TaskStatus.SEARCHING, TaskStatus.ASSIGNED);
+        if (updated > 0 || helperId.equals(task.getAssignedHelperId())) {
+          offers.respond(taskId, helperId, TaskOfferStatus.OFFERED, TaskOfferStatus.ACCEPTED, Instant.now());
+          offers.expireOthers(taskId, TaskOfferStatus.OFFERED, TaskOfferStatus.EXPIRED, helperId);
+          task.setAssignedHelperId(helperId);
+          task.setStatus(TaskStatus.ASSIGNED);
+          paymentLifecycle.bindHelper(taskId, helperId);
+        } else {
+          throw new ForbiddenException("Task already assigned to another helper");
+        }
+      } else {
+        throw new ForbiddenException("Not assigned to this task");
+      }
     }
 
     TaskStatus current = task.getStatus();
@@ -1155,8 +1186,9 @@ public class TaskService {
 
   private static boolean isValidHelperTransition(TaskStatus from, TaskStatus to) {
     return switch (from) {
-      case ASSIGNED -> to == TaskStatus.ARRIVED;
-      case ARRIVED -> to == TaskStatus.STARTED;
+      case SEARCHING -> to == TaskStatus.ASSIGNED || to == TaskStatus.ARRIVED;
+      case ASSIGNED -> to == TaskStatus.ARRIVED || to == TaskStatus.STARTED;
+      case ARRIVED -> to == TaskStatus.STARTED || to == TaskStatus.COMPLETED;
       case STARTED -> to == TaskStatus.COMPLETED;
       default -> false;
     };

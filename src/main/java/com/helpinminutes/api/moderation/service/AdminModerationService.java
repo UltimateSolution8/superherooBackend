@@ -41,6 +41,7 @@ public class AdminModerationService {
   private final ObjectMapper objectMapper;
   private final com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles;
   private final com.helpinminutes.api.realtime.RealtimePublisher realtime;
+  private final com.helpinminutes.api.payments.service.PaymentLifecycleService paymentLifecycle;
 
   public AdminModerationService(
       TaskRepository taskRepository,
@@ -49,7 +50,19 @@ public class AdminModerationService {
       UserRepository userRepository,
       NotificationQueueService notificationQueue,
       ObjectMapper objectMapper) {
-    this(taskRepository, aiReviewRepository, auditLogRepository, userRepository, notificationQueue, objectMapper, null, null);
+    this(taskRepository, aiReviewRepository, auditLogRepository, userRepository, notificationQueue, objectMapper, null, null, null);
+  }
+
+  public AdminModerationService(
+      TaskRepository taskRepository,
+      TaskAiReviewRepository aiReviewRepository,
+      TaskAuditLogRepository auditLogRepository,
+      UserRepository userRepository,
+      NotificationQueueService notificationQueue,
+      ObjectMapper objectMapper,
+      com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles,
+      com.helpinminutes.api.realtime.RealtimePublisher realtime) {
+    this(taskRepository, aiReviewRepository, auditLogRepository, userRepository, notificationQueue, objectMapper, helperProfiles, realtime, null);
   }
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -61,7 +74,9 @@ public class AdminModerationService {
       NotificationQueueService notificationQueue,
       ObjectMapper objectMapper,
       com.helpinminutes.api.helpers.repo.HelperProfileRepository helperProfiles,
-      com.helpinminutes.api.realtime.RealtimePublisher realtime) {
+      com.helpinminutes.api.realtime.RealtimePublisher realtime,
+      @org.springframework.beans.factory.annotation.Autowired(required = false)
+      com.helpinminutes.api.payments.service.PaymentLifecycleService paymentLifecycle) {
     this.taskRepository = taskRepository;
     this.aiReviewRepository = aiReviewRepository;
     this.auditLogRepository = auditLogRepository;
@@ -70,6 +85,7 @@ public class AdminModerationService {
     this.objectMapper = objectMapper;
     this.helperProfiles = helperProfiles;
     this.realtime = realtime;
+    this.paymentLifecycle = paymentLifecycle;
   }
 
   public Page<AdminModerationTaskDto> getModerationQueue(String statusFilter, Pageable pageable) {
@@ -331,6 +347,10 @@ public class AdminModerationService {
               "helperId", helperId.toString(),
               "title", task.getTitle() != null ? task.getTitle() : "",
               "status", TaskStatus.ASSIGNED.name()));
+    }
+
+    if (paymentLifecycle != null) {
+      paymentLifecycle.bindHelper(taskId, helperId);
     }
 
     // Notify the helper they have been directly assigned a task.

@@ -156,4 +156,55 @@ class TaskAcceptFlowTest {
     verify(notifications, never()).enqueueTaskAccepted(any(), any());
     verify(payments, never()).bindHelper(any(), any());
   }
+
+  @Test
+  void acceptTaskIsIdempotentWhenAlreadyAssignedToHelper() {
+    task.setAssignedHelperId(helperId);
+    task.setStatus(TaskStatus.ASSIGNED);
+
+    TaskResponse response = service.acceptTask(helperId, task.getId());
+
+    org.junit.jupiter.api.Assertions.assertNotNull(response);
+    assertEquals(TaskStatus.ASSIGNED, task.getStatus());
+    assertEquals(helperId, task.getAssignedHelperId());
+    verify(payments).bindHelper(task.getId(), helperId);
+  }
+
+  @Test
+  void updateStatusAsHelperCanTransitionSearchingToArrivedWhenAssigned() {
+    task.setAssignedHelperId(helperId);
+    task.setStatus(TaskStatus.SEARCHING);
+    task.setVerificationMode(com.helpinminutes.api.tasks.model.TaskVerificationMode.OTP_ONLY);
+
+    TaskResponse response = service.updateStatusAsHelper(helperId, task.getId(), TaskStatus.ARRIVED, null);
+
+    org.junit.jupiter.api.Assertions.assertNotNull(response);
+    assertEquals(TaskStatus.ARRIVED, task.getStatus());
+    verify(realtime).publish(eq("task_status_changed"), any());
+  }
+
+  @Test
+  void completeWorkflowFromAssignedToArrivedToStartedToCompleted() {
+    task.setAssignedHelperId(helperId);
+    task.setStatus(TaskStatus.ASSIGNED);
+    task.setVerificationMode(com.helpinminutes.api.tasks.model.TaskVerificationMode.OTP_ONLY);
+    task.setArrivalOtp("123456");
+    task.setCompletionOtp("654321");
+
+    // 1. Mark ARRIVED
+    service.updateStatusAsHelper(helperId, task.getId(), TaskStatus.ARRIVED, null);
+    assertEquals(TaskStatus.ARRIVED, task.getStatus());
+
+    // 2. Start with Arrival OTP
+    service.updateStatusAsHelper(helperId, task.getId(), TaskStatus.STARTED, "123456");
+    assertEquals(TaskStatus.STARTED, task.getStatus());
+    org.junit.jupiter.api.Assertions.assertNotNull(task.getWorkStartedAt());
+
+    // 3. Complete with Completion OTP
+    service.updateStatusAsHelper(helperId, task.getId(), TaskStatus.COMPLETED, "654321");
+    assertEquals(TaskStatus.COMPLETED, task.getStatus());
+    verify(payments).releaseTaskEarning(task);
+    verify(notifications).enqueueTaskCompleted(buyerId, task);
+  }
 }
+

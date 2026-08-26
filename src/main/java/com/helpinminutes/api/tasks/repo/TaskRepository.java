@@ -65,6 +65,8 @@ public interface TaskRepository extends JpaRepository<TaskEntity, UUID> {
 
     boolean existsByAssignedHelperIdAndStatusIn(UUID helperId, Collection<TaskStatus> statuses);
 
+    boolean existsByAssignedHelperIdAndStatusInAndIdNot(UUID helperId, Collection<TaskStatus> statuses, UUID excludeTaskId);
+
     @Query("""
             select distinct t.assignedHelperId from TaskEntity t
             where t.assignedHelperId in :helperIds
