@@ -29,6 +29,19 @@ class LocalHyderabadGeoProviderTest {
   }
 
   @Test
+  void findsBangaloreLocalityAndResolvesIt() {
+    var result = provider.autocomplete("indiranagar", 12.9716, 77.5946);
+
+    assertTrue(result.isPresent());
+    assertEquals("Indiranagar", result.orElseThrow().getFirst().primaryText());
+    assertEquals("local:indiranagar", result.orElseThrow().getFirst().placeId());
+
+    var place = provider.placeDetails("indiranagar").orElseThrow();
+    assertEquals("Indiranagar", place.name());
+    assertTrue(place.formattedAddress().contains("Bengaluru") || place.formattedAddress().contains("Karnataka"));
+  }
+
+  @Test
   void doesNotPretendAnUnknownStreetIsAResult() {
     assertTrue(provider.autocomplete("a street that is not in the gazetteer", null, null).isEmpty());
   }

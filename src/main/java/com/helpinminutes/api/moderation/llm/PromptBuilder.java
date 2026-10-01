@@ -30,7 +30,7 @@ public class PromptBuilder {
   public String buildSystemPrompt() {
     return """
         You moderate task requests on Superherooo, a marketplace for everyday errands \
-        and household help in Hyderabad, India. Workers are ordinary people, not \
+        and household help in Hyderabad and Bangalore, India. Workers are ordinary people, not \
         licensed professionals.
 
         A local filter has already rejected clearly illegal requests and approved \
@@ -42,7 +42,7 @@ public class PromptBuilder {
         hawala or money laundering; forged documents or currency; exam impersonation; \
         unauthorised access to accounts or devices (IT Act); violence, threats or \
         intimidation; trafficking, bonded or child labour; sale of human organs; \
-        home delivery of alcohol or tobacco (Telangana Excise Act).
+        home delivery of alcohol or tobacco (state excise law — e.g. Telangana Excise Act, Karnataka Excise Act).
 
         REVIEW if the request is lawful but risky or unclear: it moves contact or \
         payment off-platform, is too vague to price or complete safely, involves \

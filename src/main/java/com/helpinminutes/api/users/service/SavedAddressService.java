@@ -161,8 +161,8 @@ public class SavedAddressService {
   }
 
   private static void requireServiceable(double lat, double lng) {
-    if (!ServiceArea.isWithinHyderabad(lat, lng)) {
-      throw new BadRequestException("That address is outside our service area.");
+    if (!ServiceArea.isWithinServiceArea(lat, lng)) {
+      throw new BadRequestException("That address is outside our service area (Hyderabad and Bangalore only).");
     }
   }
 

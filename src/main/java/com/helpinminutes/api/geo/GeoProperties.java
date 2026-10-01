@@ -59,7 +59,7 @@ public class GeoProperties {
    * not a second discretionary choice. Ola suggestions carry coordinates inline
    * and cost no details call at all.
    */
-  private List<String> premiumAutocompleteOrder = List.of("google", "ola", "local");
+  private List<String> premiumAutocompleteOrder = List.of("ola", "local");
 
   /**
    * Request contexts allowed to use {@link #premiumAutocompleteOrder}.
@@ -161,7 +161,7 @@ public class GeoProperties {
      * <p>Blank disables the check, which is what you want the day the extract goes
      * national.
      */
-    private String coverageBbox = "16.7550,77.8267,18.0150,79.1467";
+    private String coverageBbox = "16.7550,77.8267,18.0150,79.1467;12.2000,76.8000,13.8000,78.4000";
 
     /**
      * Must match the server's {@code --max-table-size}.

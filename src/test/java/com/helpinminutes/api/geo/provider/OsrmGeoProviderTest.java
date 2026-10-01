@@ -100,6 +100,18 @@ class OsrmGeoProviderTest {
     assertTrue(provider.route(HYD_LAT, HYD_LNG, 17.4483, 78.3915).isPresent());
   }
 
+  @Test
+  void routesWithinMultiBboxCoveringHyderabadAndBangalore() {
+    props.getOsrm().setCoverageBbox("16.7550,77.8267,18.0150,79.1467;12.2000,76.8000,13.8000,78.4000");
+    when(http.getJson(anyString(), anyInt(), anyString()))
+        .thenReturn(Optional.of(routeResponse()));
+
+    // Bangalore route: 12.9716, 77.5946 to 12.9352, 77.6245
+    assertTrue(provider.route(12.9716, 77.5946, 12.9352, 77.6245).isPresent());
+    // Hyderabad route: 17.3850, 78.4867 to 17.4483, 78.3915
+    assertTrue(provider.route(HYD_LAT, HYD_LNG, 17.4483, 78.3915).isPresent());
+  }
+
   // ─── table size ───────────────────────────────────────────────────────────
 
   @Test

@@ -365,7 +365,7 @@ geo:
   # use this order; anything else, including an unrecognised value from a client,
   # gets the free order above. Emptying premiumContexts turns Google off entirely
   # without an app release.
-  premiumAutocompleteOrder: ${GEO_PREMIUM_AUTOCOMPLETE_ORDER:google,ola,local}
+  premiumAutocompleteOrder: ${GEO_PREMIUM_AUTOCOMPLETE_ORDER:ola,local}
   premiumContexts: ${GEO_PREMIUM_CONTEXTS:task_create}
   # OSRM first: self-hosted, free, and routing is our highest-frequency geo call.
   routingOrder: ${GEO_ROUTING_ORDER:osrm,ola}
@@ -393,7 +393,7 @@ geo:
     #
     # This must match the clip in build-osrm-hyderabad.sh, which writes the same box in
     # osmium's lng-first order (77.8267,16.7550,79.1467,18.0150).
-    coverageBbox: ${OSRM_COVERAGE_BBOX:16.7550,77.8267,18.0150,79.1467}
+    coverageBbox: ${OSRM_COVERAGE_BBOX:16.7550,77.8267,18.0150,79.1467;12.2000,76.8000,13.8000,78.4000}
     # Must equal the server's --max-table-size (see deploy/superheroo-osrm.service).
     # A larger request fails outright, so we decline locally instead.
     maxTableSize: ${OSRM_MAX_TABLE_SIZE:64}
@@ -464,6 +464,14 @@ razorpayx:
   # The virtual account payouts are funded from. RazorpayX rejects a payout without it.
   account-number: ${RAZORPAYX_ACCOUNT_NUMBER:}
   webhook-secret: ${RAZORPAYX_WEBHOOK_SECRET:}
+  # Hybrid FAV mode. "optimized" = penniless-first with automatic penny-drop fallback
+  # (~3-second results, 99%+ success rate, ~₹2+taxes). "standard" = penny-drop only
+  # (~₹1+fees, slower). Requires Razorpay to enable this on the MID.
+  fav-mode: ${RAZORPAYX_FAV_MODE:optimized}
+  # Minimum name match score (0-100) to auto-verify. Below this goes to MANUAL_REVIEW.
+  fav-name-match-threshold: ${FAV_NAME_MATCH_THRESHOLD:80}
+  # When true, prefer Razorpay's provider name_match_score over our local word-set computation.
+  fav-use-provider-score: ${FAV_USE_PROVIDER_SCORE:true}
 
 banking:
   encryption-keys: ${BANK_ACCOUNT_ENCRYPTION_KEYS:}

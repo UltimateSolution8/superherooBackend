@@ -206,7 +206,7 @@ public class ReportService {
     // Location breakdown
     Map<String, Long> bookingsByLoc = periodTasks.stream()
         .collect(Collectors.groupingBy(
-            t -> t.getAddressText() == null ? "Hyderabad Central" : t.getAddressText(),
+            t -> t.getAddressText() == null ? "Unknown Location" : t.getAddressText(),
             Collectors.counting()));
 
     long mrrPaise = (long) (totalGmv * 1.2);
@@ -477,11 +477,11 @@ public class ReportService {
           ((Number) r[3]).longValue(),
           r[4] != null ? ((Number) r[4]).longValue() : 0L
       )).toList();
-      String top = items.isEmpty() ? "Hyderabad Central" : items.get(0).locationName();
+      String top = items.isEmpty() ? "Service Area" : items.get(0).locationName();
       return new LocationPerformanceResponse(items.size(), top, items);
     } catch (Exception e) {
       log.warn("Materialized view fallback for location performance: {}", e.getMessage());
-      return new LocationPerformanceResponse(1, "Hyderabad Central", List.of(new LocationPerformanceItem("Hyderabad Central", 150, 140, 45000000L, 300000L)));
+      return new LocationPerformanceResponse(1, "Service Area", List.of(new LocationPerformanceItem("Service Area", 150, 140, 45000000L, 300000L)));
     }
   }
 

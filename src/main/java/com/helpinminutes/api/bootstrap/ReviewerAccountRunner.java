@@ -222,9 +222,9 @@ public class ReviewerAccountRunner implements ApplicationRunner {
     tasks.save(task);
 
     // Guard against seeding somewhere unbookable if the coordinates are ever edited.
-    if (!ServiceArea.isWithinHyderabad(HOME_LAT, HOME_LNG)
-        || !ServiceArea.isWithinHyderabad(WORK_LAT, WORK_LNG)) {
-      log.warn("Reviewer demo coordinates fall outside the Hyderabad service area");
+    if (!ServiceArea.isWithinServiceArea(HOME_LAT, HOME_LNG)
+        || !ServiceArea.isWithinServiceArea(WORK_LAT, WORK_LNG)) {
+      log.warn("Reviewer demo coordinates fall outside the service area");
     }
 
     log.info("Seeded reviewer task history");

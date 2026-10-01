@@ -96,6 +96,15 @@ class BookingBatchServiceTest {
     }
 
     @Test
+    void validateLine_bangaloreCenterCoordinates_shouldBeAccepted() {
+        // Bangalore center: Latitude 12.9716, Longitude 77.5946
+        var errors = validate("Valid title here", "Valid description long enough",
+                "NORMAL", 30, 10000L, 12.9716, 77.5946, null, null);
+        assertFalse(errors.stream().anyMatch(e -> e.contains("service area")),
+                "Bangalore center location should be accepted");
+    }
+
+    @Test
     void validateLine_scheduledAtInPast_returnsError() {
         Instant past = Instant.now().minus(1, ChronoUnit.HOURS);
         var errors = validate("Valid title here", "Valid description long enough",

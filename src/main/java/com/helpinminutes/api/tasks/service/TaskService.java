@@ -230,9 +230,9 @@ public class TaskService {
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
     requireVerifiedEmailForLaunchAction(buyer);
-    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (!ServiceArea.isWithinServiceArea(req.lat(), req.lng())) {
       throw new BadRequestException(
-          "Superherooo is currently available in Hyderabad only. Pick a location within the city to book.");
+          "Superherooo is currently available in Hyderabad and Bangalore only. Pick a location within these cities to book.");
     }
 
     LocalTime time;
@@ -416,9 +416,9 @@ public class TaskService {
     TaskCreateOptions resolvedOptions = options == null ? TaskCreateOptions.defaultOptions() : options;
     UserEntity buyer = users.findById(buyerId)
         .orElseThrow(() -> new ForbiddenException("Buyer not found"));
-    if (!ServiceArea.isWithinHyderabad(req.lat(), req.lng())) {
+    if (!ServiceArea.isWithinServiceArea(req.lat(), req.lng())) {
       throw new BadRequestException(
-          "Superherooo is currently available in Hyderabad only. Pick a location within the city to book.");
+          "Superherooo is currently available in Hyderabad and Bangalore only. Pick a location within these cities to book.");
     }
     requireUsableDetails(req.title(), req.description());
     // Safety check will run via AI moderation rather than throwing BadRequestException immediately

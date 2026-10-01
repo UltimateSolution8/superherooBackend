@@ -452,11 +452,8 @@ public class BookingBatchService {
     if (line.budgetPaise() == null || line.budgetPaise() < 100) errors.add("budgetPaise must be at least 100");
     if (line.lat() == null || line.lat() < -90 || line.lat() > 90) errors.add("lat invalid");
     if (line.lng() == null || line.lng() < -180 || line.lng() > 180) errors.add("lng invalid");
-    if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinHyderabad(line.lat(), line.lng())) {
-      // Rejected up front rather than accepted and left unmatchable: there are no
-      // partners outside Hyderabad, so such a task would sit in SEARCHING until
-      // the stale-cleanup job cancelled it.
-      errors.add("location outside service area (Hyderabad only)");
+    if (line.lat() != null && line.lng() != null && !ServiceArea.isWithinServiceArea(line.lat(), line.lng())) {
+      errors.add("location outside service area (Hyderabad and Bangalore only)");
     }
     if (line.scheduledAt() != null && line.scheduledAt().isBefore(Instant.now().plus(java.time.Duration.ofHours(1)))) {
       errors.add("scheduledAt must be at least 1 hour in the future");

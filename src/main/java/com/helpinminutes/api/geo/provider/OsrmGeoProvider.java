@@ -55,25 +55,31 @@ public class OsrmGeoProvider implements GeoProvider {
     }
   }
 
-  /** Empty when no bbox is configured, meaning "assume global coverage". */
-  private Optional<Bbox> coverage() {
+  /** Empty when no bbox is configured, meaning "assume global coverage". Supports semicolon-separated bboxes. */
+  private List<Bbox> coverage() {
     String raw = props.getOsrm().getCoverageBbox();
-    if (raw == null || raw.isBlank()) return Optional.empty();
-    String[] parts = raw.split(",");
-    if (parts.length != 4) {
-      log.warn("OSRM coverage bbox '{}' is malformed; expected minLat,minLng,maxLat,maxLng", raw);
-      return Optional.empty();
+    if (raw == null || raw.isBlank()) return List.of();
+    String[] bboxTokens = raw.split(";");
+    List<Bbox> boxes = new ArrayList<>();
+    for (String token : bboxTokens) {
+      String trimmed = token.trim();
+      if (trimmed.isEmpty()) continue;
+      String[] parts = trimmed.split(",");
+      if (parts.length != 4) {
+        log.warn("OSRM coverage bbox chunk '{}' is malformed; expected minLat,minLng,maxLat,maxLng", trimmed);
+        continue;
+      }
+      try {
+        boxes.add(new Bbox(
+            Double.parseDouble(parts[0].trim()),
+            Double.parseDouble(parts[1].trim()),
+            Double.parseDouble(parts[2].trim()),
+            Double.parseDouble(parts[3].trim())));
+      } catch (NumberFormatException e) {
+        log.warn("OSRM coverage bbox chunk '{}' is not numeric; ignoring", trimmed);
+      }
     }
-    try {
-      return Optional.of(new Bbox(
-          Double.parseDouble(parts[0].trim()),
-          Double.parseDouble(parts[1].trim()),
-          Double.parseDouble(parts[2].trim()),
-          Double.parseDouble(parts[3].trim())));
-    } catch (NumberFormatException e) {
-      log.warn("OSRM coverage bbox '{}' is not numeric; ignoring", raw);
-      return Optional.empty();
-    }
+    return boxes;
   }
 
   /**
@@ -83,10 +89,19 @@ public class OsrmGeoProvider implements GeoProvider {
    * as unroutable as one entirely outside.
    */
   private boolean covers(double... latLngPairs) {
-    Optional<Bbox> bbox = coverage();
-    if (bbox.isEmpty()) return true;
+    List<Bbox> boxes = coverage();
+    if (boxes.isEmpty()) return true;
     for (int i = 0; i + 1 < latLngPairs.length; i += 2) {
-      if (!bbox.get().contains(latLngPairs[i], latLngPairs[i + 1])) return false;
+      double lat = latLngPairs[i];
+      double lng = latLngPairs[i + 1];
+      boolean inAny = false;
+      for (Bbox box : boxes) {
+        if (box.contains(lat, lng)) {
+          inAny = true;
+          break;
+        }
+      }
+      if (!inAny) return false;
     }
     return true;
   }
