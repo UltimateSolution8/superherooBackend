@@ -104,6 +104,7 @@ public class RazorpayXGatewayClient implements RazorpayXGateway {
     return toResult(get("/payouts/" + payoutId));
   }
 
+
   @Override
   public FundAccountValidationResult createFundAccountValidation(
       String fundAccountId, String currency) {
@@ -113,7 +114,49 @@ public class RazorpayXGatewayClient implements RazorpayXGateway {
         // ₹1 in paise. Razorpay only accepts 100 here; the amount is not a choice.
         .put("amount", 100)
         .put("currency", blankTo(currency, "INR"))
+        // "optimized" activates the Hybrid FAV stack: penniless first, with automatic
+        // penny-drop fallback. Gives ~3-second results at 99%+ success rate.
+        .put("validation_type", "optimized")
         .put("notes", new JSONObject().put("purpose", "bank account verification"));
+    return toValidationResult(post("/fund_accounts/validations", body, null));
+  }
+
+  @Override
+  public FundAccountValidationResult createCompositeValidation(CompositeValidationRequest req) {
+    // Composite API: creates Contact + Fund Account + Validation in a single call.
+    // This is the preferred path for new verifications — fewer round trips, and it
+    // lets RazorpayX run the hybrid stack atomically.
+    JSONObject contactJson = new JSONObject()
+        .put("name", blankTo(req.contactName(), "Partner"))
+        .put("type", "vendor")
+        .put("reference_id", req.referenceId());
+    if (req.contactPhone() != null && !req.contactPhone().isBlank()) {
+      contactJson.put("contact", req.contactPhone());
+    }
+    if (req.contactEmail() != null && !req.contactEmail().isBlank()) {
+      contactJson.put("email", req.contactEmail());
+    }
+
+    JSONObject fundAccountJson = new JSONObject()
+        .put("account_type", req.accountType())
+        .put("contact", contactJson);
+
+    if ("vpa".equals(req.accountType())) {
+      fundAccountJson.put("vpa", new JSONObject().put("address", req.vpaAddress()));
+    } else {
+      // bank_account is the default
+      fundAccountJson.put("bank_account", new JSONObject()
+          .put("name", blankTo(req.accountHolderName(), req.contactName()))
+          .put("ifsc", req.ifsc())
+          .put("account_number", req.accountNumber()));
+    }
+
+    JSONObject body = new JSONObject()
+        .put("source_account_number", accountNumber)
+        .put("validation_type", blankTo(req.validationType(), "optimized"))
+        .put("fund_account", fundAccountJson)
+        .put("notes", new JSONObject().put("purpose", "account verification"));
+
     return toValidationResult(post("/fund_accounts/validations", body, null));
   }
 
@@ -199,17 +242,41 @@ public class RazorpayXGatewayClient implements RazorpayXGateway {
   }
 
   private static FundAccountValidationResult toValidationResult(JSONObject validation) {
-    // The bank's registered name lives one level down, on the results object, and is
-    // absent until the drop completes.
+    // The bank's registered name and provider name match score live one level down,
+    // on the results object, and are absent until the drop completes.
     JSONObject results = validation.optJSONObject("results");
+    // Webhook uses "results"; polling response uses "validation_results".
+    if (results == null) results = validation.optJSONObject("validation_results");
     String registeredName = results == null ? null : results.optString("registered_name", null);
+    Integer nameMatchScore = null;
+    if (results != null && results.has("name_match_score") && !results.isNull("name_match_score")) {
+      nameMatchScore = results.optInt("name_match_score");
+    }
+
+    // Structured failure info lives in status_details.
+    JSONObject statusDetails = validation.optJSONObject("status_details");
+    String failureSource = statusDetails == null ? null : statusDetails.optString("source", null);
+    String failureReasonCode = statusDetails == null ? null : statusDetails.optString("reason", null);
+    // Prefer status_details.description as the human reason; fall back to the legacy field.
+    String failureReason = statusDetails == null
+        ? validation.optString("error_description", null)
+        : statusDetails.optString("description", validation.optString("error_description", null));
+
+    // account type from the nested fund_account object
+    JSONObject fundAccount = validation.optJSONObject("fund_account");
+    String accountType = fundAccount == null ? "bank_account" : fundAccount.optString("account_type", "bank_account");
+
     return new FundAccountValidationResult(
         validation.optString("id", null),
         validation.optString("status", "unknown"),
         registeredName,
         validation.optString("utr", null),
         validation.optLong("amount", 0L),
-        validation.optString("error_description", null));
+        failureReason,
+        nameMatchScore,
+        accountType,
+        failureSource,
+        failureReasonCode);
   }
 
   private static PayoutResult toResult(JSONObject payout) {

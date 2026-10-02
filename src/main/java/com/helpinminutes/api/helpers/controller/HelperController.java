@@ -9,6 +9,7 @@ import com.helpinminutes.api.helpers.dto.BankChangeChallengeResponse;
 import com.helpinminutes.api.helpers.dto.BankChangeOtpVerifyRequest;
 import com.helpinminutes.api.helpers.dto.BankChangeTokenResponse;
 import com.helpinminutes.api.helpers.dto.PayoutAccountUpdateRequest;
+import com.helpinminutes.api.helpers.dto.HelperUpiPayoutAccountRequest;
 import com.helpinminutes.api.helpers.service.BankChangeChallengeService;
 import com.helpinminutes.api.helpers.service.HelperService;
 import com.helpinminutes.api.helpers.service.IfscLookupService;
@@ -144,5 +145,24 @@ public class HelperController {
       throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
     }
     return helpers.savePayoutAccount(principal.userId(), req, ClientIpResolver.resolve(httpRequest));
+  }
+
+  @PutMapping("/payout-account/upi")
+  public HelperBankDetailsResponse saveUpiPayoutAccountPut(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody HelperUpiPayoutAccountRequest req,
+      HttpServletRequest httpRequest) {
+    if (principal.role() != UserRole.HELPER) {
+      throw new com.helpinminutes.api.errors.ForbiddenException("Not a helper");
+    }
+    return helpers.saveUpiPayoutAccount(principal.userId(), req, ClientIpResolver.resolve(httpRequest));
+  }
+
+  @PostMapping("/payout-account/upi")
+  public HelperBankDetailsResponse saveUpiPayoutAccountPost(
+      @AuthenticationPrincipal UserPrincipal principal,
+      @Valid @RequestBody HelperUpiPayoutAccountRequest req,
+      HttpServletRequest httpRequest) {
+    return saveUpiPayoutAccountPut(principal, req, httpRequest);
   }
 }

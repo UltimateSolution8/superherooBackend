@@ -61,10 +61,56 @@ public interface RazorpayXGateway {
   FundAccountValidationResult fetchFundAccountValidation(String validationId);
 
   /**
-   * @param status RazorpayX's vocabulary — created, completed, failed. Mapped by the
+   * Creates contact, fund account, and validation in a single composite API call.
+   *
+   * <p>Preferred over the three-step flow for new accounts: it reduces latency and
+   * allows the Hybrid FAV stack (penniless + penny-drop fallback) to run as a single
+   * atomic operation. Use this for first-time verifications; fall back to
+   * {@link #createFundAccountValidation} for re-validations where the fund account
+   * already exists.
+   */
+  FundAccountValidationResult createCompositeValidation(CompositeValidationRequest request);
+
+  /**
+   * @param accountType    "bank_account" or "vpa"
+   * @param accountHolderName name to register on the fund account (and matched against
+   *     the bank's registered name on completion)
+   * @param accountNumber  bank account number; null when accountType is "vpa"
+   * @param ifsc           IFSC code; null when accountType is "vpa"
+   * @param vpaAddress     UPI VPA address (e.g. "name@oksbi"); null when accountType is "bank_account"
+   * @param contactName    name for the RazorpayX contact record
+   * @param contactPhone   partner's phone number
+   * @param contactEmail   partner's email (may be null)
+   * @param referenceId    our internal user ID, for tracing contacts without a lookup table
+   * @param validationType "optimized" for hybrid (penniless + penny-drop fallback, default),
+   *     "penny_drop" for explicit penny-drop only
+   */
+  record CompositeValidationRequest(
+      String accountType,
+      String accountHolderName,
+      String accountNumber,
+      String ifsc,
+      String vpaAddress,
+      String contactName,
+      String contactPhone,
+      String contactEmail,
+      String referenceId,
+      String validationType) {}
+
+  /**
+   * @param id             provider's validation id (fav_...)
+   * @param status         RazorpayX's vocabulary — created, completed, failed. Mapped by the
    *     caller so an unrecognised value cannot silently become terminal.
    * @param registeredName the account holder's name as the bank has it. Compared
    *     against our KYC name; a mismatch is never auto-verified.
+   * @param utr            bank reference, present once processed
+   * @param amountPaise    amount transacted
+   * @param failureReason  human-readable failure description from the provider
+   * @param nameMatchScore Razorpay's own 0–100 name similarity score; null until completed.
+   *     Preferred over locally-computed score when present.
+   * @param accountType    "bank_account" or "vpa"
+   * @param failureSource  structured source of failure from status_details (e.g. "beneficiary_bank")
+   * @param failureReasonCode structured reason code from status_details (e.g. "invalid_account_number")
    */
   record FundAccountValidationResult(
       String id,
@@ -72,7 +118,22 @@ public interface RazorpayXGateway {
       String registeredName,
       String utr,
       long amountPaise,
-      String failureReason) {}
+      String failureReason,
+      Integer nameMatchScore,
+      String accountType,
+      String failureSource,
+      String failureReasonCode) {
+
+    /**
+     * Backwards-compatible constructor used by existing callers and tests that predate
+     * the hybrid FAV fields. Defaults the new fields to null.
+     */
+    public FundAccountValidationResult(
+        String id, String status, String registeredName,
+        String utr, long amountPaise, String failureReason) {
+      this(id, status, registeredName, utr, amountPaise, failureReason, null, null, null, null);
+    }
+  }
 
   /**
    * @param status RazorpayX's own vocabulary — queued, processing, processed,

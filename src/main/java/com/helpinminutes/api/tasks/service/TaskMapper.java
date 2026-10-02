@@ -213,6 +213,7 @@ public class TaskMapper {
                 t.getCancelledByRole(),
                 t.getCancelledAt(),
                 t.getCreatedAt(),
+                t.getSearchingStartedAt(),
                 masked ? null : t.getLandmark(),
                 t.getRecurringTaskId(),
                 batchId,

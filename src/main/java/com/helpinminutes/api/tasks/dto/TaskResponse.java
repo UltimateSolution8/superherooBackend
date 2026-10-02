@@ -52,6 +52,7 @@ public record TaskResponse(
     String cancelledByRole,
     Instant cancelledAt,
     Instant createdAt,
+    Instant searchingStartedAt,
     String landmark,
     UUID recurringTaskId,
     UUID batchId,

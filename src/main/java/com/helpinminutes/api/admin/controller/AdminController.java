@@ -416,6 +416,7 @@ public class AdminController {
           t.getCancelledByRole(),
           t.getCancelledAt(),
           t.getCreatedAt(),
+          t.getSearchingStartedAt(),
           t.getLandmark(),
           t.getRecurringTaskId(),
           null,

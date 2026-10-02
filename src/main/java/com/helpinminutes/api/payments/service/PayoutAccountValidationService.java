@@ -24,11 +24,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Penny-drop verification of a partner's bank account.
+ * Verification of a partner's bank account or UPI VPA.
  *
- * <p>A ₹1 credit that comes back with the name the bank holds the account under.
- * Nothing else proves an account is real and belongs to the person claiming it;
- * an IFSC and a plausible account number prove only that the format is right.
+ * <p>Uses Razorpay's Hybrid FAV stack (penniless + penny-drop fallback) via the
+ * composite API. Penniless verification is free, nearly instant (~3 seconds), and
+ * covers 50-60% of banks. For the rest, RazorpayX falls back to a ₹1 penny drop
+ * automatically, maintaining a 99%+ success rate across the board.
  *
  * <p>Two rules make this safe to automate:
  * <ul>
@@ -37,16 +38,21 @@ import org.springframework.transaction.annotation.Transactional;
  *       fraud this exists to catch;
  *   <li>attempts are capped per account per day, because every one costs money.
  * </ul>
+ *
+ * <p>Name matching uses Razorpay's provider score (0-100) when available, falling
+ * back to our own local word-set comparison. Either way, below 80 goes to review.
  */
 @Service
 public class PayoutAccountValidationService {
 
   private static final Logger log = LoggerFactory.getLogger(PayoutAccountValidationService.class);
 
-  /** Each drop is a real ₹1 transfer plus a fee. Three a day is generous. */
+  /** Each validation costs real money (hybrid ~₹2+taxes). Three a day is generous. */
   static final int MAX_ATTEMPTS_PER_DAY = 3;
   /** Below this the names are treated as different people. */
   static final int NAME_MATCH_THRESHOLD = 80;
+  /** Default validation mode: hybrid (penniless + penny-drop fallback). */
+  private static final String DEFAULT_VALIDATION_TYPE = PayoutAccountValidationEntity.TYPE_OPTIMIZED;
 
   private final PayoutAccountValidationRepository validations;
   private final HelperPayoutAccountRepository accounts;
@@ -75,10 +81,13 @@ public class PayoutAccountValidationService {
   }
 
   /**
-   * Starts a penny drop against the partner's current account.
+   * Starts hybrid FAV against the partner's current bank account.
    *
    * <p>Idempotent while one is in flight: the caller gets the existing row back
-   * rather than paying for a second drop.
+   * rather than paying for a second verification.
+   *
+   * <p>Uses the composite API: Razorpay creates or reuses a Contact + Fund Account
+   * and runs the Hybrid FAV stack atomically in one call.
    */
   @Transactional
   public PayoutAccountValidationEntity startValidation(UUID helperId) {
@@ -103,16 +112,36 @@ public class PayoutAccountValidationService {
       throw new ServiceUnavailableException("Bank verification is temporarily unavailable.");
     }
 
+    UserEntity user = users.findById(helperId).orElseThrow();
+    boolean isVpa = "vpa".equalsIgnoreCase(account.getAccountType());
+    String accountNumber = null;
+    String vpaAddress = null;
+    if (isVpa) {
+      accountNumber = null;
+      vpaAddress = cipher.decrypt(
+          account.getId(),
+          account.getUpiIdKeyId(),
+          account.getUpiIdCiphertext());
+    } else {
+      accountNumber = cipher.decrypt(
+          account.getId(),
+          account.getAccountNumberKeyId(),
+          account.getAccountNumberCiphertext());
+      vpaAddress = null;
+    }
+
     PayoutAccountValidationEntity validation = new PayoutAccountValidationEntity();
     validation.setPayoutAccountId(account.getId());
     validation.setHelperId(helperId);
     validation.setStatus(PayoutAccountValidationEntity.PENDING);
+    validation.setAccountType(isVpa ? "vpa" : "bank_account");
+    validation.setValidationType(DEFAULT_VALIDATION_TYPE);
     validation.setAttempts(1);
     try {
       validation = validations.saveAndFlush(validation);
     } catch (DataIntegrityViolationException e) {
       // The one-in-flight index fired: another request got there first. Returning
-      // theirs is the right answer, and it saves the partner a second ₹1 drop.
+      // theirs is the right answer, and it saves the partner a second verification cost.
       return validations.findInFlight(account.getId()).orElseThrow(() -> e);
     }
 
@@ -120,28 +149,99 @@ public class PayoutAccountValidationService {
     accounts.save(account);
 
     try {
-      UserEntity user = users.findById(helperId).orElseThrow();
-      String contactId =
-          razorpayx.ensureContact(
-              user.getId().toString(), user.getDisplayName(), user.getPhone(), user.getEmail());
-      String accountNumber =
-          cipher.decrypt(
-              account.getId(),
-              account.getAccountNumberKeyId(),
-              account.getAccountNumberCiphertext());
-      String fundAccountId =
-          razorpayx.ensureFundAccount(
-              contactId, account.getAccountHolderName(), accountNumber, account.getIfscCode());
+      // Composite API: creates Contact + Fund Account + Validation in one call,
+      // running the Hybrid FAV (penniless-first, penny-drop fallback) stack atomically.
+      RazorpayXGateway.CompositeValidationRequest request =
+          new RazorpayXGateway.CompositeValidationRequest(
+              isVpa ? "vpa" : "bank_account",
+              account.getAccountHolderName(),
+              accountNumber,
+              isVpa ? null : account.getIfscCode(),
+              vpaAddress,
+              user.getDisplayName(),
+              user.getPhone(),
+              user.getEmail(),
+              user.getId().toString(),
+              DEFAULT_VALIDATION_TYPE);
 
       RazorpayXGateway.FundAccountValidationResult result =
-          razorpayx.createFundAccountValidation(fundAccountId, "INR");
+          razorpayx.createCompositeValidation(request);
       validation.setProviderValidationId(result.id());
       apply(validation, account, result);
     } catch (RazorpayGatewayException e) {
-      // Left PENDING on purpose. The drop may well have been created; marking it
-      // failed here would let the partner immediately buy another one.
+      // Left PENDING on purpose. The verification may well have been created;
+      // marking it failed here would let the partner immediately buy another one.
       log.error(
-          "Penny drop for account {} could not be submitted and is left for polling: {}",
+          "Hybrid FAV for account {} could not be submitted and is left for polling: {}",
+          account.getId(),
+          e.getMessage());
+    }
+
+    return validations.save(validation);
+  }
+
+  /**
+   * Starts hybrid FAV against the partner's UPI VPA.
+   *
+   * <p>UPI validation is penniless-only (no penny drop to a VPA). The provider
+   * confirms the VPA exists and returns the registered name for name matching.
+   * Uses the composite API to create the contact and VPA fund account atomically.
+   */
+  @Transactional
+  public PayoutAccountValidationEntity startUpiValidation(UUID helperId, String upiVpa, String accountHolderName) {
+    HelperPayoutAccountEntity account =
+        currentAccount(helperId)
+            .orElseThrow(() -> new NotFoundException("No payout account on file"));
+
+    if (!razorpayx.isConfigured()) {
+      throw new ServiceUnavailableException("UPI verification is temporarily unavailable.");
+    }
+
+    long recent = validations.countSince(account.getId(), Instant.now().minus(Duration.ofDays(1)));
+    if (recent >= MAX_ATTEMPTS_PER_DAY) {
+      throw new BadRequestException(
+          "Too many verification attempts today. Try again tomorrow.");
+    }
+
+    UserEntity user = users.findById(helperId).orElseThrow();
+
+    PayoutAccountValidationEntity validation = new PayoutAccountValidationEntity();
+    validation.setPayoutAccountId(account.getId());
+    validation.setHelperId(helperId);
+    validation.setStatus(PayoutAccountValidationEntity.PENDING);
+    validation.setAccountType("vpa");
+    validation.setValidationType(DEFAULT_VALIDATION_TYPE);
+    validation.setAttempts(1);
+    try {
+      validation = validations.saveAndFlush(validation);
+    } catch (DataIntegrityViolationException e) {
+      return validations.findInFlight(account.getId()).orElseThrow(() -> e);
+    }
+
+    account.setVerificationStatus("PENDING");
+    accounts.save(account);
+
+    try {
+      RazorpayXGateway.CompositeValidationRequest request =
+          new RazorpayXGateway.CompositeValidationRequest(
+              "vpa",
+              accountHolderName,
+              null, // accountNumber not used for VPA
+              null, // ifsc not used for VPA
+              upiVpa,
+              user.getDisplayName(),
+              user.getPhone(),
+              user.getEmail(),
+              user.getId().toString(),
+              DEFAULT_VALIDATION_TYPE);
+
+      RazorpayXGateway.FundAccountValidationResult result =
+          razorpayx.createCompositeValidation(request);
+      validation.setProviderValidationId(result.id());
+      apply(validation, account, result);
+    } catch (RazorpayGatewayException e) {
+      log.error(
+          "UPI FAV for account {} could not be submitted and is left for polling: {}",
           account.getId(),
           e.getMessage());
     }
@@ -175,9 +275,22 @@ public class PayoutAccountValidationService {
     if (result.utr() != null && !result.utr().isBlank()) validation.setUtr(result.utr());
     if (result.registeredName() != null) validation.setRegisteredName(result.registeredName());
 
+    // Store structured failure details from status_details.
+    if (result.failureSource() != null) validation.setFailureSource(result.failureSource());
+    if (result.failureReasonCode() != null) validation.setFailureReasonCode(result.failureReasonCode());
+    if (result.failureReason() != null) validation.setFailureReason(result.failureReason());
+
+    // Store provider name match score when available (preferred over local computation).
+    if (result.nameMatchScore() != null) {
+      validation.setProviderNameMatchScore(result.nameMatchScore());
+    }
+
     switch (status) {
       case "completed" -> {
-        int score = nameMatchScore(account.getAccountHolderName(), result.registeredName());
+        // Prefer Razorpay's score; fall back to our local word-set comparison.
+        int score = result.nameMatchScore() != null
+            ? result.nameMatchScore()
+            : nameMatchScore(account.getAccountHolderName(), result.registeredName());
         validation.setNameMatchScore(score);
         validation.setCompletedAt(Instant.now());
         if (score >= NAME_MATCH_THRESHOLD) {
@@ -185,20 +298,23 @@ public class PayoutAccountValidationService {
           account.setVerificationStatus("VERIFIED");
           account.setStatus("ACTIVE");
         } else {
-          // The money arrived — at an account held under a different name. That is
-          // the case this whole mechanism exists to catch, so a person looks at it.
+          // The verification reached the bank — but the account belongs to someone
+          // with a different name. That is precisely the fraud this exists to catch,
+          // so a human looks at it before any payout can go out.
           validation.setStatus(PayoutAccountValidationEntity.MANUAL_REVIEW);
-          validation.setFailureReason("Account holder name does not match our records");
+          if (validation.getFailureReason() == null) {
+            validation.setFailureReason("Account holder name does not match our records");
+          }
           account.setVerificationStatus("MANUAL_REVIEW");
           log.warn(
-              "Penny drop name mismatch account={} score={} — held for review",
+              "FAV name mismatch account={} score={} accountType={} — held for review",
               account.getId(),
-              score);
+              score,
+              validation.getAccountType());
         }
       }
       case "failed" -> {
         validation.setStatus(PayoutAccountValidationEntity.FAILED);
-        validation.setFailureReason(result.failureReason());
         validation.setCompletedAt(Instant.now());
         account.setVerificationStatus("FAILED");
       }
@@ -220,6 +336,8 @@ public class PayoutAccountValidationService {
    * a spouse's name appended. Exact equality would send almost every genuine
    * account to manual review, so this compares normalised word sets: the score is
    * the share of the shorter name's words that appear in the longer one.
+   *
+   * <p>Used as fallback when Razorpay does not return a provider score.
    */
   static int nameMatchScore(String expected, String actual) {
     String[] a = normalizeName(expected);

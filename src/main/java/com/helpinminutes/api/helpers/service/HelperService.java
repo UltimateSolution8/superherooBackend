@@ -7,6 +7,7 @@ import com.helpinminutes.api.helpers.dto.HelperIdCardResponse;
 import com.helpinminutes.api.helpers.dto.HelperBankDetailsResponse;
 import com.helpinminutes.api.helpers.dto.HelperPayoutAccountRequest;
 import com.helpinminutes.api.helpers.dto.PayoutAccountUpdateRequest;
+import com.helpinminutes.api.helpers.dto.HelperUpiPayoutAccountRequest;
 import com.helpinminutes.api.helpers.dto.HelperProfileResponse;
 import com.helpinminutes.api.helpers.model.HelperKycStatus;
 import com.helpinminutes.api.helpers.model.HelperPayoutAccountEntity;
@@ -174,6 +175,12 @@ public class HelperService {
   public HelperBankDetailsResponse savePayoutAccount(UUID helperId, PayoutAccountUpdateRequest req, String ipAddress) {
     profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
     return payoutAccountService.replace(helperId, com.helpinminutes.api.users.model.UserRole.HELPER, req, ipAddress);
+  }
+
+  @Transactional
+  public HelperBankDetailsResponse saveUpiPayoutAccount(UUID helperId, HelperUpiPayoutAccountRequest req, String ipAddress) {
+    profiles.findById(helperId).orElseThrow(() -> new ForbiddenException("Not a helper"));
+    return payoutAccountService.replaceUpi(helperId, com.helpinminutes.api.users.model.UserRole.HELPER, req, ipAddress);
   }
 
   public HelperIdCardResponse getIdCard(UUID helperId) {

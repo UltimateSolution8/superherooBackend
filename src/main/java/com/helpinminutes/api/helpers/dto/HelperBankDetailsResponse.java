@@ -13,5 +13,24 @@ public record HelperBankDetailsResponse(
     String accountVerificationStatus,
     String payoutStatus,
     boolean payoutEligible,
-    Instant savedAt
-) {}
+    Instant savedAt,
+    String accountType,
+    String maskedUpiId
+) {
+  public HelperBankDetailsResponse(
+      java.util.UUID accountId,
+      String accountHolderName,
+      String bankName,
+      String bankAccountLast4,
+      String maskedAccountNumber,
+      String ifscCode,
+      Instant ifscVerifiedAt,
+      String accountVerificationStatus,
+      String payoutStatus,
+      boolean payoutEligible,
+      Instant savedAt) {
+    this(accountId, accountHolderName, bankName, bankAccountLast4, maskedAccountNumber,
+        ifscCode, ifscVerifiedAt, accountVerificationStatus, payoutStatus, payoutEligible, savedAt,
+        "bank_account", null);
+  }
+}

@@ -3,6 +3,7 @@ package com.helpinminutes.api.helpers.service;
 import com.helpinminutes.api.errors.ForbiddenException;
 import com.helpinminutes.api.helpers.dto.HelperBankDetailsResponse;
 import com.helpinminutes.api.helpers.dto.HelperPayoutAccountRequest;
+import com.helpinminutes.api.helpers.dto.HelperUpiPayoutAccountRequest;
 import com.helpinminutes.api.helpers.dto.IfscLookupResponse;
 import com.helpinminutes.api.helpers.dto.PayoutAccountHistoryResponse;
 import com.helpinminutes.api.helpers.dto.PayoutAccountUpdateRequest;
@@ -195,6 +196,96 @@ public class PayoutAccountService {
     return accounts.findByHelperIdAndProviderAndCurrentTrue(userId, HelperPayoutAccountEntity.DEFAULT_PROVIDER);
   }
 
+  @Transactional
+  public HelperBankDetailsResponse replaceUpi(
+      UUID userId, UserRole role, HelperUpiPayoutAccountRequest req, String ipAddress) {
+    String holder = req.accountHolderName() == null
+        ? ""
+        : req.accountHolderName().trim().replaceAll("\\s+", " ");
+    if (holder.length() < 3 || holder.length() > 160
+        || !holder.matches(".*\\p{L}.*")
+        || !holder.matches("[\\p{L}\\p{M}\\p{N} .,'&()/-]+")) {
+      throw new com.helpinminutes.api.errors.BadRequestException("Enter the account-holder name shown by the bank");
+    }
+    String upi = req.upiId() == null ? "" : req.upiId().trim().toLowerCase(java.util.Locale.ROOT);
+    if (!upi.matches("^[a-zA-Z0-9.\\-_]{2,256}@[a-zA-Z]{2,64}$")) {
+      throw new com.helpinminutes.api.errors.BadRequestException("Enter a valid UPI ID (e.g. name@upi)");
+    }
+    challenges.consume(userId, role, req.changeToken());
+
+    var beneficiary = users.findByIdForUpdate(userId)
+        .orElseThrow(() -> new ForbiddenException("User not found"));
+    if (beneficiary.getRole() != role) {
+      throw new ForbiddenException("Payout account role does not match the beneficiary");
+    }
+    Optional<HelperPayoutAccountEntity> previous = current(userId);
+    Instant now = Instant.now();
+    previous.ifPresent(old -> {
+      old.setCurrent(false);
+      old.setStatus("SUPERSEDED");
+      old.setSupersededAt(now);
+      for (PayoutBeneficiaryLinkEntity link : providerLinks.findByPayoutAccountId(old.getId())) {
+        link.setStatus("DISABLED");
+        providerLinks.save(link);
+      }
+      accounts.save(old);
+      accounts.flush();
+    });
+
+    HelperPayoutAccountEntity account = new HelperPayoutAccountEntity();
+    UUID accountId = UUID.randomUUID();
+    account.setId(accountId);
+    account.setHelperId(userId);
+    account.setProvider(HelperPayoutAccountEntity.DEFAULT_PROVIDER);
+    account.setAccountType("vpa");
+    account.setStatus("PENDING_ACCOUNT_VERIFICATION");
+    account.setVerificationStatus("NOT_STARTED");
+    account.setCurrent(true);
+    account.setChangeSource("PROFILE");
+    account.setSupersedesAccountId(previous.map(HelperPayoutAccountEntity::getId).orElse(null));
+    account.setAccountHolderName(holder);
+    String upiHandle = upi.substring(upi.indexOf('@'));
+    account.setBankName("UPI (" + upiHandle + ")");
+    String maskedUpi = maskUpi(upi);
+    account.setUpiIdMasked(maskedUpi);
+    BankAccountCipher.EncryptedValue encrypted = cipher.encrypt(accountId, upi);
+    account.setUpiIdKeyId(encrypted.keyId());
+    account.setUpiIdCiphertext(encrypted.ciphertext());
+    HelperPayoutAccountEntity saved = accounts.save(account);
+
+    String action = previous.isPresent() ? "UPI_ACCOUNT_REPLACED" : "UPI_ACCOUNT_CREATED";
+    PayoutAccountChangeEventEntity change = new PayoutAccountChangeEventEntity();
+    change.setBeneficiaryUserId(userId);
+    change.setActorUserId(userId);
+    change.setActorRole(role.name());
+    change.setActionType(action);
+    change.setChangeSource("PROFILE");
+    change.setPreviousAccountId(previous.map(HelperPayoutAccountEntity::getId).orElse(null));
+    change.setNewAccountId(saved.getId());
+    change.setPreviousLast4(previous.map(HelperPayoutAccountEntity::getBankAccountLast4).orElse(null));
+    change.setNewLast4(null);
+    change.setIpAddress(ipAddress);
+    changeEvents.save(change);
+    audit.logAction(userId, null, role.name(), action,
+        "PAYOUT_ACCOUNT", saved.getId().toString(),
+        "UPI ID " + maskedUpi + "; previousVersion="
+            + previous.map(value -> value.getId().toString()).orElse("none"), ipAddress);
+    events.publishEvent(new BankAccountChangedEvent(userId, saved.getBankName(), maskedUpi));
+    return toResponse(saved);
+  }
+
+  static String maskUpi(String upi) {
+    if (upi == null || upi.isBlank()) return null;
+    int at = upi.indexOf('@');
+    if (at <= 0) return "••••";
+    String handle = upi.substring(0, at);
+    String provider = upi.substring(at);
+    if (handle.length() <= 2) {
+      return "••" + provider;
+    }
+    return handle.charAt(0) + "•••" + handle.charAt(handle.length() - 1) + provider;
+  }
+
   public static HelperBankDetailsResponse toResponse(HelperPayoutAccountEntity account) {
     if (account == null) return null;
     String last4 = account.getBankAccountLast4();
@@ -202,6 +293,7 @@ public class PayoutAccountService {
     return new HelperBankDetailsResponse(
         account.getId(), account.getAccountHolderName(), account.getBankName(), last4,
         last4 == null ? null : "••••" + last4, account.getIfscCode(), account.getIfscVerifiedAt(),
-        account.getVerificationStatus(), account.getStatus(), eligible, account.getUpdatedAt());
+        account.getVerificationStatus(), account.getStatus(), eligible, account.getUpdatedAt(),
+        account.getAccountType(), account.getUpiIdMasked());
   }
 }

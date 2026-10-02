@@ -211,9 +211,31 @@ public class PayoutReconciliationJob {
   }
 
   private void applyValidationWebhook(JsonNode root) {
+    String eventType = root.path("event").asText("");
     JsonNode entity = root.path("payload").path("fund_account.validation").path("entity");
     String providerValidationId = entity.path("id").asText(null);
     if (providerValidationId == null || providerValidationId.isBlank()) return;
+
+    // Parse Razorpay's structured failure details from status_details.
+    JsonNode statusDetails = entity.path("status_details");
+    String failureSource = statusDetails.isMissingNode() ? null : statusDetails.path("source").asText(null);
+    String failureReasonCode = statusDetails.isMissingNode() ? null : statusDetails.path("reason").asText(null);
+    // Prefer status_details.description as the human-readable reason.
+    String failureReason = statusDetails.isMissingNode()
+        ? entity.path("error_description").asText(null)
+        : statusDetails.path("description").asText(entity.path("error_description").asText(null));
+
+    // Parse provider name match score — Razorpay's own 0-100 similarity score.
+    // Assigned to a final variable so it can be captured by the lambda below.
+    JsonNode results = entity.path("results");
+    final Integer nameMatchScore =
+        (!results.isMissingNode() && results.has("name_match_score") && !results.path("name_match_score").isNull())
+            ? results.path("name_match_score").intValue()
+            : null;
+
+    String registeredName = results.isMissingNode() ? null : results.path("registered_name").asText(null);
+
+    log.info("Processing RazorpayX webhook event={} fav={}", eventType, providerValidationId);
 
     validations
         .findByProviderValidationId(providerValidationId)
@@ -224,9 +246,13 @@ public class PayoutReconciliationJob {
                     new RazorpayXGateway.FundAccountValidationResult(
                         providerValidationId,
                         entity.path("status").asText(null),
-                        entity.path("results").path("registered_name").asText(null),
+                        registeredName,
                         entity.path("utr").asText(null),
                         entity.path("amount").asLong(0L),
-                        entity.path("error_description").asText(null))));
+                        failureReason,
+                        nameMatchScore,
+                        entity.path("fund_account").path("account_type").asText("bank_account"),
+                        failureSource,
+                        failureReasonCode)));
   }
 }

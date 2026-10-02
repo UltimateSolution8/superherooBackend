@@ -43,13 +43,19 @@ public class PayoutController {
   }
 
   /**
-   * Starts a penny drop against the partner's bank account.
-   *
-   * <p>Idempotent while one is in flight, and capped per account per day — each
-   * drop is a real ₹1 transfer plus a fee.
+   * Starts Hybrid FAV (or penny drop fallback) against the partner's payout account.
+   * Seamlessly verifies either bank account or UPI VPA depending on the active account type.
    */
   @PostMapping("/me/account/verify")
   public BankVerificationView startVerification(@AuthenticationPrincipal UserPrincipal principal) {
+    return BankVerificationView.of(validations.startValidation(principal.userId()));
+  }
+
+  /**
+   * Specifically triggers UPI verification for the partner's account.
+   */
+  @PostMapping("/me/account/verify-upi")
+  public BankVerificationView startUpiVerification(@AuthenticationPrincipal UserPrincipal principal) {
     return BankVerificationView.of(validations.startValidation(principal.userId()));
   }
 
@@ -62,22 +68,33 @@ public class PayoutController {
   }
 
   /**
-   * What the app shows about bank verification.
+   * What the app shows about account verification.
    *
    * <p>{@code registeredName} is deliberately absent: it is the name on someone's
    * bank account, and echoing it back would confirm account ownership details to
    * whoever holds the session.
    */
   public record BankVerificationView(
-      String status, String failureReason, java.time.Instant updatedAt) {
+      String status,
+      String failureReason,
+      java.time.Instant updatedAt,
+      String accountType,
+      String validationType,
+      Integer providerScore) {
 
     static BankVerificationView of(
         com.helpinminutes.api.payments.model.PayoutAccountValidationEntity v) {
-      return new BankVerificationView(v.getStatus(), v.getFailureReason(), v.getUpdatedAt());
+      return new BankVerificationView(
+          v.getStatus(),
+          v.getFailureReason(),
+          v.getUpdatedAt(),
+          v.getAccountType(),
+          v.getValidationType(),
+          v.getProviderNameMatchScore());
     }
 
     static BankVerificationView notStarted() {
-      return new BankVerificationView("NOT_STARTED", null, null);
+      return new BankVerificationView("NOT_STARTED", null, null, "bank_account", "optimized", null);
     }
   }
 

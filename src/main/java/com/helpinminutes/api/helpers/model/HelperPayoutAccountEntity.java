@@ -51,6 +51,21 @@ public class HelperPayoutAccountEntity {
   @Column(name = "upi_id_masked")
   private String upiIdMasked;
 
+  /**
+   * "bank_account" (default) or "vpa". Determines which verification rail and
+   * payout mode to use. A helper may have only one current payout account at a time.
+   */
+  @Column(name = "account_type", nullable = false, length = 20)
+  private String accountType = "bank_account";
+
+  /** AES-GCM ciphertext of the full UPI VPA (e.g. "name@oksbi"). Never stored plain. */
+  @Column(name = "upi_id_ciphertext", columnDefinition = "TEXT")
+  private String upiIdCiphertext;
+
+  /** Key ID used to encrypt upiIdCiphertext; tracks key rotation like bank accounts. */
+  @Column(name = "upi_id_key_id", length = 32)
+  private String upiIdKeyId;
+
   @Column(name = "verified_at")
   private Instant verifiedAt;
 
@@ -85,6 +100,7 @@ public class HelperPayoutAccountEntity {
     if (status == null || status.isBlank()) status = "PENDING_KYC";
     if (verificationStatus == null || verificationStatus.isBlank()) verificationStatus = "DETAILS_INCOMPLETE";
     if (changeSource == null || changeSource.isBlank()) changeSource = "LEGACY";
+    if (accountType == null || accountType.isBlank()) accountType = "bank_account";
     current = true;
     Instant now = Instant.now();
     if (createdAt == null) createdAt = now;
@@ -120,6 +136,12 @@ public class HelperPayoutAccountEntity {
   public void setIfscCode(String ifscCode) { this.ifscCode = ifscCode; }
   public String getUpiIdMasked() { return upiIdMasked; }
   public void setUpiIdMasked(String upiIdMasked) { this.upiIdMasked = upiIdMasked; }
+  public String getAccountType() { return accountType; }
+  public void setAccountType(String value) { this.accountType = value; }
+  public String getUpiIdCiphertext() { return upiIdCiphertext; }
+  public void setUpiIdCiphertext(String value) { this.upiIdCiphertext = value; }
+  public String getUpiIdKeyId() { return upiIdKeyId; }
+  public void setUpiIdKeyId(String value) { this.upiIdKeyId = value; }
   public Instant getVerifiedAt() { return verifiedAt; }
   public void setVerifiedAt(Instant verifiedAt) { this.verifiedAt = verifiedAt; }
   public Instant getIfscVerifiedAt() { return ifscVerifiedAt; }
